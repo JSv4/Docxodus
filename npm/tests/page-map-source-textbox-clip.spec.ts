@@ -283,7 +283,7 @@ for (const story of ['header', 'footer'] as const) for (const mutate of [false, 
   });
 }
 
-for (const kind of ['outside', 'column-paragraph', 'margin-paragraph', 'changed-paragraph', 'changed-margin-paragraph', 'unsupported-basis', 'straddling', 'ink-crosses-paper', 'fixed-ink-crosses-paper', 'autofit', 'linked', 'partial', 'changed-position', 'changed-font'] as const) {
+for (const kind of ['outside', 'column-paragraph', 'margin-paragraph', 'changed-paragraph', 'changed-margin-paragraph', 'unsupported-basis', 'straddling', 'ink-crosses-paper', 'fixed-ink-crosses-paper', 'autofit', 'linked', 'linked-unsupported-basis', 'partial', 'changed-position', 'changed-font'] as const) {
   test(`source placement preserves the ${kind} paper boundary`, async ({ page }) => {
     await page.setContent('<div id="viewer"></div>');
     await page.addScriptTag({ path: bundle });
@@ -294,10 +294,10 @@ for (const kind of ['outside', 'column-paragraph', 'margin-paragraph', 'changed-
         <p data-source-anchor-id="p:body:host" style="font:10pt/14pt Arial;margin:0">Quail outer host
           <span data-docx-textbox="true" data-docx-textbox-clip="true" data-docx-textbox-source-position="true"
             ${kind === 'fixed-ink-crosses-paper' ? 'data-docx-textbox-source-clip="true"' : ''}
-            data-docx-drawing-anchor="true" data-docx-anchor-h-relative="${['column-paragraph', 'changed-paragraph'].includes(kind) ? 'column' : ['margin-paragraph', 'changed-margin-paragraph'].includes(kind) ? 'margin' : kind === 'unsupported-basis' ? 'unknown' : 'page'}" data-docx-anchor-v-relative="${['column-paragraph', 'changed-paragraph', 'margin-paragraph', 'changed-margin-paragraph'].includes(kind) ? 'paragraph' : 'page'}"
+            data-docx-drawing-anchor="true" data-docx-anchor-h-relative="${['column-paragraph', 'changed-paragraph'].includes(kind) ? 'column' : ['margin-paragraph', 'changed-margin-paragraph'].includes(kind) ? 'margin' : kind.endsWith('unsupported-basis') ? 'unknown' : 'page'}" data-docx-anchor-v-relative="${['column-paragraph', 'changed-paragraph', 'margin-paragraph', 'changed-margin-paragraph'].includes(kind) ? 'paragraph' : 'page'}"
             data-docx-anchor-h-offset="${kind === 'straddling' ? -40 : -170}" data-docx-anchor-v-offset="60"
             ${kind === 'autofit' ? 'data-docx-anchor-autofit="true"' : ''}
-            ${kind === 'linked' ? 'data-docx-textbox-linked="true"' : ''}
+            ${kind.startsWith('linked') ? 'data-docx-textbox-linked="true"' : ''}
             ${kind === 'partial' ? 'data-docx-shape="partial"' : ''}
             style="display:inline-block;width:100pt;height:28pt;overflow:hidden;vertical-align:top">
             <span data-source-anchor-id="p:body:hidden" style="display:block;font:10pt/14pt Arial;white-space:nowrap">${kind.includes('ink-crosses-paper') ? 'Quail unwound cord '.repeat(12) : 'Quail short cord'}</span>
@@ -313,7 +313,8 @@ for (const kind of ['outside', 'column-paragraph', 'margin-paragraph', 'changed-
         return { error: null, anchors: map.fragments.map((f: any) => f.anchorId), warnings: engine.getSourceClippedTextAnchors() };
       } catch (error) { return { error: String(error), anchors: [], warnings: [] }; }
     }, kind);
-    if (kind === 'outside' || kind === 'column-paragraph' || kind === 'margin-paragraph' || kind === 'fixed-ink-crosses-paper') {
+    // A linked frame placed off the paper is clipped by it (issue #1734); an unsupported basis is not a source placement.
+    if (kind === 'outside' || kind === 'column-paragraph' || kind === 'margin-paragraph' || kind === 'fixed-ink-crosses-paper' || kind === 'linked') {
       expect(result.error).toBeNull();
       expect(result.anchors).toContain('p:body:host');
       expect(result.anchors).not.toContain('p:body:hidden');
@@ -382,7 +383,8 @@ for (const fit of ['auto', 'percent']) for (const change of [
         resized: fit === 'auto' ? parseFloat(getComputedStyle(box).height) > 40 : box.style.width === '24pt' };
     } catch (error) { return { error: String(error), clipped: [], mapped: false, resized: false }; }
   }, { fit, change });
-  if (['right', 'bottom', 'zoom', 'balloons'].includes(change)) {
+  // A linked frame needs no page-offset proof: the paper clips its story wherever it is placed (issue #1734).
+  if (['right', 'bottom', 'zoom', 'balloons', 'linked'].includes(change)) {
     expect(result.error).toBe('');
     expect(result.clipped).toEqual(['p:body:resized']);
     expect(result.resized).toBe(true);

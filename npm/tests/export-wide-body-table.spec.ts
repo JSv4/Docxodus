@@ -40,10 +40,25 @@ test('an AutoFit asymmetric table fits its text and images on every continuation
   expect(geometry.flatMap(table => table.fonts).every(font => parseFloat(font) >= 14)).toBe(true);
 });
 
-// A 780pt fixed grid places the fifth cell wholly beyond Letter paper. Native rendering
-// loses all 39 E labels; preserving that geometry must not bypass source completeness.
-test('a fixed table with wholly off-paper cells fails completeness', async ({ browser }) => {
-  await expect(renderDocxArtifacts(wideBodyTableDocx(), {
-    browser, outputs: ['pdf'], reviewProfile: 'final', commentProfile: 'hidden',
-  })).rejects.toThrow(/has no measurable fragment/);
+// A 780pt fixed grid places the fifth cell wholly beyond Letter paper and the fourth across its
+// edge. Word 2024 prints the four cells the paper holds and none of the fifth (issue #1733); the
+// export clips the fifth the same way and reports each of its paragraphs instead of refusing.
+test('the paper clips fixed table cells that lie wholly beyond it', async ({ browser }) => {
+  const options = { browser, outputs: ['pdf'] as 'pdf'[], reviewProfile: 'final' as const, commentProfile: 'hidden' as const };
+  const result = await renderDocxArtifacts(wideBodyTableDocx(), options);
+  const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
+  try {
+    const pdf = await task.promise;
+    let text = '';
+    for (let index = 1; index <= pdf.numPages; index++)
+      text += (await (await pdf.getPage(index)).getTextContent()).items.filter(item => 'str' in item).map(item => item.str).join(' ') + ' ';
+    expect(text.match(/Ochre\d+[A-E]/g)).toEqual(Array.from({ length: 39 }, (_, row) =>
+      ['A', 'B', 'C', 'D'].map(column => `Ochre${String(row + 1).padStart(2, '0')}${column}`)).flat());
+  } finally { await task.destroy(); }
+  const clipped = result.renderReport.warnings.filter(w => w.code === 'source_text_clipped').map(w => w.anchorId!);
+  expect(clipped).toHaveLength(39);
+  expect(clipped.every(anchorId => anchorId.startsWith('p:'))).toBe(true);
+  expect(result.pageMap.fragments.filter(fragment => clipped.includes(fragment.anchorId))).toEqual([]);
+  await expect(renderDocxArtifacts(wideBodyTableDocx(), { ...options, unsupportedContent: 'strict' }))
+    .rejects.toMatchObject({ code: 'resource_policy_failure', phase: 'output_verification' });
 });

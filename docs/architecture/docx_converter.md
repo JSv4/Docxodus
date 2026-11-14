@@ -556,33 +556,52 @@ before invoking that callback, identically in native and WASM builds:
   escapement; and embeds STRETCHDIBITS, BITBLT, STRETCHBLT, ALPHABLEND and the WMF DIB records as
   PNG `image` data URIs, decoded in managed code (`Internal/DibImage.cs`). Each element keeps logical coordinates and carries the
   logical-to-device transform in effect, so pens scale with the mapping as in GDI.
+- Bitmaps are drawn with their raster operation evaluated per pixel from its truth table: a pixel
+  whose result does not read the destination is drawn, or left transparent when it leaves the
+  destination as it was. A pixel whose result reads the destination is exact only where the bitmap
+  drawn just before, to the same rectangle, left it known, and the two merge into one PNG; that is
+  how GDI draws a transparent bitmap (a monochrome mask, then the image). Hatches and DIB pattern
+  brushes (in RGB colours) tile from the device origin in CSS pixels, as GDI tiles them in the
+  pixels of the device it plays onto. Symbol, Wingdings and Webdings text is mapped to Unicode
+  through `SymbolFontMapper`. Consecutive EXCLUDECLIPRECTs made before anything is drawn under them
+  cut holes in one `clipPath`. A path bracket takes the transform of its first figure, since GDI
+  converts each point to device space as it is added; a geometric pen strokes it only at that scale.
 - An EMF with EMF+ comments plays its GDI records when the EMF+ header marks the file dual; an
-  EMF+-only file keeps the placeholder. Records that cannot change the drawing (stretch
-  mode, ICM, palettes, mapper flags, other GDI comments) are ignored, as are SETROP2 with
-  R2_COPYPEN and zero text spacing adjustments, which are the defaults.
+  EMF+-only file keeps the placeholder (no Office or Windows writer in the #1706 corpus produces
+  one). Records that cannot change the drawing (stretch mode, ICM, palettes, mapper flags, other GDI
+  comments, glyph-index text with no glyphs) are ignored, as are zero text spacing adjustments.
+  SETROP2 accepts R2_COPYPEN and R2_NOP, which draws nothing with the pen or brush.
 - WMF: the placeable header fixes the device box, and the window always maps onto it whatever
   the map mode (viewport records are ignored). Word's device-pixel endpoint exclusion for
   rectangles, ellipses and rounded rectangles is resolved in logical coordinates; window mapping
-  and later picture sizing stretch the complete painted graphic, including its outline. Visible
-  zero-width device pens and collapsed bounds still reject the whole image.
+  and later picture sizing stretch the complete painted graphic, including its outline. A visible
+  zero-width pen draws one CSS pixel wide, as an EMF cosmetic pen; collapsed bounds still reject
+  the whole image. SELECTCLIPREGION with index 0 (the null region) resets the clip. A WMF that
+  carries an EMF in META_ESCAPE_ENHANCED_METAFILE comments, as GDI's EMF-to-WMF conversion and
+  LibreOffice write it, plays that EMF, as GDI does; when the EMF cannot be played, the WMF records
+  draw instead.
 - EMF: playback maps reference-device pixels through the physical Frame; Frame does not clip
   artwork. Generated inline SVG retains the authored picture extent while allowing paint outside
   it. Cosmetic outlines use one CSS pixel (96 dpi); geometric outlines scale with the picture.
   This is browser playback, not a claim of matching a particular Word printer's hairline width.
-- Still unsupported, each rejecting the whole picture: EMF+-only files, pattern brushes and
-  pattern pens, palette colours, non-rectangle clip regions and OR/XOR/DIFF clip combinations,
-  glyph-index text, raster operations that read the destination, RLE bitmaps and DIBs that wrap
-  a JPEG or PNG (BI_JPEG/BI_PNG, whose header does not bound the real image), gradient fills,
+- Still unsupported, each rejecting the whole picture: EMF+-only files, monochrome and
+  palette-colour pattern brushes and pattern pens, palette colours, non-rectangle clip regions,
+  WMF clip regions other than the null one, OR/XOR/DIFF clip combinations, glyph-index text,
+  raster operations that read a destination not known from the bitmap before (including the
+  PATINVERT/R2_MASKPEN dithering Office uses for semi-transparent fills), RLE bitmaps and DIBs that
+  wrap a JPEG or PNG (BI_JPEG/BI_PNG, whose header does not bound the real image), gradient fills,
   WIDENPATH, mirrored layouts, and any record not listed above. So do the states this player
-  would otherwise draw wrongly: a pen mode other than R2_COPYPEN (SETROP2), non-zero character
-  extra or justification, text that advances the current position by its own width (TA_UPDATECP
-  without a spacing array), ANSI text with bytes above ASCII in a font whose character set is
-  not ANSI or DEFAULT, and text in a SYMBOL_CHARSET font or with private-use characters
-  (Symbol and Wingdings glyphs).
+  would otherwise draw wrongly: a pen mode other than R2_COPYPEN or R2_NOP (SETROP2), non-zero
+  character extra or justification, text that advances the current position by its own width
+  (TA_UPDATECP without a spacing array), ANSI text with bytes above ASCII in a font whose character
+  set is not ANSI, DEFAULT or SYMBOL, symbol-font characters with no Unicode equivalent, text in
+  another SYMBOL_CHARSET font, private-use characters in an ordinary font, and a path stroked with a
+  geometric pen at another scale than its figures were drawn.
 - Playback is bounded per picture: 200,000 records, a budget of 250,000 shared by points read,
   points stroked and text characters,
   50,000 SVG elements, 1,024 saved states, 64 clip regions intersected in a row (each is a
-  `clipPath` that refers to the one before), 16 megapixels of embedded bitmaps, and
+  `clipPath` that refers to the one before), 1,024 holes cut in one exclusion clip (each checked
+  against the others), 16 megapixels of embedded bitmaps and pattern tiles, and
   16 MiB characters of SVG output, bitmaps included. A WMF poly-polygon's point counts are
   summed in 64 bits before anything is allocated. Exceeding a bound rejects the picture.
 
@@ -834,8 +853,8 @@ line strut; the prose-only baseline correction leaves MathML layout alone.
 Font coverage includes the [MathML Core `math-auto` character mapping](https://www.w3.org/TR/mathml-core/#math-auto-transform)
 and each radical's implicit U+221A glyph; resolved font aliases also cover MathML layout containers.
 
-Projection succeeds only for the complete equation. Unknown operators, properties, styled runs,
-whitespace or combining-token forms, and nested display fractions retain the existing whole-equation
+Projection succeeds only for the complete equation. Unknown operators and properties, control
+characters, combining-token forms and nested display fractions retain the existing whole-equation
 diagnostic. The last restriction preserves OMML's default full-size nested display operands until
 their size rule is modeled; ordinary MathML fractions would shrink them. For the same reason a
 display equation with a fraction or n-ary operator inside a matrix keeps the diagnostic: MathML
@@ -847,9 +866,12 @@ of complete OMML or Word typography parity.
 Every structure accepts only the properties listed for it, each at most once. Any other property,
 or a listed one with a value outside the list, keeps the whole-equation diagnostic. `m:ctrlPr`
 is accepted anywhere OMML allows it when its `w:rPr` holds only `w:rFonts` naming the document's
-`m:mathFont` and, on control characters, `w:i`. Word writes both on nearly every equation, and
-neither changes what is drawn: the equation already uses the math font, and OMML takes math
-italics from `m:sty`.
+`m:mathFont`, `w:b`, `w:i` and `w:color`. Word writes the fonts and `w:i` on nearly every equation,
+and neither changes what is drawn: the equation already uses the math font, and OMML takes math
+bold and italics from `m:sty`. A control colour paints the structure's own glyphs (fraction bar,
+radical, fences, large operator, accent, border) as CSS `color` on the structure. MathML operands
+inherit it, so the structure draws only when each run inside carries a colour of its own; Word's
+whole-equation colour writes the same colour on every run and control.
 
 | OMML | MathML | Accepted properties |
 |------|--------|---------------------|
@@ -865,15 +887,37 @@ italics from `m:sty`.
 | `m:eqArr` | `mtable`; `&` in a row's own runs splits right/left-aligned cells | — |
 | `m:groupChr` | `munder`/`mover` with a stretchy `chr` (default ⏟) | `pos`/`vertJc` only as bottom/top or top/bottom |
 | `m:box` | its operand | `noBreak` |
-| `m:borderBox` | `mrow` with a CSS border | `hide*`; every `strike*` off (MathML Core has no `menclose`) |
-| `m:f` | `mfrac`, `mfrac linethickness="0"`, or `num / den` | `type` `bar`, `noBar`, `lin` (`skw` has no MathML Core form) |
-| `m:r` | `mi`/`mn`/`mo` tokens | `m:sty`, `m:scr` → Unicode mathematical alphabets; `m:lit`; `w:color` |
+| `m:borderBox` | `mrow` with a CSS border; each `strike*` a `linear-gradient` background layer (MathML Core has no `menclose`) | `hide*`, `strike*` |
+| `m:f` | `mfrac`, `mfrac linethickness="0"`, `num / den`, or for `skw` the numerator raised 0.33em and the denominator lowered 0.42em (`mpadded voffset`) beside U+2044 | `type` `bar`, `noBar`, `lin`, `skw` |
+| `m:phant` | its operand, in `mpadded width/height/depth="0"` for each zeroed dimension, inside `mphantom` unless shown | `show` (default on), `zeroWid`, `zeroAsc`, `zeroDesc`, `transp` (draws the same) |
+| `m:r` | `mi`/`mn`/`mo` tokens; spaces and `m:nor` text as `mtext` | `m:sty`, `m:scr` → Unicode mathematical alphabets; `m:lit`; `m:nor`; `m:brk` (no effect on one line); `m:aln` (display lines only); `w:color`; `w:b`/`w:i` (drawn only on `m:nor` text); `w:br` (display lines only) |
 
 Run styles are drawn by mapping letters and digits to the Unicode Mathematical Alphanumeric
 Symbols block rather than by `mathvariant`, which MathML Core implements only for `normal`. Plain
 style (`m:sty="p"`) keeps letters upright through `mathvariant="normal"`, and a run's adjacent
-upright letters become one identifier such as `sin`. A style without a Unicode alphabet for a
-character (a script Greek letter, a bold operator) keeps the diagnostic. The paginator's atomic
+upright letters become one identifier such as `sin`. `∂`, `∇` and the Greek symbol variants
+(`ϵϑϰϕϱϖϴ`) are letters of each Greek alphabet. Operators and punctuation are drawn plain in every
+style, as Word draws them. A letter with no form in the run's alphabet (a script Greek letter)
+keeps the diagnostic.
+
+Spaces (Unicode space separators) are kept as written in an `mtext` with `white-space: pre`, so
+each draws at the font's width, and `m:nor` ordinary text is one `mtext` with the run's `w:b`,
+`w:i` and colour; it must name the math font in `w:rFonts`, as Word writes it, since text without
+fonts takes the paragraph's font. Each run is its own `mrow`, except that a run starting with an
+operator after an operand (a structure, or a run ending in an identifier, number or text) joins its
+argument's row: MathML infers an operator's form from its place in its `mrow`, and would read it as a
+prefix first in the run's own, where Word spaces it as binary. An explicit `form="infix"` would not
+do: Chromium then gives an operator with no infix entry, such as `!`, default spacing.
+
+A display equation (`m:oMathPara`) may hold several `m:oMath`: they run on as one line until a
+`w:br` in a run, which Shift+Enter writes. Its lines become a `displaystyle` `mtable`, one row per
+line, through the same row builder as `m:eqArr`. With `m:defJc` `centerGroup` (the default) the
+lines are left-aligned as a group, or lined up at their `m:aln` points when every line has one; one
+point changes nothing, and points on only some of several lines keep the diagnostic, since Word
+then leaves the other lines at the first line's left edge, which a MathML table cannot place. With
+`center` each line is centred and points change nothing. A manual break (`m:brk`) draws nothing:
+Word breaks there only when the equation is too long for its line, and the projection never breaks
+one. `docs/ooxml_corner_cases.md` has the measurements. The paginator's atomic
 inline-equation check (`CONVERTER_MATHML_ELEMENTS` in `npm/src/pagination.ts`) lists the same
 element vocabulary.
 
@@ -915,7 +959,7 @@ The following are **discarded** and will not appear in output:
 - `w:w` - Character width scaling outside plain automatically spaced body text and resolved fixed-width cells in standalone export
 
 **Document features:**
-- Math equations with OMML structures or properties outside the mapping described above (for example skewed fractions, phantoms, `m:nor` ordinary text, spacing properties)
+- Math equations with OMML properties outside the mapping described above (for example spacing properties, aligned scripts, display lines aligned at only some of their points)
 - Chart families other than clustered column/horizontal bar charts
 - Diagrams (SmartArt)
 - Complex text boxes

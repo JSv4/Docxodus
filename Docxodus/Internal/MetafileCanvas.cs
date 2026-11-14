@@ -22,6 +22,8 @@ internal sealed class MetafileCanvas
     /// <summary>Clip regions that may intersect one another before a RESTOREDC or a replacing clip: each
     /// becomes a <c>clipPath</c> that refers to the one before, which a browser resolves recursively.</summary>
     internal const int MaxClipDepth = 64;
+    /// <summary>Excluded rectangles one clip path may cut as holes; each new hole is checked against the others.</summary>
+    internal const int MaxClipHoles = 1024;
     private const int MaxElements = 50_000, MaxSavedStates = 1024, MaxTextLength = 32_768;
     private const long MaxBitmapPixels = 16L * 1024 * 1024;
     /// <summary>Characters of SVG a picture may write, bitmaps included. The converter holds the picture
@@ -32,9 +34,10 @@ internal sealed class MetafileCanvas
     internal abstract record GdiObject;
     /// <summary>A pen; <c>Color</c> is "none" for PS_NULL. Cosmetic pens draw one device pixel.</summary>
     internal sealed record Pen(string Color, double Width, bool Cosmetic, string? Dashes, string Cap, string Join) : GdiObject;
-    /// <summary>A brush; <c>Color</c> is "none" for BS_NULL. Pattern brushes are kept so that object
-    /// slots stay aligned, but filling with one is unsupported.</summary>
-    internal sealed record Brush(string Color, int Hatch = -1, bool Pattern = false) : GdiObject;
+    /// <summary>A brush; <c>Color</c> is "none" for BS_NULL. A DIB pattern brush tiles <c>Tile</c>. Other
+    /// pattern brushes (<c>Pattern</c>) are kept so that object slots stay aligned, but filling with one is
+    /// unsupported.</summary>
+    internal sealed record Brush(string Color, int Hatch = -1, bool Pattern = false, DibImage.Bitmap? Tile = null) : GdiObject;
     internal sealed record Font(string Family, double Height, double Escapement, int Weight, bool Italic, bool Underline, bool Strike, int Charset = 0) : GdiObject;
     /// <summary>A palette, region or colour space: occupies a slot, draws nothing.</summary>
     internal sealed record OtherObject : GdiObject;
@@ -70,7 +73,7 @@ internal sealed class MetafileCanvas
         internal Brush Brush = WhiteBrush;
         internal Font Font = DefaultFont;
         internal string TextColor = "#000000", BkColor = "#ffffff";
-        internal bool OpaqueBackground = true, EvenOdd = true, Clockwise;
+        internal bool OpaqueBackground = true, EvenOdd = true, Clockwise, Ink = true;
         internal int TextAlign;
         internal string? Clip;
         internal int ClipDepth;
@@ -80,8 +83,7 @@ internal sealed class MetafileCanvas
 
     private readonly XElement root;
     private readonly string idPrefix;
-    private readonly bool rejectCosmeticPens;
-    private readonly double fixedDeviceWidth, fixedDeviceHeight, pixelsPerMmX, pixelsPerMmY;
+    private readonly double fixedDeviceWidth, fixedDeviceHeight, pixelsPerMmX, pixelsPerMmY, cssPixelX, cssPixelY;
     private readonly string defaultJoin;
     private State state = new();
     private readonly Stack<State> saved = new();
@@ -90,24 +92,29 @@ internal sealed class MetafileCanvas
     private long bitmapPixels, output;
     private Path? bracket;
     private bool inBracket;
-    private Matrix bracketMatrix;
+    private Matrix? bracketMatrix;
     private Path? stroke; private XElement? strokeElement; private (Pen, Matrix, XElement)? strokeKey;
+    /// <summary>The last bitmap drawn, until anything else is: its pixels are what lies beneath the next one.</summary>
+    private (XElement Element, Matrix Placement, int Width, int Height, byte[] Rgba)? drawn;
+    /// <summary>The current clip while it is an exclusion that nothing else refers to yet: more holes can join it.</summary>
+    private (string Id, XElement Shape, StringBuilder D, List<(double L, double T, double R, double B)> Holes)? exclusion;
     private double minX = double.PositiveInfinity, minY = double.PositiveInfinity, maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
 
     /// <param name="root">Element the drawing is appended to.</param>
     /// <param name="seed">Input bytes; their checksum keeps generated ids distinct between pictures.</param>
     /// <param name="fixedDevice">WMF: the window always maps onto this device box, whatever the map mode.</param>
     /// <param name="pixelsPerMm">EMF: reference-device pixels per millimeter for the metric map modes.</param>
-    /// <param name="rejectCosmeticPens">WMF: a visible device hairline has no resolution-independent width.</param>
     /// <param name="defaultJoin">Line join for pens whose style names none (PS_JOIN_ROUND is zero).</param>
     internal MetafileCanvas(XElement root, byte[] seed, (double Width, double Height)? fixedDevice = null,
-        (double X, double Y)? pixelsPerMm = null, bool rejectCosmeticPens = false, string defaultJoin = "round")
+        (double X, double Y)? pixelsPerMm = null, string defaultJoin = "round")
     {
         this.root = root;
         idPrefix = "mf" + Crc32.Compute(seed).ToString("x8", CultureInfo.InvariantCulture) + "-";
         (fixedDeviceWidth, fixedDeviceHeight) = fixedDevice ?? (0, 0);
         (pixelsPerMmX, pixelsPerMmY) = pixelsPerMm ?? (1, 1);
-        this.rejectCosmeticPens = rejectCosmeticPens;
+        // Device units in one CSS pixel: an EMF's reference device can be far finer than the screen, while
+        // a WMF's fixed device box is measured in CSS pixels.
+        (cssPixelX, cssPixelY) = pixelsPerMm is { } ppm ? (ppm.X * 25.4 / 96, ppm.Y * 25.4 / 96) : (1, 1);
         this.defaultJoin = defaultJoin;
     }
 
@@ -152,6 +159,15 @@ internal sealed class MetafileCanvas
         2 => throw new NotSupportedException("Unsupported metafile hatch style."),
         3 or 4 or 5 or 6 => new Brush("none", Pattern: true),
         _ => throw new NotSupportedException("Unsupported metafile brush style.") };
+
+    /// <summary>A DIB pattern brush in RGB colours: the bitmap tiles the fill from the device origin.</summary>
+    internal Brush PatternBrush(ReadOnlySpan<byte> info, ReadOnlySpan<byte> bits)
+    {
+        var (width, height) = DibImage.Size(info);
+        ReserveBitmap((long)width * height);
+        bitmapPixels += (long)width * height;
+        return new Brush("none", Tile: DibImage.Decode(info, bits));
+    }
 
     internal static Font CreateFont(string face, int height, int escapement, int weight, bool italic, bool underline, bool strike)
     {
@@ -209,10 +225,15 @@ internal sealed class MetafileCanvas
     internal void SetTextAlign(int align) => state.TextAlign = align;
     internal void SetPolyFillMode(int mode) => state.EvenOdd = mode != 2;
     internal void SetArcDirection(int direction) => state.Clockwise = direction == 2;
+    /// <summary>SETROP2: R2_COPYPEN (13) draws the pen and brush as they are and R2_NOP (11) leaves the
+    /// destination unchanged; every other mix reads the destination.</summary>
+    internal void SetBinaryRasterOperation(uint mode) => state.Ink = mode switch {
+        13 => true, 11 => false, _ => throw new NotSupportedException("Unsupported metafile binary raster operation.") };
 
     internal void Save()
     {
         if (saved.Count >= MaxSavedStates) throw new InvalidDataException("Metafile saves too many device contexts.");
+        CloseExclusion();
         saved.Push(state.Clone());
     }
     /// <summary>RESTOREDC: a negative value pops that many states; a positive one names a depth.</summary>
@@ -444,7 +465,7 @@ internal sealed class MetafileCanvas
 
     internal void BeginPath()
     {
-        bracket = new Path(); inBracket = true; bracketMatrix = Transform;
+        bracket = new Path(); inBracket = true; bracketMatrix = null;
     }
     internal void EndPath() => inBracket = false;
     internal void AbortPath() { bracket = null; inBracket = false; }
@@ -460,6 +481,9 @@ internal sealed class MetafileCanvas
         if (bracket is not { } path || inBracket) { AbortPath(); return; }
         bracket = null;
         if (path.Empty) return;
+        // The pen is realised when the path is stroked, at the transform then in effect.
+        if (outline && state.Pen is { Cosmetic: false, Color: not "none" } && Math.Abs(Scale(Transform) / Scale(bracketMatrix!.Value) - 1) > 1e-9)
+            throw new NotSupportedException("A metafile path is stroked at another scale than it was drawn.");
         if (fill) path.CloseOpenFigure();
         var element = new XElement(Svg + "path", new XAttribute("d", path.ToString()));
         Shape(element, fill, outline, path.Points, bracketMatrix, path: true);
@@ -474,18 +498,42 @@ internal sealed class MetafileCanvas
         path.CloseOpenFigure();
         var shape = new XElement(Svg + "path", new XAttribute("d", path.ToString()),
             new XAttribute("clip-rule", state.EvenOdd ? "evenodd" : "nonzero"));
-        SetTransformAttribute(shape, bracketMatrix);
+        SetTransformAttribute(shape, bracketMatrix ?? Transform);
         AddClip(shape, mode == 1);
     }
 
     // ---- Clipping ------------------------------------------------------------------------------
 
     internal void IntersectClipRect(double left, double top, double right, double bottom)
-        => AddClip(new XElement(Svg + "path", new XAttribute("d", DeviceRect(left, top, right, bottom))), true);
+        => AddClip(new XElement(Svg + "path", new XAttribute("d", DeviceRect(left, top, right, bottom).D)), true);
 
+    /// <summary>EXCLUDECLIPRECT. Exclusions made before anything refers to the clip cut holes in one clip
+    /// path instead of nesting a clip path each (Office carves a shape from hundreds of one-unit strips).
+    /// Even-odd filling would fill the overlap of two holes again, so an overlapping hole nests.</summary>
     internal void ExcludeClipRect(double left, double top, double right, double bottom)
-        => AddClip(new XElement(Svg + "path", new XAttribute("clip-rule", "evenodd"),
-            new XAttribute("d", $"M{N(-Huge)} {N(-Huge)}H{N(Huge)}V{N(Huge)}H{N(-Huge)}Z" + DeviceRect(left, top, right, bottom))), true);
+    {
+        var (hole, box) = DeviceRect(left, top, right, bottom);
+        if (exclusion is { } run && run.Id == state.Clip && run.Holes.Count < MaxClipHoles
+            && !run.Holes.Exists(h => h.L < box.R && box.L < h.R && h.T < box.B && box.T < h.B))
+        {
+            Count(4);
+            Spend(hole.Length);
+            run.D.Append(hole);
+            run.Holes.Add(box);
+            return;
+        }
+        var d = new StringBuilder($"M{N(-Huge)} {N(-Huge)}H{N(Huge)}V{N(Huge)}H{N(-Huge)}Z").Append(hole);
+        var shape = new XElement(Svg + "path", new XAttribute("clip-rule", "evenodd"), new XAttribute("d", d.ToString()));
+        AddClip(shape, true);
+        exclusion = (state.Clip!, shape, d, new() { box });
+    }
+
+    /// <summary>Writes the open exclusion's holes: from now on something refers to that clip as it is.</summary>
+    private void CloseExclusion()
+    {
+        if (exclusion is { } run) run.Shape.SetAttributeValue("d", run.D.ToString());
+        exclusion = null;
+    }
 
     internal void ResetClip() { state.Clip = null; state.ClipDepth = 0; }
 
@@ -502,20 +550,24 @@ internal sealed class MetafileCanvas
 
     internal bool HasClip => state.Clip != null;
 
-    private string DeviceRect(double left, double top, double right, double bottom)
+    /// <summary>A logical rectangle as device-space path data, and the device box that bounds it.</summary>
+    private (string D, (double L, double T, double R, double B) Box) DeviceRect(double left, double top, double right, double bottom)
     {
         var m = Transform; Order(ref left, ref right); Order(ref top, ref bottom);
         var d = new StringBuilder();
+        (double L, double T, double R, double B) box = (double.MaxValue, double.MaxValue, double.MinValue, double.MinValue);
         foreach (var (x, y) in new[] { (left, top), (right, top), (right, bottom), (left, bottom) })
         {
             var (dx, dy) = m.Apply(x, y);
             d.Append(d.Length == 0 ? 'M' : 'L').Append(N(dx)).Append(' ').Append(N(dy));
+            box = (Math.Min(box.L, dx), Math.Min(box.T, dy), Math.Max(box.R, dx), Math.Max(box.B, dy));
         }
-        return d.Append('Z').ToString();
+        return (d.Append('Z').ToString(), box);
     }
 
     private void AddClip(XElement shape, bool intersect)
     {
+        CloseExclusion();
         string id = NextId();
         var clip = new XElement(Svg + "clipPath", new XAttribute("id", id), new XAttribute("clipPathUnits", "userSpaceOnUse"), shape);
         int depth = 1;
@@ -533,9 +585,11 @@ internal sealed class MetafileCanvas
     // ---- Text and bitmaps ----------------------------------------------------------------------
 
     /// <summary>ANSI text in the selected font's character set. Western and default-charset fonts read as
-    /// Windows-1252; a byte above ASCII in any other set would be mis-decoded.</summary>
+    /// Windows-1252, and a symbol font's bytes are its own character codes; a byte above ASCII in any other
+    /// set would be mis-decoded.</summary>
     internal string Ansi(ReadOnlySpan<byte> text)
     {
+        if (state.Font.Charset == 2) return Encoding.Latin1.GetString(text);
         if (state.Font.Charset is not (0 or 1) && text.IndexOfAnyInRange((byte)0x80, (byte)0xff) >= 0)
             throw new NotSupportedException("Metafile text outside the Western character set is not supported.");
         return EmfImage.Windows1252(text);
@@ -546,13 +600,12 @@ internal sealed class MetafileCanvas
     internal void Text(double x, double y, string text, IReadOnlyList<double>? advances, (double L, double T, double R, double B)? opaque)
     {
         if (inBracket) throw new NotSupportedException("Text in a metafile path bracket is not supported.");
-        if (opaque is { } box)
-        {
-            var saveBrush = state.Brush; var savePen = state.Pen;
-            state.Brush = new Brush(state.BkColor); state.Pen = NullPen;
-            try { Rectangle(box.L, box.T, box.R, box.B); }
-            finally { state.Brush = saveBrush; state.Pen = savePen; }
-        }
+        if (opaque is { } box) FillRectangle(box.L, box.T, box.R, box.B, state.BkColor);
+        var font = state.Font;
+        // A symbol font's characters are its own codes (Symbol's "a" is an alpha): map them to Unicode, as
+        // the converter maps document text, and draw them in an ordinary font.
+        bool symbol = SymbolFontMapper.IsSymbolFont(font.Family);
+        if (symbol) (text, advances) = Symbols(text, advances, font.Family);
         var clean = new StringBuilder(text.Length);
         for (int i = 0; i < text.Length; i++)
         {
@@ -569,13 +622,12 @@ internal sealed class MetafileCanvas
         double total = advances?.Sum() ?? 0;
         if (updateCp) state.X = x + total;
         if (clean.ToString().Trim().Length == 0) return;
-        // A symbol font draws other glyphs for these characters (Symbol's "a" is an alpha), and private-use
-        // characters have no glyph outside the font they were written for.
-        if (state.Font.Charset == 2 || text.AsSpan().IndexOfAnyInRange('\uE000', '\uF8FF') >= 0)
+        // Another symbol font draws other glyphs for these characters, and private-use characters have no
+        // glyph outside the font they were written for.
+        if ((font.Charset == 2 && !symbol) || text.AsSpan().IndexOfAnyInRange('\uE000', '\uF8FF') >= 0)
             throw new NotSupportedException("Metafile symbol-font text is not supported.");
         Count(clean.Length);
 
-        var font = state.Font;
         double size = font.Height > 0 ? font.Height : 12;
         var s = state;
         var m = Transform;
@@ -593,10 +645,11 @@ internal sealed class MetafileCanvas
         {
             double start = horizontal == 2 ? -total : horizontal == 6 ? -total / 2 : 0, at = start;
             var xs = new StringBuilder();
-            // Advances are per UTF-16 code unit; SVG positions are per character.
+            // Advances are per UTF-16 code unit; SVG positions are per character, and a variation selector
+            // belongs to the character before it.
             for (int i = 0; i < clean.Length && i < advances.Count; i++)
             {
-                if (!char.IsLowSurrogate(clean[i])) xs.Append(xs.Length == 0 ? "" : " ").Append(N(at));
+                if (!char.IsLowSurrogate(clean[i]) && clean[i] != '︎') xs.Append(xs.Length == 0 ? "" : " ").Append(N(at));
                 at += advances[i];
             }
             element.SetAttributeValue("x", xs.ToString());
@@ -604,7 +657,7 @@ internal sealed class MetafileCanvas
         else if (horizontal != 0) element.Add(new XAttribute("text-anchor", horizontal == 2 ? "end" : "middle"));
         if (vertical != 24) element.Add(new XAttribute("dominant-baseline", vertical == 8 ? "text-after-edge" : "text-before-edge"));
         element.Add(new XAttribute("font-size", N(size)),
-            new XAttribute("font-family", font.Family.Length == 0 ? "sans-serif" : $"'{font.Family}', sans-serif"),
+            new XAttribute("font-family", font.Family.Length == 0 || symbol ? "sans-serif" : $"'{font.Family}', sans-serif"),
             new XAttribute("fill", s.TextColor), new XAttribute("style", "white-space:pre"));
         if (font.Weight is > 0 and not 400) element.Add(new XAttribute("font-weight", Math.Clamp(font.Weight / 100 * 100, 100, 900)));
         if (font.Italic) element.Add(new XAttribute("font-style", "italic"));
@@ -618,18 +671,86 @@ internal sealed class MetafileCanvas
         Add(element);
     }
 
-    /// <summary>Draws an already-encoded image into a logical destination rectangle (which may be flipped).</summary>
-    internal void Image(double x, double y, double width, double height, string href, long pixels)
+    /// <summary>Maps symbol-font text to Unicode; each advance stays with the character it belonged to.</summary>
+    private static (string, IReadOnlyList<double>?) Symbols(string text, IReadOnlyList<double>? advances, string family)
+    {
+        var mapped = new StringBuilder(text.Length);
+        var spacing = advances == null ? null : new List<double>(advances.Count);
+        for (int i = 0; i < text.Length; i++)
+        {
+            string unicode = SymbolFontMapper.Map(text[i], family) ?? (text[i] <= ' ' ? text[i].ToString()
+                : throw new NotSupportedException("Metafile symbol-font text has no Unicode equivalent."));
+            mapped.Append(unicode);
+            if (spacing != null && i < advances!.Count) { spacing.Add(advances[i]); for (int k = 1; k < unicode.Length; k++) spacing.Add(0); }
+        }
+        return (mapped.ToString(), spacing);
+    }
+
+    /// <summary>Draws a bitmap into a logical destination rectangle (which may be flipped) with the ternary
+    /// raster operation <paramref name="rop"/>, or over what lies beneath by its own alpha when it is null
+    /// (ALPHABLEND). A pixel whose result does not read the destination is drawn, or left transparent when
+    /// it leaves the destination as it is. One whose result does is exact only where the bitmap drawn just
+    /// before, to the same pixels, left the destination known; the two then merge into one image. That is
+    /// how GDI draws a transparent bitmap: a monochrome mask, then the image (SRCAND then SRCINVERT, or
+    /// SRCPAINT then SRCAND). Anything else rejects the picture.</summary>
+    internal void Bitmap(double x, double y, double width, double height, DibImage.Bitmap source, uint? rop)
     {
         if (inBracket) throw new NotSupportedException("Bitmaps in a metafile path bracket are not supported.");
-        if ((bitmapPixels += pixels) > MaxBitmapPixels) throw new NotSupportedException("Metafile bitmaps exceed the pixel limit.");
+        if ((bitmapPixels += (long)source.Width * source.Height) > MaxBitmapPixels) throw new NotSupportedException("Metafile bitmaps exceed the pixel limit.");
         if (width == 0 || height == 0) return;
         var m = new Matrix(width, 0, 0, height, x, y).Then(Transform);
+        int table = (int)(rop.GetValueOrDefault(0x00CC0020) >> 16) & 0xff;
+        if (rop != null && table != 0xCC && drawn is { } below && below.Placement == m && below.Width == source.Width
+            && below.Height == source.Height && Container().LastNode == below.Element)
+        {
+            Raster(table, source.Rgba, below.Rgba);
+            return;
+        }
+        var rgba = rop == null || table == 0xCC ? source.Rgba : Raster(table, source.Rgba, null);
         var image = new XElement(Svg + "image", new XAttribute("width", "1"), new XAttribute("height", "1"),
-            new XAttribute("preserveAspectRatio", "none"), new XAttribute("href", href));
+            new XAttribute("preserveAspectRatio", "none"));
         SetTransformAttribute(image, m, always: true);
         foreach (var (px, py) in new[] { (0.0, 0.0), (1.0, 1.0), (0.0, 1.0), (1.0, 0.0) }) Track(m, px, py, 0);
         Add(image);
+        drawn = (image, m, source.Width, source.Height, rgba);
+    }
+
+    /// <summary>Applies the raster operation whose truth table is <paramref name="table"/> (a ROP3 code's third
+    /// byte: bit 4p + 2s + d holds the result for pattern, source and destination bits p, s and d) to each
+    /// source pixel, into <paramref name="below"/> when the destination is that known image.</summary>
+    private byte[] Raster(int table, byte[] source, byte[]? below)
+    {
+        (int R, int G, int B) pattern = (0, 0, 0);
+        if (table >> 4 != (table & 15))
+        {
+            if (state.Brush is not { Hatch: < 0, Pattern: false, Tile: null } brush || !brush.Color.StartsWith('#'))
+                throw new NotSupportedException("Metafile raster operations combine bitmaps with solid brushes only.");
+            int Channel(int at) => Convert.ToInt32(brush.Color.Substring(at, 2), 16);
+            pattern = (Channel(1), Channel(3), Channel(5));
+        }
+        var result = below ?? new byte[source.Length];
+        for (int i = 0; i < source.Length; i += 4)
+        {
+            bool constant = true, unchanged = true;
+            for (int c = 0; c < 3; c++)
+            {
+                int p = c == 0 ? pattern.R : c == 1 ? pattern.G : pattern.B, low = Rop(table, p, source[i + c], 0), high = Rop(table, p, source[i + c], 255);
+                constant &= low == high; unchanged &= low == 0 && high == 255;
+            }
+            if (unchanged) continue; // transparent, or the image below shows through
+            if (!constant && below?[i + 3] != 255)
+                throw new NotSupportedException("Metafile raster operation depends on what lies beneath the bitmap.");
+            for (int c = 0; c < 3; c++)
+                result[i + c] = (byte)Rop(table, c == 0 ? pattern.R : c == 1 ? pattern.G : pattern.B, source[i + c], constant ? 0 : result[i + c]);
+            result[i + 3] = 255;
+        }
+        return result;
+    }
+
+    private static int Rop(int table, int p, int s, int d)
+    {
+        int Of(int t) => ((t & 1) != 0 ? ~s & ~d : 0) | ((t & 2) != 0 ? ~s & d : 0) | ((t & 4) != 0 ? s & ~d : 0) | ((t & 8) != 0 ? s & d : 0);
+        return ((p & Of(table >> 4)) | (~p & Of(table & 15))) & 0xff;
     }
 
     /// <summary>Accounts for bitmap pixels that are decoded but not drawn.</summary>
@@ -638,23 +759,26 @@ internal sealed class MetafileCanvas
         if (bitmapPixels + pixels > MaxBitmapPixels) throw new NotSupportedException("Metafile bitmaps exceed the pixel limit.");
     }
 
-    /// <summary>PATBLT-style fill of a logical rectangle with the current brush or a fixed colour.</summary>
+    /// <summary>PATBLT-style fill of a logical rectangle with the current brush or a fixed colour. It is a
+    /// raster operation of its own, so the binary raster operation does not apply.</summary>
     internal void FillRectangle(double left, double top, double right, double bottom, string? color)
     {
-        var saveBrush = state.Brush; var savePen = state.Pen;
+        var saveBrush = state.Brush; var savePen = state.Pen; bool saveInk = state.Ink;
         if (color != null) state.Brush = new Brush(color);
-        state.Pen = NullPen;
+        state.Pen = NullPen; state.Ink = true;
         try { Rectangle(left, top, right, bottom); }
-        finally { state.Brush = saveBrush; state.Pen = savePen; }
+        finally { state.Brush = saveBrush; state.Pen = savePen; state.Ink = saveInk; }
     }
 
     /// <summary>Completes pending output; call once after the final record.</summary>
-    internal void Finish() => Flush();
+    internal void Finish() { Flush(); CloseExclusion(); }
 
     // ---- Emission ------------------------------------------------------------------------------
 
     private void Into(Action<Path> build)
     {
+        // GDI converts each point to device space as it is added: the bracket takes its first figure's transform.
+        bracketMatrix ??= Transform;
         if (Transform != bracketMatrix) throw new NotSupportedException("A metafile path bracket changes its transform.");
         int before = bracket!.Points.Count;
         build(bracket);
@@ -666,7 +790,7 @@ internal sealed class MetafileCanvas
     {
         if (inBracket) { Into(build); return; }
         var pen = state.Pen;
-        if (pen.Color == "none") { var scratch = new Path(); build(scratch); return; }
+        if (pen.Color == "none" || !state.Ink) { var scratch = new Path(); build(scratch); return; }
         var m = Transform;
         var container = Container();
         var key = (pen, m, container);
@@ -701,6 +825,7 @@ internal sealed class MetafileCanvas
     private void Shape(XElement element, bool fill, bool outline, IReadOnlyList<(double X, double Y)> logical,
         Matrix? transform = null, bool path = false, bool flush = true)
     {
+        if (!state.Ink) return;
         if (flush) Flush();
         var m = transform ?? Transform;
         var s = state;
@@ -709,8 +834,6 @@ internal sealed class MetafileCanvas
         var pen = s.Pen;
         if (outline && pen.Color != "none")
         {
-            if (pen.Cosmetic && rejectCosmeticPens)
-                throw new NotSupportedException("Visible device-pixel metafile pens have no resolution-independent width.");
             element.Add(new XAttribute("stroke", pen.Color), new XAttribute("stroke-width", N(pen.Width)),
                 new XAttribute("stroke-linejoin", pen.Join));
             if (!pen.Cosmetic && pen.Cap != "butt") element.Add(new XAttribute("stroke-linecap", pen.Cap));
@@ -727,17 +850,24 @@ internal sealed class MetafileCanvas
     private string Fill(Brush brush, Matrix m)
     {
         if (brush.Pattern) throw new NotSupportedException("Metafile pattern brushes are not supported.");
-        if (brush.Hatch < 0 || brush.Color == "none") return brush.Color;
-        // Hatches are eight device pixels, anchored at the device origin.
-        string id = NextId();
+        if (brush.Tile == null && (brush.Hatch < 0 || brush.Color == "none")) return brush.Color;
+        // GDI realises a brush in the pixels of the device it plays onto: hatches are eight of them and
+        // pattern tiles their own size, both anchored at the device origin. Here that device is CSS pixels.
+        string id = NextId(), width = N(brush.Tile?.Width ?? 8), height = N(brush.Tile?.Height ?? 8);
         var pattern = new XElement(Svg + "pattern", new XAttribute("id", id), new XAttribute("patternUnits", "userSpaceOnUse"),
-            new XAttribute("width", "8"), new XAttribute("height", "8"));
-        SetTransformAttribute(pattern, m.Invert(), "patternTransform");
-        if (state.OpaqueBackground)
-            pattern.Add(new XElement(Svg + "rect", new XAttribute("width", "8"), new XAttribute("height", "8"), new XAttribute("fill", state.BkColor)));
-        string d = brush.Hatch switch {
-            0 => "M0 4.5H8", 1 => "M4.5 0V8", 2 => "M0 0L8 8", 3 => "M0 8L8 0", 4 => "M0 4.5H8M4.5 0V8", _ => "M0 0L8 8M0 8L8 0" };
-        pattern.Add(new XElement(Svg + "path", new XAttribute("d", d), new XAttribute("stroke", brush.Color), new XAttribute("stroke-width", "1")));
+            new XAttribute("width", width), new XAttribute("height", height));
+        SetTransformAttribute(pattern, new Matrix(cssPixelX, 0, 0, cssPixelY, 0, 0).Then(m.Invert()), "patternTransform");
+        if (brush.Tile is { } tile)
+            pattern.Add(new XElement(Svg + "image", new XAttribute("width", width), new XAttribute("height", height),
+                new XAttribute("preserveAspectRatio", "none"), new XAttribute("image-rendering", "optimizeSpeed"), new XAttribute("href", tile.Href)));
+        else
+        {
+            if (state.OpaqueBackground)
+                pattern.Add(new XElement(Svg + "rect", new XAttribute("width", "8"), new XAttribute("height", "8"), new XAttribute("fill", state.BkColor)));
+            string d = brush.Hatch switch {
+                0 => "M0 4.5H8", 1 => "M4.5 0V8", 2 => "M0 0L8 8", 3 => "M0 8L8 0", 4 => "M0 4.5H8M4.5 0V8", _ => "M0 0L8 8M0 8L8 0" };
+            pattern.Add(new XElement(Svg + "path", new XAttribute("d", d), new XAttribute("stroke", brush.Color), new XAttribute("stroke-width", "1")));
+        }
         Defs().Add(pattern);
         Count(pattern);
         return $"url(#{id})";
@@ -756,6 +886,13 @@ internal sealed class MetafileCanvas
             strokeElement.SetAttributeValue("d", d);
         }
         stroke = null; strokeElement = null; strokeKey = null;
+        if (drawn is { } bitmap)
+        {
+            string href = new DibImage.Bitmap(bitmap.Width, bitmap.Height, bitmap.Rgba).Href;
+            Spend(href.Length);
+            bitmap.Element.SetAttributeValue("href", href);
+            drawn = null;
+        }
     }
 
     private void Add(XElement element)
@@ -768,6 +905,7 @@ internal sealed class MetafileCanvas
     private XElement Container()
     {
         if (state.Clip is not { } clip) return root;
+        if (exclusion?.Id == clip) CloseExclusion();
         if (clipGroup != null && root.LastNode == clipGroup && (string?)clipGroup.Attribute("clip-path") == $"url(#{clip})") return clipGroup;
         Flush();
         clipGroup = new XElement(Svg + "g", new XAttribute("clip-path", $"url(#{clip})"));
@@ -833,6 +971,9 @@ internal sealed class MetafileCanvas
         if (Bad(m.A) || Bad(m.B) || Bad(m.C) || Bad(m.D) || Bad(m.E) || Bad(m.F))
             throw new InvalidDataException("Invalid metafile transform.");
     }
+
+    /// <summary>How much the transform scales lengths (exactly, for a uniform scale and rotation).</summary>
+    private static double Scale(Matrix m) => Math.Sqrt(Math.Abs(m.Determinant));
 
     private static (double X, double Y)[] Corners(double left, double top, double right, double bottom)
         => new[] { (left, top), (right, bottom), (left, bottom), (right, top) };

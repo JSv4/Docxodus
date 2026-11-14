@@ -6668,7 +6668,7 @@ with `<v:imagedata r:id="picture"/>`. The related part belongs to its body/heade
 | Identical PNG/TIFF pixels | Fresh PDF capture paints the graphic | Both paint the same graphic | PNG unchanged; TIFF normalized to PNG with identical rendered pixels |
 | WMF picture stretched to twice its height | Fresh DrawingML capture stretches the complete outline: 3pt vertical edges, 6pt horizontal edges | Keeps a uniform 3pt outline | SVG transforms the complete painted graphic, matching Word's scaling |
 | WMF window x scales 0.5, 1 and 2 | Fresh captures exclude 2, 1 and 0 logical units from right bounds; pen scales on both axes | Uses different ellipse center rounding and uniform pen scaling | Resolves device-pixel exclusion before transforming logical shapes and paint |
-| Visible zero-width WMF pen | Fresh PDF uses a printer-device hairline (about 0.14pt before picture scaling) | Device-dependent | Explicit unsupported-content diagnostic; no assumed printer resolution |
+| Visible zero-width WMF pen | Fresh PDF uses a printer-device hairline (about 0.14pt before picture scaling) | Device-dependent | One CSS pixel, as EMF cosmetic pens (#1706; was an unsupported-content diagnostic) |
 | Grouped VML image sizing | Not measured; the diagnostic VML carrier printed a linked-image error | Uniform pen width follows horizontal scale | Uses the same transformed image as DrawingML; carrier placement is tested separately |
 | Unsupported TIFF colorimetry or WMF records | Not measured | Provider-dependent | Explicit placeholder/warning; strict export refuses it |
 
@@ -6688,10 +6688,12 @@ later picture stretching also stretches the outline. LibreOffice instead shifts 
 ellipse's integer center and keeps its pen uniform, so it is not the geometry oracle here.
 
 The SVG viewBox retains the unrounded physical size. Only its width/height attributes round
-up to positive intrinsic dimensions. Bounds that collapse after device-pixel exclusion and
-visible zero-width pens reject the whole image, including previously decoded shapes. Null
-pens remain supported. This prevents a printer-specific hairline from silently becoming a
-different CSS-pixel stroke.
+up to positive intrinsic dimensions. Bounds that collapse after device-pixel exclusion reject
+the whole image, including previously decoded shapes. A visible zero-width pen first did too, so
+that a printer-specific hairline would not silently become a different stroke; since #1706 it draws
+one CSS pixel wide, as an EMF cosmetic pen does, because PowerPoint's WMF export outlines shapes
+with such pens and refusing them kept those pictures as placeholders. That is a screen pixel, not
+the printer hairline above.
 
 The supported subsets and bounds follow [TIFF 6.0](https://www.itu.int/itudoc/itu-t/com16/tiff-fx/docs/tiff6.pdf)
 and Microsoft's [WMF format](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wmf/).
@@ -7146,16 +7148,63 @@ Other things the render settled:
 - **Word sets under/over limits beside an inline n-ary operator** (`∑` with `limLoc` `undOvr`
   draws as `∑ᵢⁿ` in a line of text and stacked in a display equation), which is what
   `movablelimits="true"` gives.
-- **Known remaining differences, not fixed here.** Word sets `k=0` in a limit or script tight;
-  Chromium keeps full operator spacing at script size. And a run that *starts* with an operator
-  (`<m:r>a</m:r><m:r>+c</m:r>`) loses the space before it: each run is its own `mrow`, so MathML
-  reads a leading `+` as a prefix operator. That is how runs were already projected before these
-  structures were added.
+- **Known remaining difference, not fixed here.** Word sets `k=0` in a limit or script tight;
+  Chromium keeps full operator spacing at script size. (A run that *starts* with an operator after
+  an operand, `<m:r>a</m:r><m:r>+c</m:r>`, used to lose the space before it; see the next section.)
 
 Code: `WmlToHtmlConverter.Math.cs` (`MathExpression`, `MathCellAlignment`). Tests:
 `A_bar_is_a_rule_as_wide_as_its_operand`, `Matrix_columns_keep_their_justification`,
 `Display_equation_arrays_keep_display_style_and_align_rows_at_their_points`,
 `A_linear_fraction_slash_is_set_tight`.
+
+### What Word 2024 draws for the rest of OMML: spaces, ordinary text, styles, phantoms, skewed fractions, strikes, lines (#1705)
+
+Two kinds of document, both exported to PDF by Word 16.0.20326 and measured from the PDF's glyph
+positions (12 pt Cambria Math): documents written by hand with one equation per variant, and a
+document Word built itself through its object model, with its equation gallery and typed equations
+made bold, italic or coloured, phantoms, struck border boxes, a skewed fraction, Shift+Enter lines
+and "Align at this character". Word wrote `w:eastAsiaTheme="minorEastAsia"` into that document's
+run fonts, which still keeps every equation on the placeholder (#1726 handles it), so it was counted
+with that attribute removed: on `main` 28 of its 37 equations were placeholders; with this change all
+37 draw. The MathML was rendered in Chromium with Cambria Math and compared by
+eye.
+
+| OMML | Word 2024 | Docxodus |
+| --- | --- | --- |
+| spaces in `m:t` (`a b`, `a  b`, `a    b`, no-break space) | each at the font's space width (about 0.22 em), added to any operator spacing; an em space is 1 em | an `mtext` keeping the characters (`white-space: pre`): the font's own widths |
+| one space after a comma | absorbed: `a, b` is exactly as wide as `a,b` | drawn, so 0.2 em wider |
+| exactly two spaces after a comma, display math | a 2 em gap, which the gallery's Taylor expansion (`+⋯,  −∞<x<∞`) relies on; three or more are drawn at their width, and inline two are | drawn at their width: the Taylor expansion's gap is about 0.5 em where Word's is 2 em |
+| `m:nor` | text in the run's font (Cambria Math from the `w:rFonts` Word writes on it; the paragraph's Calibri without them), no math italics, no operator spacing (`speed+2`); `w:b`/`w:i` make it bold or italic; an `m:sty` on it changes nothing | one `mtext` in the run's weight, slope and colour; without `w:rFonts` it keeps the placeholder |
+| `m:sty` `b`/`bi` | letters and digits bold; `+ = , ( ) ∞` plain; `∂ ∇` bold | the same |
+| `w:b`, `w:i` on a math run | change nothing | change nothing |
+| letters with no form in the run's alphabet | Cyrillic plain in every style; script, fraktur and sans-serif Greek plain; Hebrew bold under `b`/`bi` | placeholder, as before |
+| `m:phant` | shown unless `m:show` is off; `zeroWid` draws the operand from its start over what follows (`x` over the next `+`); `zeroAsc`/`zeroDesc` let it overflow a radical around it; a shown phantom of `+` between `a` and `b` is set tight, like an ordinary atom; `m:transp` changed nothing in four cases | `mphantom` and `mpadded`; a phantom made of one operator has the operator's spacing removed |
+| `m:f` `skw` | operands full size beside U+2044, the numerator raised about 0.33 em and the denominator lowered until its top is about 0.25 em above the baseline (0.44 em for `b`, 0.41 em for `2`, 0.21 em for `y`); the slash overlaps each operand by about 0.07 em and grows around a stacked fraction | fixed offsets of 0.33 em and −0.42 em, slash at its own size: an x-height denominator sits 0.2 em lower than Word's, the fraction is about 0.15 em wider, and a tall operand gets a smaller slash. MathML Core has no bevelled fraction, and Chromium clamps a negative `lspace` |
+| `m:borderBox` `strikeH`/`strikeV`/`strikeBLTR`/`strikeTLBR` | a line through the box's middle, or from corner to corner | one `linear-gradient` background layer each, with `print-color-adjust: exact` so printing keeps it |
+| `m:brk`, with or without `m:alnAt` | ignored while the equation fits its line; in a longer one the line breaks there and the rest wraps | drawn as one line (the projection never breaks an equation) |
+| `w:br` in a run, as Shift+Enter writes it | starts a new line; several `m:oMath` without one run on as one line | the same, as `mtable` rows |
+| `m:aln` under `m:defJc` `centerGroup` | the lines sit at the first line's left edge; a line with a point moves so the point lines up with the first such line's; one point changes nothing | every line or one line with a point: aligned columns or one left-aligned column; points on only some lines: placeholder |
+| `m:aln` under `m:defJc` `center` | each line centred on its own; points change nothing | one centred column |
+| `w:color` in a structure's `m:ctrlPr` | paints only the structure's own glyphs (fraction bar, radical, fences, ∑, accent, border); the operands keep theirs | CSS `color` on the structure; since MathML operands inherit it, drawn only when every run inside carries a colour of its own |
+| an operator starting a run after an operand (`x²` then `+1`) | binary: `x² + 1` | the run joins its argument's row, so MathML reads the operator as binary; before, first in the run's own `mrow`, it was a tight prefix (`x²+1`). An explicit `form="infix"` would give `!` or a typed `)` default spacing in Chromium |
+
+Line breaks are why `m:oMathPara` can hold several `m:oMath`: Word writes Shift+Enter as
+`<m:r><w:rPr>…</w:rPr><w:br/></m:r>` closing one `m:oMath` and starts the next, and "Align at this
+character" as `<m:rPr><m:aln/></m:rPr>` on the run that begins with the chosen operator. The
+object model's `OMathBreaks.Add` writes `<m:rPr><m:brk/></m:rPr>` on the run starting at the operator,
+which, as the table says, Word then ignores while the equation fits.
+
+Not modelled, and recorded here: Word's comma-and-space rule above, the skewed fraction's
+content-dependent offsets and growing slash, and lines where only some carry an alignment point.
+
+Code: `WmlToHtmlConverter.Math.cs` (`MathRunTokens`, `MathLines`, `MathAddRows`, `MathExpression`).
+Tests: `HtmlMathTests` (`A_display_equation_with_a_run_of_spaces_draws_through_the_public_converter`,
+`Ordinary_text_is_one_text_token_in_its_own_weight_and_slope`,
+`Math_run_styles_change_letters_and_digits_and_leave_operators_plain`,
+`Display_lines_are_table_rows_lined_up_at_their_alignment_points`, `A_manual_break_changes_nothing_on_one_line`,
+`A_structure_is_drawn_in_its_control_colour_when_its_operands_carry_their_own`,
+`An_operator_that_starts_a_run_after_an_operand_is_not_first_in_its_row` and the phantom, skewed-fraction and
+strike tests).
 
 ### Bounds on equation input (#1705)
 
@@ -7772,9 +7821,56 @@ EMR_ALPHABLEND  xDest=35 yDest=1 cxDest=32 cyDest=32  BLENDFUNCTION=0x01FF8000
 
 `Internal/EmfImage.cs` handles the header count and the blend function; `Internal/DibImage.cs`
 unpremultiplies the alpha before encoding PNG. GDI itself plays files by byte length, and
-LibreOffice reads its own exports, so neither notices the count. Visible zero-width WMF pens are
-still refused (see "TIFF and WMF need browser image normalization"); EMF cosmetic pens keep the
-one-CSS-pixel rule from #1554.
+LibreOffice reads its own exports, so neither notices the count. EMF cosmetic pens keep the
+one-CSS-pixel rule from #1554, and since the second stage below visible zero-width WMF pens follow it.
+
+## Office's GDI fallback draws with idioms a strict player rejects (#1706)
+
+Office writes a picture it renders as a dual EMF+ file: EMF+ records with the real drawing, then
+GDI records that redo it with what GDI can do. Windows makes a WMF from such an EMF when asked.
+A corpus of 74 metafiles written on Windows 11 by Word, Excel and PowerPoint 2024 (charts of ten
+kinds, shapes, SmartArt, WordArt, tables, symbol text, an equation and embedded-object previews;
+each EMF also as a WMF, from PowerPoint's own WMF export or GDI's `GetWinMetaFileBits`) shows what
+those GDI records rely on. GDI's behaviour was checked by drawing on a bitmap DC; what Word shows
+comes from its filtered-HTML export, which writes a PNG of each picture.
+
+Every one of the 39 Office EMFs that carried EMF+ was dual, and the two embedded-object icon
+previews carried no EMF+ at all: no Office or Windows writer in the corpus produced an EMF+-only
+file, so those keep the placeholder rather than getting an EMF+ player.
+
+| What the records do | Written by | GDI | Word shows | Docxodus |
+| --- | --- | --- | --- | --- |
+| A transparent bitmap as two blits to one rectangle, between `TNPP` comments: SRCPAINT with a one-bit mask (white = opaque), then SRCAND with the image (white where transparent) | Word and PowerPoint EMF: chart markers, shadows, glows, WordArt, 3-D charts | Exact over any background | The EMF+ image, with soft alpha | Merges the pair into one PNG with on/off alpha |
+| The icon form of the same: SRCAND with the mask (black = opaque), then SRCINVERT with the image | Embedded-object icon previews | Exact | Same as GDI | Same merge |
+| `EMR_CREATEDIBPATTERNBRUSHPT`: an 8×8 one-bit DIB in RGB colours | Pattern fills in charts and shapes | Paints the DIB's own colour table, not the text and background colours; tiles in the pixels of the device it plays onto | Stripes a few screen pixels apart | Tiles the bitmap as an SVG pattern in CSS pixels |
+| A reference device of 600 dpi (Frame 4.235 hundredths of a millimetre per pixel) | PowerPoint EMF | Brush tiles and hatches are output-device pixels, whatever the reference device | Coarse stripes | Hatches and tiles are sized in CSS pixels; at the reference device's 0.042 mm they were invisible |
+| `BEGINPATH`, world scaled by 1/8, the figure, the scale undone, `ENDPATH` | PowerPoint charts | Converts each point to device space as it is added; a geometric pen is realised at the transform in effect when the path is stroked | Drawn | The bracket takes its first figure's transform; stroking it with a geometric pen at another scale keeps the placeholder |
+| `META_SELECTCLIPREGION` with index 0, and no region ever created | PowerPoint WMF, `GetWinMetaFileBits` | The null region: resets the clip | Drawn | Resets the clip; any other index keeps the placeholder |
+| 471 one-unit `EXCLUDECLIPRECT` strips carving a shape's outline | PowerPoint WMF of gradient and glow shapes | A banded region | Drawn | Consecutive exclusions before anything is drawn become holes in one clip path (one nested `clipPath` each exceeded the depth bound) |
+| `SETROP2 R2_NOP` around polygons inside PostScript `BEGIN_PATH`/`END_PATH` escapes | PowerPoint WMF | Leaves the destination unchanged | Nothing drawn | Draws nothing with the pen or brush; PATBLT, a raster operation of its own, still paints |
+| `EXTTEXTOUTW` with `ETO_GLYPH_INDEX` and zero characters | Embedded-object icon previews | Draws nothing | Nothing drawn | Draws nothing (glyph-index runs with characters still keep the placeholder) |
+| Symbol and Wingdings text as the fonts' codes moved to U+F020–U+F0FF, or as bytes in a WMF | Word EMF; any WMF | The font's glyphs | α β ≥ ∑ ☺ ✓ | Maps through `SymbolFontMapper` and draws in an ordinary font; a code with no Unicode equivalent keeps the placeholder |
+| A zero-width pen outlining an arrowhead | PowerPoint WMF | One device pixel | One pixel | One CSS pixel, as EMF cosmetic pens (it was refused) |
+| The source EMF split across `META_ESCAPE_ENHANCED_METAFILE` comments ("WMFC") | `GetWinMetaFileBits`, LibreOffice WMF export | Plays the embedded EMF instead of the WMF records | αβ ≤ ± → (the EMF's text) | Plays the embedded EMF; when it cannot, plays the WMF records |
+| ANSI text records that lose characters ("αβ ≤ →" becomes "aß = ?"), and one-bit DIBs written without their colour table | `GetWinMetaFileBits` | Unused: the embedded EMF is played | The EMF's text | Unused for the same reason |
+| A gradient as abutting strips of solid polygons | Every Office gradient | Aliased, so the strips meet without a seam | The EMF+ gradient | Anti-aliased SVG shows faint lighter lines where strips meet (not fixed; already so for gradients drawn before) |
+| A semi-transparent fill as PATINVERT, a fill with `R2_MASKPEN` and a one-bit pattern, then PATINVERT again; or `R2_XORPEN` | SmartArt with transparency; PowerPoint WMF of a gradient area chart | A dithered approximation | The EMF+ alpha | Keeps the placeholder |
+| Equation text as glyph indices (Cambria Math) | Word EMF of an equation | The font's glyphs | Drawn | Keeps the placeholder: glyph indices need the font's own tables |
+
+```text
+EMR_STRETCHDIBITS  dest (4925,92) 1151×817  src 576×409  BI_RGB 1 bpp   rop 0x00EE0086 (SRCPAINT)
+EMR_STRETCHDIBITS  dest (4925,92) 1151×817  src 576×409  BI_RGB 8 bpp   rop 0x008800C6 (SRCAND)
+
+META_SAVEDC
+META_SELECTCLIPREGION  Region=0
+META_INTERSECTCLIPRECT 166,166 - 3500,2333
+```
+
+`Internal/MetafileCanvas.cs` evaluates a blit's raster operation per pixel from its truth table: a
+pixel whose result does not read the destination is drawn or left transparent, and one whose result
+does is exact only where the bitmap drawn just before, to the same rectangle, left the destination
+known. The fixtures under `TestFiles/Metafiles/office-*` are corpus files; their README records how
+each was written.
 
 ## Missing-font classes differ from native font selection (#1574)
 
@@ -8896,3 +8992,56 @@ cell marks where the row ends. The filler cell for an omitted `w:gridBefore` is 
 row, and an exact-height row's cell takes the content inside its clip box. Nothing is dropped: a
 row or table with no cell of its own keeps the content beside its cells or rows. The bracket marks
 stay, now inside the cell: Word offers no placement to follow. Tests: `TableRangeBoundaryTests`, `npm/tests/export-bookmarked-table.spec.ts`.
+
+## Content wholly off the paper: Word prints what the paper holds (#1733, #1734)
+
+Two layouts put source content entirely outside the paper. A fixed-layout table wider than its page
+(fixed `w:tblLayout`, DXA `w:tblW` and grid):
+
+```xml
+<!-- A4 (11906 twips) with 1418-twip margins; the grid is 14700 twips wide -->
+<w:tblGrid><w:gridCol w:w="1800"/><w:gridCol w:w="2200"/><w:gridCol w:w="1500"/><w:gridCol w:w="1500"/>
+  <w:gridCol w:w="1500"/><w:gridCol w:w="3000"/><w:gridCol w:w="3200"/></w:tblGrid>
+<!-- the last row fills all seven columns: the sixth cell crosses the paper edge, the seventh starts past it -->
+```
+
+and a linked text-box story whose frames are offset below the paper:
+
+```xml
+<wp:positionV relativeFrom="paragraph"><wp:posOffset>10058400</wp:posOffset></wp:positionV> <!-- 11 in on 11.69 in paper -->
+<wps:txbx id="1"><w:txbxContent><w:p>…</w:p><w:p>…</w:p></w:txbxContent></wps:txbx>   <!-- frame 1 -->
+<wps:linkedTxbx id="1" seq="1"/>                                                     <!-- frame 2, same offset -->
+```
+
+Measured in desktop Word 2024 (16.0 build 20326, Windows 11) by `SaveAs2` to PDF and reading the PDF
+text. LibreOffice was not measured.
+
+| Document | Word 2024 | Docxodus before | Docxodus after |
+|---|---|---|---|
+| The table above | One page; the sixth cell's "Checked by" printed at the paper edge, the seventh cell's text absent | `source anchor tc:… has no measurable fragment` | One page, same text; `source_text_clipped` for the seventh cell's paragraph |
+| Same table, last row five columns wide (control) | One page, all text | Exports | Unchanged |
+| A 780pt fixed grid on Letter paper (`wideBodyTableDocx`) | Two pages; columns A–D printed, E absent | `has no measurable fragment` | Two pages, A–D; 39 `source_text_clipped` |
+| A 540pt fixed header and footer grid on 360pt paper | Two pages; the third cell of each absent | `has no measurable fragment` | Same; one warning each for header and footer |
+| The linked story above | One page, no box text | `source anchor p:… has no measurable fragment` | One page, no box text; `source_text_clipped` for both paragraphs |
+| Same story offset 2 in (control) | Both paragraphs printed in frame 1 | Exports | Unchanged |
+| A single unlinked box at the 11 in offset | One page, no box text | Exports with `source_text_clipped` | Unchanged |
+
+Word applies one rule: the paper edge clips. Whatever of a table or a text-box frame lies past it is
+not printed, a cell crossing it is cut there, and nothing about the off-paper part makes Word refuse
+or move the content. Docxodus already clipped the same way and reported the partly cut table text
+(`source_table_content_clipped`, #1563), but its PageMap completeness check admitted a source anchor
+with no visible fragment only through named proofs, and none covered a table cell or a linked story.
+An unlinked box is covered by its own proof, which binds each paragraph's original geometry to its
+placement; a linked story cannot use it, because `flowLinkedTextBoxes` distributes the paragraphs
+over the frames after the frames are placed.
+
+**Fix.** `hiddenByPaper` (`npm/src/pagination.ts`) admits an element the paper alone hides: its
+layout box has area and lies wholly outside the paper, it is visible under every other clip (so a
+body band cutting content off still fails), and it is inside an authored box whose geometry comes
+from the source, a fixed-width table or a linked frame placed from its source offsets on a
+supported basis. Each such paragraph is reported as `source_text_clipped`, which strict content
+policy rejects. A table, a frame or other content the layout placed off the paper still fails
+completeness, as does an element with no box.
+
+**Tests.** `pagination-table-clipping.spec.ts`, `page-map-source-textbox-clip.spec.ts`,
+`export-wide-body-table.spec.ts`, `export-story-table-width.spec.ts`, `export-linked-textboxes.spec.ts`.

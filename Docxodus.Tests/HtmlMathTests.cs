@@ -38,7 +38,7 @@ public class HtmlMathTests
 
     [Theory]
     [InlineData("x\u0301")]
-    [InlineData("x y")]
+    [InlineData("x\ty")]
     [InlineData("x\u200dy")]
     public void Token_forms_without_a_faithful_projection_keep_the_diagnostic(string text)
     {
@@ -250,7 +250,9 @@ public class HtmlMathTests
     [InlineData(true)]
     public void Unsupported_equation_structure_retains_its_diagnostic(bool display)
     {
-        var html = Convert("<m:phant><m:e>" + RunX + "</m:e></m:phant>", display);
+        // Aligned scripts stack the sub- and superscript flush, which MathML scripts do not draw.
+        var html = Convert("<m:sSubSup><m:sSubSupPr><m:alnScr/></m:sSubSupPr><m:e>" + RunX + "</m:e><m:sub>" + RunTwo
+            + "</m:sub><m:sup>" + RunTwo + "</m:sup></m:sSubSup>", display);
         Assert.DoesNotContain(html.Descendants(), e => e.Name.Namespace == MathMl);
         Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "MathEquation");
     }
@@ -282,6 +284,14 @@ public class HtmlMathTests
     [InlineData("<m:f><m:fPr><m:type m:val=\"lin\"/></m:fPr><m:num>{x}</m:num><m:den>{2}</m:den></m:f>", "x / 2")]
     [InlineData("<m:eqArr><m:e>{x&amp;=1}</m:e><m:e>{y&amp;=2}</m:e></m:eqArr>", "mtable(mtr(mtd(x),mtd(= 1)),mtr(mtd(y),mtd(= 2)))")]
     [InlineData("<m:eqArr><m:e>{x}</m:e><m:e>{y}</m:e></m:eqArr>", "mtable(mtr(mtd(x)),mtr(mtd(y)))")]
+    // #1705, second part: phantoms, skewed fractions, spaces.
+    [InlineData("<m:phant><m:phantPr><m:show m:val=\"0\"/></m:phantPr><m:e>{x}</m:e></m:phant>{+y}", "mphantom(x) + y")]
+    [InlineData("<m:phant><m:phantPr><m:zeroWid/></m:phantPr><m:e>{x}</m:e></m:phant>", "mpadded(x)")]
+    [InlineData("<m:phant><m:phantPr><m:show m:val=\"off\"/><m:zeroAsc/><m:zeroDesc/></m:phantPr><m:e>{w}</m:e></m:phant>", "mphantom(mpadded(w))")]
+    [InlineData("<m:phant><m:phantPr><m:transp/></m:phantPr><m:e>{x}</m:e></m:phant>", "x")]
+    [InlineData("<m:f><m:fPr><m:type m:val=\"skw\"/></m:fPr><m:num>{x+1}</m:num><m:den>{2}</m:den></m:f>", "mpadded(x + 1) ⁄ mpadded(2)")]
+    [InlineData("{x  y}", "x \"  \" y")]
+    [InlineData("{a, b c}", "a , \" \" b \" \" c")]
     public void Equation_structures_project_to_their_MathML_shape(string formula, string expected)
     {
         Assert.Equal(expected, Shape(ProjectExpression(formula)));
@@ -450,25 +460,27 @@ public class HtmlMathTests
     }
 
     [Theory]
-    [InlineData("<m:f><m:fPr><m:type m:val=\"skw\"/></m:fPr><m:num>{x}</m:num><m:den>{2}</m:den></m:f>")]
+    // Ordinary text without its fonts would take the paragraph's text font, not the math font.
     [InlineData("<m:r><m:rPr><m:nor/></m:rPr><m:t>x</m:t></m:r>")]
-    [InlineData("<m:r><m:rPr><m:sty m:val=\"b\"/></m:rPr><m:t>+</m:t></m:r>")]
     // A bold alphabet has digits only for 0-9; any other digit would be drawn unbolded.
     [InlineData("<m:r><m:rPr><m:sty m:val=\"b\"/></m:rPr><m:t>٣</m:t></m:r>")]
     [InlineData("<m:r><m:rPr><m:scr m:val=\"script\"/></m:rPr><m:t>α</m:t></m:r>")]
     [InlineData("<m:r><m:rPr><m:scr m:val=\"double-struck\"/><m:sty m:val=\"b\"/></m:rPr><m:t>R</m:t></m:r>")]
-    [InlineData("<m:r><w:rPr><w:b/></w:rPr><m:t>x</m:t></m:r>")]
     [InlineData("<m:r><w:rPr><w:rFonts w:ascii=\"Arial\" w:hAnsi=\"Arial\"/></w:rPr><m:t>x</m:t></m:r>")]
+    // A coloured structure around operands in the default colour, which MathML would draw in the structure's.
     [InlineData("<m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:color w:val=\"FF0000\"/></w:rPr></m:ctrlPr></m:sSupPr><m:e>{x}</m:e><m:sup>{2}</m:sup></m:sSup>")]
     [InlineData("<m:sSubSup><m:sSubSupPr><m:alnScr/></m:sSubSupPr><m:e>{x}</m:e><m:sub>{i}</m:sub><m:sup>{2}</m:sup></m:sSubSup>")]
-    [InlineData("<m:borderBox><m:borderBoxPr><m:strikeH/></m:borderBoxPr><m:e>{x}</m:e></m:borderBox>")]
     [InlineData("<m:groupChr><m:groupChrPr><m:pos m:val=\"top\"/></m:groupChrPr><m:e>{x}</m:e></m:groupChr>")]
     [InlineData("<m:acc><m:accPr><m:chr m:val=\"\u20DB\"/></m:accPr><m:e>{x}</m:e></m:acc>")]
     [InlineData("<m:box><m:boxPr><m:opEmu/></m:boxPr><m:e>{x}</m:e></m:box>")]
     [InlineData("<m:eqArr><m:eqArrPr><m:rSp m:val=\"4\"/></m:eqArrPr><m:e>{x}</m:e></m:eqArr>")]
     [InlineData("<m:m><m:mPr><m:cSp m:val=\"200\"/></m:mPr><m:mr><m:e>{a}</m:e></m:mr></m:m>")]
     [InlineData("<m:d><m:e><m:argPr><m:argSz m:val=\"-1\"/></m:argPr>{x}</m:e></m:d>")]
-    [InlineData("<m:nary><m:naryPr><m:chr m:val=\"∑\"/></m:naryPr><m:sub><m:phant><m:e>{i}</m:e></m:phant></m:sub><m:sup>{n}</m:sup><m:e>{x}</m:e></m:nary>")]
+    [InlineData("<m:nary><m:naryPr><m:chr m:val=\"∑\"/></m:naryPr><m:sub><m:sSubSup><m:sSubSupPr><m:alnScr/></m:sSubSupPr><m:e>{i}</m:e><m:sub>{1}</m:sub><m:sup>{2}</m:sup></m:sSubSup></m:sub><m:sup>{n}</m:sup><m:e>{x}</m:e></m:nary>")]
+    // Line breaks and alignment points only separate and line up the lines of a display equation.
+    [InlineData("{x=1}<m:r><w:br/></m:r>{y=2}")]
+    [InlineData("<m:f><m:num><m:r><m:rPr><m:aln/></m:rPr><m:t>x</m:t></m:r></m:num><m:den>{2}</m:den></m:f>")]
+    [InlineData("<m:eqArr><m:e>{x}<m:r><m:rPr><m:aln/></m:rPr><m:t>=1</m:t></m:r></m:e></m:eqArr>")]
     public void Unsupported_properties_and_descendants_keep_the_whole_equation_diagnostic(string formula)
     {
         var html = Convert(Expand(formula), false);
@@ -497,6 +509,180 @@ public class HtmlMathTests
         Assert.Equal("f ( x ) = munderover(∑,k = 0,∞) mfrac(msup(x,k),k !) + cos mspace() mover(θ,˜)", Shape(math.Elements().Single()));
     }
 
+    private const string MathFont = "<m:mathFont m:val=\"Cambria Math\"/>";
+    private const string RunFonts = "<w:rFonts w:ascii=\"Cambria Math\" w:hAnsi=\"Cambria Math\"/>";
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_display_equation_with_a_run_of_spaces_draws_through_the_public_converter(bool spaces)
+    {
+        // The gallery's Taylor expansion ends "+…," then a plain-style run of two spaces, then "-∞<x<∞".
+        static string R(string text, string style = "") =>
+            "<m:r>" + style + "<w:rPr>" + RunFonts + "</w:rPr><m:t xml:space=\"preserve\">" + text + "</m:t></m:r>";
+        var formula = "<m:sSup><m:e>" + R("e") + "</m:e><m:sup>" + R("x") + "</m:sup></m:sSup>" + R("=1+")
+            + "<m:f><m:num>" + R("x") + "</m:num><m:den>" + R("1!") + "</m:den></m:f>" + R("+…,")
+            + (spaces ? R("  ", "<m:rPr><m:sty m:val=\"p\"/></m:rPr>") : "") + R("-∞&lt;x&lt;∞");
+        var document = new WmlDocument("taylor.docx", BuildDocument(formula, display: true, WordDefaultMathSettings, "", ""));
+        var html = WmlToHtmlConverter.ConvertToHtml(document, new WmlToHtmlConverterSettings { RenderUnsupportedContentPlaceholders = true });
+        Assert.DoesNotContain(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "MathEquation");
+        var math = Assert.Single(html.Descendants(MathMl + "math"));
+        Assert.Equal("msup(e,x) = 1 + mfrac(x,1 !) + … ," + (spaces ? " \"  \"" : "") + " - ∞ < x < ∞", Shape(math.Elements().Single()));
+        // A token collapses its spaces unless told to keep them.
+        Assert.Equal(spaces ? "white-space: pre;" : null, (string?)math.Descendants(MathMl + "mtext").SingleOrDefault()?.Attribute("style"));
+    }
+
+    [Theory]
+    [InlineData("", "white-space: pre;")]
+    [InlineData("<w:b/>", "white-space: pre;font-weight: bold;")]
+    [InlineData("<w:i/><w:color w:val=\"C00000\"/>", "white-space: pre;font-style: italic;color: #C00000;")]
+    public void Ordinary_text_is_one_text_token_in_its_own_weight_and_slope(string format, string style)
+    {
+        // Word draws m:nor text as text in the run's font, without math italics or operator spacing.
+        var expression = ProjectExpression("<m:r><m:rPr><m:nor/></m:rPr><w:rPr>" + RunFonts + format
+            + "</w:rPr><m:t xml:space=\"preserve\">if x+1 </m:t></m:r>", MathFont);
+        var text = Assert.Single(expression.Descendants(), e => !e.HasElements);
+        Assert.Equal(("mtext", "if x+1 ", style), (text.Name.LocalName, text.Value, (string?)text.Attribute("style")));
+    }
+
+    [Theory]
+    [InlineData("<m:rPr><m:sty m:val=\"bi\"/></m:rPr>", "𝒂+𝒃=𝟐")]
+    [InlineData("<w:rPr><w:b/><w:i/></w:rPr>", "a+b=2")]
+    public void Math_run_styles_change_letters_and_digits_and_leave_operators_plain(string properties, string expected)
+    {
+        // Word bolds only the letters and digits of a bold run, and draws w:b and w:i on a math run as if absent.
+        var expression = ProjectExpression("<m:r>" + properties + "<m:t>a+b=2</m:t></m:r>");
+        Assert.Equal(expected, expression.Value);
+        Assert.All(expression.Descendants(MathMl + "mo"), op => Assert.Null(op.Attribute("style")));
+    }
+
+    [Theory]
+    [InlineData("", "∂∇")]
+    [InlineData("<m:rPr><m:sty m:val=\"b\"/></m:rPr>", "𝛛𝛁")]
+    [InlineData("<m:rPr><m:sty m:val=\"bi\"/></m:rPr>", "𝝏𝜵")]
+    public void Partial_differentials_and_nabla_are_letters_of_the_Greek_alphabets(string properties, string expected)
+    {
+        // Word draws them italic by default and bold in a bold run, like Greek letters.
+        var expression = ProjectExpression("<m:r>" + properties + "<m:t>∂∇</m:t></m:r>");
+        Assert.Equal(expected, expression.Value);
+        Assert.All(expression.Descendants().Where(e => !e.HasElements), token => Assert.Equal("mi", token.Name.LocalName));
+    }
+
+    [Theory]
+    [InlineData("<m:zeroWid/>", "width")]
+    [InlineData("<m:zeroAsc m:val=\"1\"/><m:zeroDesc m:val=\"on\"/>", "height depth")]
+    public void Phantoms_zero_the_dimensions_they_name(string properties, string zeroed)
+    {
+        var padded = Assert.Single(ProjectExpression("<m:phant><m:phantPr>" + properties + "</m:phantPr><m:e>{x}</m:e></m:phant>")
+            .Descendants(MathMl + "mpadded"));
+        Assert.Equal(zeroed, string.Join(" ", padded.Attributes().Where(a => a.Value == "0").Select(a => a.Name.LocalName)));
+    }
+
+    [Fact]
+    public void A_phantom_operator_is_spaced_as_an_ordinary_atom()
+    {
+        // Word draws a, a shown phantom of +, then b tight; MathML would space the phantom as the operator.
+        var op = Assert.Single(ProjectExpression("{a}<m:phant><m:e>{+}</m:e></m:phant>{b}").Descendants(MathMl + "mo"));
+        Assert.Equal(("0", "0"), ((string?)op.Attribute("lspace"), (string?)op.Attribute("rspace")));
+    }
+
+    [Fact]
+    public void A_skewed_fraction_raises_its_numerator_and_lowers_its_denominator()
+    {
+        var operands = ProjectExpression("<m:f><m:fPr><m:type m:val=\"skw\"/></m:fPr><m:num>{a}</m:num><m:den>{b}</m:den></m:f>")
+            .Descendants(MathMl + "mpadded");
+        Assert.Equal(new[] { "0.33em", "-0.42em" }, operands.Select(p => (string?)p.Attribute("voffset")));
+    }
+
+    [Theory]
+    [InlineData("", 0, "")]
+    [InlineData("<m:strikeH/>", 1, "center / 100% 0.06em")]
+    [InlineData("<m:strikeV m:val=\"1\"/>", 1, "center / 0.06em 100%")]
+    [InlineData("<m:strikeBLTR/>", 1, "to top left")]
+    [InlineData("<m:strikeTLBR/>", 1, "to top right")]
+    [InlineData("<m:hideTop/><m:hideBot/><m:strikeH/><m:strikeV/>", 2, "border-bottom-style: none;")]
+    public void Border_box_strikes_are_lines_across_the_box(string properties, int lines, string expected)
+    {
+        var box = ProjectExpression("<m:borderBox><m:borderBoxPr>" + properties + "</m:borderBoxPr><m:e>{x}</m:e></m:borderBox>")
+            .Descendants(MathMl + "mrow").Single(e => e.Attribute("style") != null);
+        var style = (string)box.Attribute("style")!;
+        Assert.Contains(expected, style);
+        Assert.Equal(lines, System.Text.RegularExpressions.Regex.Matches(style, "linear-gradient").Count);
+        Assert.Equal(lines > 0, style.Contains("print-color-adjust: exact;", System.StringComparison.Ordinal));
+    }
+
+    // Word ends each line of a display equation but the last with a w:br run (Shift+Enter), and marks the
+    // point a line aligns at with m:aln on the run it starts ("Align at this character").
+    private const string LineBreak = "<m:r><w:br/></m:r></m:oMath><m:oMath>";
+    private const string Aligned = "<m:r><m:rPr><m:aln/></m:rPr><m:t>";
+    private const string EndAligned = "</m:t></m:r>";
+
+    [Theory]
+    [InlineData("{x=1}" + LineBreak + "{yy+z=22}", "", 1, "left")]
+    // One alignment point changes nothing.
+    [InlineData("{x}" + Aligned + "=1" + EndAligned + LineBreak + "{yy+z=22}", "", 1, "left")]
+    [InlineData("{x}" + Aligned + "=1" + EndAligned + LineBreak + "{yy+z}" + Aligned + "=22" + EndAligned, "", 2, "right")]
+    // Centred one by one, lines ignore their alignment points.
+    [InlineData("{x}" + Aligned + "=1" + EndAligned + LineBreak + "{yy+z}" + Aligned + "=22" + EndAligned, "<m:defJc m:val=\"center\"/>", 1, null)]
+    public void Display_lines_are_table_rows_lined_up_at_their_alignment_points(string formula, string settings, int columns, string? alignment)
+    {
+        var table = Assert.Single(Convert(Expand(formula), true, settings).Descendants(MathMl + "mtable"));
+        Assert.Equal("true", (string?)table.Attribute("displaystyle"));
+        Assert.All(table.Elements(), row => Assert.Equal(columns, row.Elements().Count()));
+        Assert.Equal(alignment, ((string?)table.Elements().First().Elements().First().Attribute("style"))?.Split(';')[0].Split(' ')[1]);
+        Assert.Equal(columns == 2 ? "mtable(mtr(mtd(x),mtd(= 1)),mtr(mtd(y y + z),mtd(= 22)))" : "mtable(mtr(mtd(x = 1)),mtr(mtd(y y + z = 22)))",
+            Shape(table));
+    }
+
+    [Fact]
+    public void Display_lines_aligned_only_in_part_keep_the_diagnostic()
+    {
+        // Word leaves a line without a point at the group's left edge, which MathML cannot place beside lines that are lined up.
+        var html = Convert(Expand("{x}" + Aligned + "=1" + EndAligned + LineBreak + "{yy+z}" + Aligned + "=22" + EndAligned + LineBreak + "{w=3}"), true);
+        Assert.DoesNotContain(html.Descendants(), e => e.Name.Namespace == MathMl);
+        Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-content-type") == "MathEquation");
+    }
+
+    [Fact]
+    public void A_manual_break_changes_nothing_on_one_line()
+    {
+        // Word breaks at m:brk only in an equation too long for its line, and the output never breaks one.
+        var math = Assert.Single(Convert(Expand("{y=a+b}<m:r><m:rPr><m:brk m:alnAt=\"1\"/></m:rPr><m:t>+c</m:t></m:r>"), true)
+            .Descendants(MathMl + "math"));
+        Assert.Equal("y = a + b + c", Shape(math.Elements().Single()));
+    }
+
+    [Theory]
+    [InlineData("<w:color w:val=\"C00000\"/>", true)]
+    [InlineData("", false)]
+    public void A_structure_is_drawn_in_its_control_colour_when_its_operands_carry_their_own(string operandColor, bool drawn)
+    {
+        // Colouring an equation writes the colour on every run and every structure's control properties; the
+        // latter paints the structure's own glyphs, here the fraction bar. MathML operands inherit it, so an
+        // operand in the default colour keeps the diagnostic.
+        static string R(string text, string color) => "<m:r><w:rPr>" + color + "</w:rPr><m:t>" + text + "</m:t></m:r>";
+        var html = Convert("<m:f><m:fPr><m:ctrlPr><w:rPr><w:color w:val=\"C00000\"/></w:rPr></m:ctrlPr></m:fPr><m:num>"
+            + R("x", operandColor) + "</m:num><m:den>" + R("2", "<w:color w:val=\"C00000\"/>") + "</m:den></m:f>", false);
+        Assert.Equal(drawn ? "color: #C00000;" : null, (string?)html.Descendants(MathMl + "mfrac").SingleOrDefault()?.Attribute("style"));
+        Assert.Equal(drawn ? 0 : 1, html.Descendants().Count(e => (string?)e.Attribute("data-content-type") == "MathEquation"));
+    }
+
+    [Theory]
+    [InlineData("<m:sSup><m:e>{x}</m:e><m:sup>{2}</m:sup></m:sSup>{+1}", true)]
+    [InlineData("{a}{-b}", true)]
+    [InlineData("<m:d><m:e>{n+1}</m:e></m:d>{!}", true)]
+    [InlineData("{a=}{-b}", false)]
+    [InlineData("{-b}", false)]
+    public void An_operator_that_starts_a_run_after_an_operand_is_not_first_in_its_row(string formula, bool binary)
+    {
+        // MathML infers an operator's form from its place in its mrow, and reads one that comes first as a
+        // prefix. Each run used to be its own mrow, so x²+1 and a−b drew a tight prefix + and −. Word draws them
+        // binary, and a=−b and −b with a unary minus; a factorial keeps its own (postfix) spacing.
+        var op = ProjectExpression(formula).Descendants(MathMl + "mo").Last();
+        Assert.Equal(binary, op.ElementsBeforeSelf().Any());
+        Assert.Null(op.Attribute("form"));
+    }
+
     private static XElement ProjectExpression(string formula, string mathProperties = "")
     {
         var math = Assert.Single(Convert(Expand(formula), false, mathProperties).Descendants(MathMl + "math"));
@@ -512,6 +698,7 @@ public class HtmlMathTests
         return element.Name.LocalName switch
         {
             "mi" or "mn" or "mo" => element.Value,
+            "mtext" => "\"" + element.Value + "\"",
             "mrow" when !element.HasAttributes => string.Join(" ", children),
             var name => name + "(" + string.Join(",", children) + ")",
         };
@@ -520,12 +707,13 @@ public class HtmlMathTests
     private static XElement Convert(string formula, bool display, string mathProperties = "", bool paginated = false,
         string paragraphStart = "", string styles = "", bool validate = true)
     {
+        // Kept as a browser keeps it: a token of spaces is text made only of whitespace.
         return XElement.Parse(HtmlConversionOps.ConvertToHtml(BuildDocument(formula, display, mathProperties, paragraphStart, styles, validate), new HtmlConversionOptions
         {
             RenderUnsupportedContentPlaceholders = true,
             FabricateCssClasses = false,
             PaginationMode = paginated ? (int)PaginationMode.Paginated : (int)PaginationMode.None,
-        }));
+        }), LoadOptions.PreserveWhitespace);
     }
 
     private static byte[] BuildDocument(string formula, bool display, string mathProperties, string paragraphStart, string styles,
