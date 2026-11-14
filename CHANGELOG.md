@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A paragraph longer than a page that holds an inline text box now breaks across pages in paginated output and the export, keeping the box whole on the line that holds it, instead of failing with clipped content (#1735). The paginator moved only marked converter boxes (shapes, tabs, math, ruby) whole; it now does the same for any inline block, since no page break can fall inside one. An inline block with positioned, floating or transformed content, a picture or a line break still keeps its paragraph whole.
+
 - A table taller than a page whose rows carry tracked custom XML ranges between their cells now splits between rows under the markup review profile instead of failing export with a clipped page (#1737). WordprocessingML lets range boundaries sit between the cells of a row and between the rows of a table, and the converter wrote what they render (the custom XML bracket marks, a bookmark's link target) straight into the `<tr>` or `<table>`, where HTML allows only cells and rows. The browser moved that content out in front of the table, and the paginator does not split a table with content beside it. Each boundary now renders inside the adjacent cell, exactly as the same boundary inside that cell already did: at the start of the cell that follows it (between rows, the next row's first cell), or at the end of the last cell when none follows. A bookmark between a table's rows now targets its row instead of the top of the table. Word 2024 shows no mark for these ranges at all; Docxodus keeps its bracket marks (#538), now inside the cell.
 
 ## [16.0.0] - 2026-11-13
