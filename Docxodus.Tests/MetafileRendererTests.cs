@@ -79,6 +79,20 @@ public class MetafileRendererTests
         Assert.Empty(Elements(Emf(R(59), R(27, 0, 0), R(54, 9, 9), R(60), R(68), R(62)), "path")); // ABORTPATH
     }
 
+    [Fact]
+    public void APathBracketTakesTheTransformOfItsFirstFigure()
+    {
+        // Office scales the world by 1/8 inside BEGINPATH and back before ENDPATH, and GDI turns each point into
+        // device space as it is added. The pen, though, is realised at the transform in effect when stroking.
+        byte[][] Bracket(uint draw) => new[] { R(59), R(36, F(0.125f), 0, 0, F(0.125f), 0, 0, 2),
+            R(86, 0, 0, 0, 0, 3, Pack16(0, 0, 80, 0, 80, 80)), R(36, F(8), 0, 0, F(8), 0, 0, 2), R(60), R(draw) };
+        var path = Single(Emf(Bracket(62)), "path"); // FILLPATH
+        Assert.Equal(("M0 0L80 0L80 80Z", "scale(0.125 0.125)"), ((string?)path.Attribute("d"), (string?)path.Attribute("transform")));
+        Assert.Single(Elements(Emf(Bracket(64)), "path")); // STROKEPATH with the default one-pixel pen
+        var geometric = R(95, 1, 0, 0, 0, 0, 0x10000, 8, 0, 0, 0, 0);
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(new[] { geometric, R(37, 1) }.Concat(Bracket(64)).ToArray())));
+    }
+
     // ---- Device context ------------------------------------------------------------------------
 
     [Fact]
@@ -134,18 +148,59 @@ public class MetafileRendererTests
     }
 
     [Fact]
-    public void HatchedBrushesFillWithADevicePixelPattern()
+    public void HatchedBrushesFillWithAnEightPixelPatternInCssPixels()
     {
         var svg = EmfImage.Read(Emf(R(39, 1, 2, 0x0000ff, 4), R(37, 1), R(18, 1), R(43, 0, 0, 10, 10))).Drawing;
         var pattern = Assert.Single(svg.Descendants(Svg + "pattern"));
         Assert.Equal($"url(#{(string?)pattern.Attribute("id")})", (string?)Assert.Single(svg.Descendants(Svg + "rect"), e => e.Parent?.Name.LocalName != "pattern").Attribute("fill"));
         Assert.Equal("M0 4.5H8M4.5 0V8", (string?)pattern.Element(Svg + "path")!.Attribute("d"));
         Assert.Null(pattern.Element(Svg + "rect")); // TRANSPARENT background mode leaves the gaps unpainted
+        // GDI realises a brush in the pixels of the device it plays onto. The reference device has 3.2 pixels
+        // a millimetre, so one CSS pixel (0.2646 mm) is 0.8467 of them.
+        Assert.Equal("scale(0.8466666667 0.8466666667)", (string?)pattern.Attribute("patternTransform"));
     }
 
     [Fact]
-    public void FillingWithAPatternBrushRejectsThePicture()
-        => Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(R(94, 1, 0, 0, 0, 0, 0), R(37, 1), R(43, 0, 0, 10, 10))));
+    public void DibPatternBrushesTileTheirBitmap()
+    {
+        // CREATEDIBPATTERNBRUSHPT and WMF DIBCREATEPATTERNBRUSH in RGB colours: the 2×2 bitmap is the tile.
+        var dib = Dib24();
+        var patterns = EmfImage.Read(Emf(Raw(94, Le(1, 0, 32, 40, 72, dib.Length - 40).Concat(dib).ToArray()),
+            R(37, 1), R(43, 0, 0, 10, 10), R(43, 20, 0, 30, 10))).Drawing.Descendants(Svg + "pattern").ToList();
+        Assert.Equal(("2", "2", "scale(0.8466666667 0.8466666667)"), ((string?)patterns[0].Attribute("width"),
+            (string?)patterns[0].Attribute("height"), (string?)patterns[0].Attribute("patternTransform")));
+        var tiles = patterns.Select(p => (string)p.Element(Svg + "image")!.Attribute("href")!).ToList();
+        Assert.StartsWith("data:image/png;base64,", tiles[0]);
+        Assert.Same(tiles[0], tiles[1]); // the tile is encoded once, not again for every fill
+        var wmf = Play(Wmf(W(0x0142, Words(new[] { 5, 0 }, dib)), W(0x012d, 0), W(0x041b, 20, 20, 0, 0)));
+        Assert.Equal("2", (string?)Assert.Single(wmf.Descendants(Svg + "pattern")).Attribute("width"));
+    }
+
+    [Theory]
+    [InlineData(94u, 1)] // CREATEDIBPATTERNBRUSHPT in palette colours (DIB_PAL_COLORS)
+    [InlineData(93u, 0)] // CREATEMONOBRUSH, drawn in the text and background colours
+    public void FillingWithAPatternBrushThatIsNotInRgbColoursRejectsThePicture(uint record, int usage)
+        => Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(R(record, 1, usage, 0, 0, 0, 0), R(37, 1), R(43, 0, 0, 10, 10))));
+
+    [Fact]
+    public void AZeroWidthWmfPenDrawsOneCssPixelLikeAnEmfCosmeticPen()
+    {
+        // PowerPoint outlines arrowheads with zero-width pens.
+        var path = Assert.Single(Play(Wmf(W(0x02fa, 0, 0, 0, 0x00ff, 0), W(0x012d, 0), W(0x0214, 0, 0), W(0x0213, 9, 9))).Descendants(Svg + "path"));
+        Assert.Equal(("#ff0000", "1", "non-scaling-stroke"), ((string?)path.Attribute("stroke"), (string?)path.Attribute("stroke-width"),
+            (string?)path.Attribute("vector-effect")));
+    }
+
+    [Fact]
+    public void TheNopPenModeDrawsNothingWithThePenOrBrush()
+    {
+        // R2_NOP leaves the destination as it is; PowerPoint brackets the clip paths it writes for PostScript
+        // printers with it. PATBLT is a raster operation of its own and still paints.
+        var svg = Play(Wmf(W(0x0104, 11), W(0x0324, 3, 0, 0, 9, 0, 9, 9), W(0x0214, 0, 0), W(0x0213, 9, 9),
+            W(0x061d, 0x0021, 0x00f0, 4, 4, 0, 0), W(0x0104, 13), W(0x041b, 30, 30, 20, 20)));
+        Assert.Empty(svg.Descendants(Svg + "path"));
+        Assert.Equal(2, svg.Descendants(Svg + "rect").Count());
+    }
 
     // ---- Clipping ------------------------------------------------------------------------------
 
@@ -178,6 +233,35 @@ public class MetafileRendererTests
         Assert.Equal($"url(#{(string?)clips[1].Attribute("id")})", (string?)rects[2].Parent!.Attribute("clip-path"));
     }
 
+    [Fact]
+    public void ConsecutiveClipExclusionsCutHolesInOneClipPath()
+    {
+        // PowerPoint carves a shape's clip from hundreds of one-unit strips, far more than clip paths may nest.
+        var strips = Enumerable.Range(0, 100).Select(i => R(29, 0, i, 10, i + 1)).Append(R(43, 0, 0, 20, 200)).ToArray();
+        var clip = Assert.Single(EmfImage.Read(Emf(strips)).Drawing.Descendants(Svg + "clipPath"));
+        Assert.Equal(101, ((string)clip.Element(Svg + "path")!.Attribute("d")!).Count(c => c == 'Z'));
+        // Even-odd filling would fill an overlap of two holes again, and a clip that something already refers
+        // to (a drawn shape, a saved state) must not change: the second exclusion nests in each case.
+        foreach (var records in new[] {
+            new[] { R(29, 0, 0, 10, 10), R(29, 5, 5, 15, 15), R(43, 0, 0, 20, 20) },
+            new[] { R(29, 0, 0, 5, 5), R(43, 0, 0, 20, 20), R(29, 10, 10, 15, 15), R(43, 0, 0, 20, 20) },
+            new[] { R(29, 0, 0, 5, 5), R(33), R(29, 10, 10, 15, 15), R(34, -1), R(43, 0, 0, 20, 20) } })
+        {
+            var clips = EmfImage.Read(Emf(records)).Drawing.Descendants(Svg + "clipPath").ToList();
+            Assert.Equal(2, clips.Count);
+            Assert.Equal(2, ((string)clips[0].Element(Svg + "path")!.Attribute("d")!).Count(c => c == 'Z'));
+        }
+    }
+
+    [Fact]
+    public void WmfSelectClipRegionZeroResetsTheClip()
+    {
+        // Index 0 is the null region, which GDI's EMF-to-WMF conversion and PowerPoint write for SelectClipRgn(NULL).
+        var svg = Play(Wmf(W(0x0416, 10, 10, 0, 0), W(0x012c, 0), W(0x041b, 20, 20, 0, 0)));
+        Assert.Null(Assert.Single(svg.Descendants(Svg + "rect")).Parent!.Attribute("clip-path"));
+        Assert.Throws<NotSupportedException>(() => WmfImage.ToSvg(Wmf(W(0x012c, 1)))); // a real region
+    }
+
     // ---- Text ----------------------------------------------------------------------------------
 
     [Fact]
@@ -205,8 +289,13 @@ public class MetafileRendererTests
     }
 
     [Fact]
-    public void GlyphIndexTextRejectsThePicture()
-        => Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(TextW(0, 0, "x", null, options: 0x10))));
+    public void GlyphIndexTextRejectsThePictureUnlessItHasNoGlyphs()
+    {
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(TextW(0, 0, "x", null, options: 0x10))));
+        // Office's embedded-object icons write empty glyph-index runs, which draw nothing.
+        Assert.Empty(Elements(Emf(TextW(0, 0, "", null, options: 0x10)), "text"));
+        Assert.Empty(Play(Wmf(W(0x0a32, 0, 0, 0, 0x10))).Descendants(Svg + "text"));
+    }
 
     // ---- Bitmaps -------------------------------------------------------------------------------
 
@@ -230,6 +319,36 @@ public class MetafileRendererTests
     [InlineData(0x00CC0020u)] // SRCCOPY, but with palette colours (DIB_PAL_COLORS)
     public void BitmapsThatNeedTheDestinationOrAPaletteRejectThePicture(uint rop)
         => Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(StretchDib(0, 0, 2, 2, rop, usage: rop == 0x00CC0020u ? 1 : 0))));
+
+    [Fact]
+    public void AMaskThenItsImageDrawOneTransparentBitmap()
+    {
+        // An icon is drawn SRCAND with a monochrome mask (black opaque), then SRCINVERT with the image (black where
+        // transparent); Office draws SRCPAINT with the mask (white opaque), then SRCAND with the image (white where
+        // transparent). Either pair merges into one PNG; the same raster operations play from WMF.
+        foreach (var (records, color) in new[] {
+            (new[] { StretchDib(0, 0, 20, 20, 0x008800C6, Mono(0x40, 0xc0)), StretchDib(0, 0, 20, 20, 0x00660046, Rgb24(0xff0000, 0, 0, 0)) }, new SKColor(255, 0, 0)),
+            (new[] { StretchDib(0, 0, 20, 20, 0x00EE0086, Mono(0x80, 0x00)), StretchDib(0, 0, 20, 20, 0x008800C6, Rgb24(0x00ff00, 0xffffff, 0xffffff, 0xffffff)) }, new SKColor(0, 255, 0)) })
+        {
+            using var png = Png(Single(Emf(records), "image"));
+            Assert.Equal(color, png.GetPixel(0, 0));
+            Assert.All(new[] { (1, 0), (0, 1), (1, 1) }, p => Assert.Equal(0, png.GetPixel(p.Item1, p.Item2).Alpha));
+        }
+        byte[] WmfBlit(uint rop, byte[] dib) => W(0x0f43, Words(new[] { (int)(rop & 0xffff), (int)(rop >> 16), 0, 2, 2, 0, 0, 20, 20, 0, 0 }, dib));
+        var image = Assert.Single(Play(Wmf(WmfBlit(0x008800C6, Mono(0x40, 0xc0)), WmfBlit(0x00660046, Rgb24(0xff0000, 0, 0, 0)))).Descendants(Svg + "image"));
+        using var wmf = Png(image);
+        Assert.Equal((new SKColor(255, 0, 0), (byte)0), (wmf.GetPixel(0, 0), wmf.GetPixel(1, 1).Alpha));
+    }
+
+    [Fact]
+    public void ABitmapThatReadsAnUnknownDestinationRejectsThePicture()
+    {
+        // SRCINVERT's coloured pixels depend on what lies beneath: unknown where the mask left the destination
+        // as it was, and everywhere when the mask went to another rectangle.
+        var mask = StretchDib(0, 0, 20, 20, 0x008800C6, Mono(0x40, 0xc0));
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(mask, StretchDib(0, 0, 20, 20, 0x00660046, Rgb24(0xff0000, 0, 0, 0x0000ff)))));
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(mask, StretchDib(5, 0, 20, 20, 0x00660046, Rgb24(0xff0000, 0, 0, 0)))));
+    }
 
     [Fact]
     public void AlphaBlendBakesPremultipliedAndConstantAlphaIntoThePng()
@@ -289,6 +408,20 @@ public class MetafileRendererTests
         Assert.StartsWith("data:image/png;base64,", (string?)Assert.Single(svg.Descendants(Svg + "image")).Attribute("href"));
         Assert.All(svg.Descendants().Where(e => e.Name.LocalName is "path" or "text" or "image" && e.Parent?.Name.LocalName == "g"),
             e => Assert.NotNull(e.Parent!.Attribute("clip-path")));
+    }
+
+    [Fact]
+    public void AWmfWithAnEmbeddedEmfPlaysTheEmf()
+    {
+        // GDI's EMF-to-WMF conversion keeps the source EMF in META_ESCAPE comments, and GDI plays that EMF in place
+        // of the WMF records. Here the EMF draws a rectangle and the WMF records an ellipse.
+        var ellipse = W(0x0418, 48, 88, 12, 52);
+        var emf = Emf(R(43, 0, 0, 10, 10));
+        Assert.Single(Play(Wmf(Embedded(emf, emf.Length).Append(ellipse).ToArray())).Descendants(Svg + "rect"));
+        // Chunks that do not add up to the declared size, or an EMF this player rejects, leave the records to draw.
+        Assert.Single(Play(Wmf(Embedded(emf, emf.Length + 4).Append(ellipse).ToArray())).Descendants(Svg + "ellipse"));
+        var gradient = Emf(R(43, 0, 0, 10, 10), R(118));
+        Assert.Single(Play(Wmf(Embedded(gradient, gradient.Length).Append(ellipse).ToArray())).Descendants(Svg + "ellipse"));
     }
 
     [Fact]
@@ -367,11 +500,24 @@ public class MetafileRendererTests
     }
 
     [Fact]
-    public void SymbolFontAndPrivateUseTextRejectThePicture()
+    public void SymbolFontTextIsMappedToUnicode()
     {
-        // SYMBOL_CHARSET (2): "a" in Symbol is an alpha, and in Wingdings a sign of the zodiac.
-        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(Font(1, "Symbol", -20, 0, 400, charset: 2), R(37, 1), TextW(0, 0, "a", null))));
-        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(TextW(0, 0, "", null))));
+        // Symbol's "a" is an alpha, which Office stores as the font's own code or moved to U+F061; Wingdings'
+        // byte 0xFC is a check mark. Each advance stays with its character.
+        var text = Single(Emf(Font(1, "Symbol", -20, 0, 400, charset: 2), R(37, 1), TextW(0, 0, "\uF061a", new[] { 5, 6 })), "text");
+        Assert.Equal(("αα", "sans-serif", "0 5"), (text.Value, (string?)text.Attribute("font-family"), (string?)text.Attribute("x")));
+        var wmf = Play(Wmf(W(0x02fb, -12, 0, 0, 0, 400, 0, 0x0200, 0, 0, 0x6957, 0x676e, 0x6964, 0x676e, 0x0073), W(0x012d, 0),
+            W(0x0521, 1, 0x00fc, 40, 10)));
+        Assert.Equal("\u2713", Assert.Single(wmf.Descendants(Svg + "text")).Value);
+    }
+
+    [Fact]
+    public void SymbolTextWithoutAUnicodeEquivalentAndPrivateUseTextRejectThePicture()
+    {
+        // Symbol's byte 0xA0 has no glyph in the font Windows ships, and another symbol-charset font has no mapping.
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(Font(1, "Symbol", -20, 0, 400, charset: 2), R(37, 1), TextW(0, 0, "\uF0A0", null))));
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(Font(1, "Marlett", -20, 0, 400, charset: 2), R(37, 1), TextW(0, 0, "a", null))));
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(TextW(0, 0, "\uF0B7", null)))); // private use in an ordinary font
         Assert.Throws<NotSupportedException>(() => WmfImage.ToSvg(Wmf(
             W(0x02fb, -12, 0, 0, 0, 400, 0, 0x0200, 0, 0, 0x7953, 0x626d), W(0x012d, 0), W(0x0521, 2, 0x6948, 40, 10))));
     }
@@ -444,9 +590,38 @@ public class MetafileRendererTests
     }
 
     [Theory]
+    [InlineData("office-scatter-markers.emf", "Sales scatter-markers", "image")] // markers: a mask, then the image
+    [InlineData("office-area-gradient.emf", "Sales area-gradient", "clipPath")] // a clip path drawn at a 1/8 world scale
+    [InlineData("office-symbols.emf", "Symbol font: αβ≥∑Wingdings: ☺✓", "text")]
+    [InlineData("office-symbols-converted.wmf", "Unicode: αβ ≤ ± →", "text")]   // its embedded EMF keeps what ANSI lost
+    [InlineData("office-pattern-star.emf", null, "pattern")]                     // a DIB pattern brush
+    [InlineData("office-pattern-star.wmf", null, "pattern")]
+    [InlineData("office-pie-chart.wmf", "1st Qtr", "clipPath")]                  // SELECTCLIPREGION 0 between clip rectangles
+    [InlineData("office-dashed-arrow.wmf", null, "path")]                        // a zero-width pen outlines the arrowhead
+    public void OfficeMetafilesRenderThroughThePublicConverter(string name, string? text, string element)
+    {
+        // TestFiles/Metafiles/README.md records how Office wrote each one.
+        bool emf = name.EndsWith(".emf", StringComparison.Ordinal);
+        var html = HtmlImageNormalizationTests.Render(Fixture(name), emf ? "image/x-emf" : "image/x-wmf");
+        Assert.DoesNotContain(emf ? "[EMF IMAGE]" : "[WMF IMAGE]", html.Value);
+        var svg = emf ? Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-docx-vector-frame") == "emf")
+            : XElement.Parse(Encoding.UTF8.GetString(HtmlImageNormalizationTests.Bytes(HtmlImageNormalizationTests.Picture(html))));
+        if (text != null) Assert.Contains(text, svg.Value);
+        Assert.Contains(svg.Descendants(), e => e.Name.LocalName == element);
+    }
+
+    [Theory]
     [InlineData("libreoffice-chart.emf")]
     [InlineData("libreoffice-chart.wmf")]
     [InlineData("hc044")]
+    [InlineData("office-scatter-markers.emf")]
+    [InlineData("office-area-gradient.emf")]
+    [InlineData("office-symbols.emf")]
+    [InlineData("office-symbols-converted.wmf")]
+    [InlineData("office-pattern-star.emf")]
+    [InlineData("office-pattern-star.wmf")]
+    [InlineData("office-pie-chart.wmf")]
+    [InlineData("office-dashed-arrow.wmf")]
     public void CorruptedMetafilesFailOnlyWithTheExceptionsTheConverterCatches(string name)
     {
         // The converter turns InvalidData/NotSupported/Overflow into the placeholder; anything else would
@@ -580,13 +755,43 @@ public class MetafileRendererTests
         return stream.ToArray();
     }
 
-    private static byte[] StretchDib(int x, int y, int cx, int cy, uint rop = 0x00CC0020, int usage = 0)
+    /// <summary>STRETCHDIBITS of a whole 2×2 DIB (<see cref="Dib24"/> unless given), whose header and colour table
+    /// are all but its last eight or sixteen bytes.</summary>
+    private static byte[] StretchDib(int x, int y, int cx, int cy, uint rop = 0x00CC0020, byte[]? dib = null, int usage = 0)
     {
-        var dib = Dib24();
+        dib ??= Dib24();
+        int bits = BitConverter.ToUInt16(dib, 14) == 1 ? 8 : 16;
         using var stream = new MemoryStream(); using var w = new BinaryWriter(stream);
-        foreach (int value in new[] { 0, 0, 0, 0, x, y, 0, 0, 2, 2, 80, 40, 120, 16, usage, unchecked((int)rop), cx, cy }) w.Write(value);
+        foreach (int value in new[] { 0, 0, 0, 0, x, y, 0, 0, 2, 2, 80, dib.Length - bits, 80 + dib.Length - bits, bits, usage, unchecked((int)rop), cx, cy }) w.Write(value);
         w.Write(dib);
         return Raw(81, stream.ToArray());
+    }
+
+    /// <summary>A 2×2 one-bit DIB, black for 0 and white for 1; each row's bits start at the left pixel.</summary>
+    private static byte[] Mono(byte top, byte bottom)
+        => Le(40, 2, 2, 1 | 1 << 16, 0, 8, 0, 0, 0, 0, 0, 0xffffff).Concat(new byte[] { bottom, 0, 0, 0, top, 0, 0, 0 }).ToArray();
+
+    /// <summary>A 2×2 bottom-up 24-bit DIB of RGB colours.</summary>
+    private static byte[] Rgb24(int topLeft, int topRight, int bottomLeft, int bottomRight)
+    {
+        byte[] Bgr(int c) => new[] { (byte)c, (byte)(c >> 8), (byte)(c >> 16) };
+        return Le(40, 2, 2, 1 | 24 << 16, 0, 16, 0, 0, 0, 0)
+            .Concat(Bgr(bottomLeft)).Concat(Bgr(bottomRight)).Concat(new byte[2]).Concat(Bgr(topLeft)).Concat(Bgr(topRight)).Concat(new byte[2]).ToArray();
+    }
+
+    private static byte[] Le(params int[] values) => values.SelectMany(BitConverter.GetBytes).ToArray();
+
+    private static SKBitmap Png(XElement image) => SKBitmap.Decode(Convert.FromBase64String(((string)image.Attribute("href")!).Split(',')[1]));
+
+    private static XElement Play(byte[] wmf) => XElement.Parse(Encoding.UTF8.GetString(WmfImage.ToSvg(wmf)));
+
+    /// <summary>An EMF split across two META_ESCAPE_ENHANCED_METAFILE records that declare <paramref name="total"/> bytes.</summary>
+    private static byte[][] Embedded(byte[] emf, int total)
+    {
+        int half = emf.Length / 4 * 2;
+        byte[] Chunk(int from, int to) => W(0x0626, Words(new[] { 0x000f, 34 + to - from, 0x4d57, 0x4346, 1, 0, 0, 1, 0, 0, 0, 2, 0,
+            (to - from) & 0xffff, (to - from) >> 16, (total - to) & 0xffff, (total - to) >> 16, total & 0xffff, total >> 16 }, emf[from..to]));
+        return new[] { Chunk(0, half), Chunk(half, emf.Length) };
     }
 
     private static byte[] EmfPlusHeader(bool dual)

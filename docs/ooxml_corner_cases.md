@@ -2971,6 +2971,86 @@ paragraph mark in Docxodus output.
 `Docxodus.Tests/DocxDiffTextMoveTests.cs` (`TextBelowTheMinimumWordCount_IsNotAMove`,
 `TextBelowTheMinimum_IsAMove_WhenTheMinimumIsLowered`).
 
+## Compare: rejecting a moved and edited paragraph (#1716)
+
+### The corner case
+
+Word rejects a move by carrying the destination's moved text back to the source; it does not restore what
+`w:moveFrom` holds. A redline whose `w:moveFrom` holds the complete original paragraph and whose `w:moveTo`
+holds the complete revised one therefore rejects, in Word, to the revised paragraph in the original's place.
+Word pairs a name's move ranges in order, the k-th source range with the k-th destination range, and it
+replaces the whole content of a source range, so a deletion inside a source range is lost too.
+
+### Minimal XML reproducer
+
+Original: `Alpha` / `THIRD. Maintenance. The tenant keeps the premises in good condition.` / `Omega`.
+Revised: `Alpha` / `Omega` / `FIFTH. Maintenance. …`. What Docxodus wrote before the fix:
+
+```xml
+<w:p><w:moveFromRangeStart w:id="1" w:name="move1" .../>
+  <w:moveFrom ...><w:r><w:t>THIRD. Maintenance. …</w:t></w:r></w:moveFrom><w:moveFromRangeEnd w:id="1"/></w:p>
+<w:p><w:r><w:t>Omega</w:t></w:r></w:p>
+<w:p><w:moveToRangeStart w:id="4" w:name="move1" .../>
+  <w:moveTo ...><w:r><w:t>FIFTH. Maintenance. …</w:t></w:r></w:moveTo><w:moveToRangeEnd w:id="4"/></w:p>
+```
+
+What it writes now: only the shared text moves, and the edit sits outside every range.
+
+```xml
+<w:p><w:del ...><w:r><w:delText>THIRD</w:delText></w:r></w:del>
+  <w:moveFromRangeStart w:id="1" w:name="move1" .../>
+  <w:moveFrom ...><w:r><w:t>. Maintenance. …</w:t></w:r></w:moveFrom><w:moveFromRangeEnd w:id="1"/></w:p>
+<w:p><w:ins ...><w:r><w:t>FIFTH</w:t></w:r></w:ins>
+  <w:moveToRangeStart w:id="4" w:name="move1" .../>
+  <w:moveTo ...><w:r><w:t>. Maintenance. …</w:t></w:r></w:moveTo><w:moveToRangeEnd w:id="4"/></w:p>
+```
+
+### Behavior table
+
+Hand-written redlines of one moved paragraph, opened in Word 2024 (16.0.20326) and resolved with
+`Revisions.RejectAll` / `AcceptAll`. Accept All gave the revised document for every shape.
+
+| Shape | Word Reject All | Docxodus `RevisionProcessor` reject | LibreOffice |
+|---|---|---|---|
+| Complete old text in `w:moveFrom`, complete new text in `w:moveTo` | the revised wording at the source | the original | not adjudicated |
+| The same, the destination run bold (a format-only change) with no `w:rPrChange` | the moved text stays bold | the original | not adjudicated |
+| The destination run bold, with `w:rPrChange` recording the old formatting | the original | the original | not adjudicated |
+| Shared text moved; edit `w:del` at the source and `w:ins` at the destination, outside the ranges, one range per stretch | the original | the original | not adjudicated |
+| The same, but one range per side with the `w:del`/`w:ins` inside it | the deleted word is lost | the original | not adjudicated |
+| One range per stretch under one `w:name`, or a name per stretch; stretches adjacent on one side | the original | the original | not adjudicated |
+| A pure insertion: one source range, two destination ranges under one name | the first stretch is lost | the original | not adjudicated |
+| A pure deletion: two source ranges, one destination range | the text is duplicated | the original | not adjudicated |
+| An edit inside a hyperlink, the move ranges inside the link | the deleted word is lost | the original | not adjudicated |
+| An edit inside a hyperlink, ranges at paragraph level and the link split at them | the original | the original, but as three links | not adjudicated |
+| An edit inside a hyperlink, the whole link deleted at the source and inserted at the destination, ranges around the text outside it | the original; Word leaves an empty `w:hyperlink` shell where it removed a link | the original | not adjudicated |
+| The destination centred with or without `w:pPrChange` | the original (paragraph properties stay with the source) | the original | not adjudicated |
+
+Word's own Compare of the same pair writes this shape. For the #1714 fixture it moves
+` Upkeep. The lessee looks after the flat …` and inserts `FIFTH.` beside the destination range.
+
+### Analysis
+
+A move is one piece of content in two places, so Word keeps one copy of it, the destination's, and rejects
+by moving that copy back, range for range. The redline must therefore hold the same moved text in both
+halves, in the same number of ranges, and express the edit as ordinary revisions outside the ranges: a
+deletion at the source, an insertion at the destination. A deletion is never placed at the destination,
+where a consumer that rejects it on its own leaves the old text behind (#359).
+
+### Docxodus code
+
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs` — `EditedMoveContent` draws both halves from the pair's token diff;
+  `RenderState.IndexEditedMoves` lets either half find the other. Shared text is cut at hyperlink edges and a
+  hyperlink that holds an edit is all edit, so no range sits inside a link and the link stays whole on accept
+  and reject.
+
+### Tests
+
+`IrMarkupRendererTests.Render_moved_and_edited_paragraph_moves_the_same_text_in_each_range_pair`,
+`Render_moved_format_change_is_the_destination_rPrChange`,
+`Render_moved_and_edited_hyperlink_keeps_its_move_ranges_at_paragraph_level`,
+`Session_resolves_a_moved_and_edited_paragraph_as_one_move_beside_its_edit`, and
+`IrCompositeMoveTests.Single_reviewer_moved_and_edited_paragraph_moves_the_same_text_in_both_halves`.
+
 ## Tables: a negative `w:tblInd` pulls an over-wide table into the left margin
 
 Word indents a table wider than the text column by a negative amount so it spreads across both
@@ -6474,7 +6554,7 @@ with `<v:imagedata r:id="picture"/>`. The related part belongs to its body/heade
 | Identical PNG/TIFF pixels | Fresh PDF capture paints the graphic | Both paint the same graphic | PNG unchanged; TIFF normalized to PNG with identical rendered pixels |
 | WMF picture stretched to twice its height | Fresh DrawingML capture stretches the complete outline: 3pt vertical edges, 6pt horizontal edges | Keeps a uniform 3pt outline | SVG transforms the complete painted graphic, matching Word's scaling |
 | WMF window x scales 0.5, 1 and 2 | Fresh captures exclude 2, 1 and 0 logical units from right bounds; pen scales on both axes | Uses different ellipse center rounding and uniform pen scaling | Resolves device-pixel exclusion before transforming logical shapes and paint |
-| Visible zero-width WMF pen | Fresh PDF uses a printer-device hairline (about 0.14pt before picture scaling) | Device-dependent | Explicit unsupported-content diagnostic; no assumed printer resolution |
+| Visible zero-width WMF pen | Fresh PDF uses a printer-device hairline (about 0.14pt before picture scaling) | Device-dependent | One CSS pixel, as EMF cosmetic pens (#1706; was an unsupported-content diagnostic) |
 | Grouped VML image sizing | Not measured; the diagnostic VML carrier printed a linked-image error | Uniform pen width follows horizontal scale | Uses the same transformed image as DrawingML; carrier placement is tested separately |
 | Unsupported TIFF colorimetry or WMF records | Not measured | Provider-dependent | Explicit placeholder/warning; strict export refuses it |
 
@@ -6494,10 +6574,12 @@ later picture stretching also stretches the outline. LibreOffice instead shifts 
 ellipse's integer center and keeps its pen uniform, so it is not the geometry oracle here.
 
 The SVG viewBox retains the unrounded physical size. Only its width/height attributes round
-up to positive intrinsic dimensions. Bounds that collapse after device-pixel exclusion and
-visible zero-width pens reject the whole image, including previously decoded shapes. Null
-pens remain supported. This prevents a printer-specific hairline from silently becoming a
-different CSS-pixel stroke.
+up to positive intrinsic dimensions. Bounds that collapse after device-pixel exclusion reject
+the whole image, including previously decoded shapes. A visible zero-width pen first did too, so
+that a printer-specific hairline would not silently become a different stroke; since #1706 it draws
+one CSS pixel wide, as an EMF cosmetic pen does, because PowerPoint's WMF export outlines shapes
+with such pens and refusing them kept those pictures as placeholders. That is a screen pixel, not
+the printer hairline above.
 
 The supported subsets and bounds follow [TIFF 6.0](https://www.itu.int/itudoc/itu-t/com16/tiff-fx/docs/tiff6.pdf)
 and Microsoft's [WMF format](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wmf/).
@@ -7578,9 +7660,56 @@ EMR_ALPHABLEND  xDest=35 yDest=1 cxDest=32 cyDest=32  BLENDFUNCTION=0x01FF8000
 
 `Internal/EmfImage.cs` handles the header count and the blend function; `Internal/DibImage.cs`
 unpremultiplies the alpha before encoding PNG. GDI itself plays files by byte length, and
-LibreOffice reads its own exports, so neither notices the count. Visible zero-width WMF pens are
-still refused (see "TIFF and WMF need browser image normalization"); EMF cosmetic pens keep the
-one-CSS-pixel rule from #1554.
+LibreOffice reads its own exports, so neither notices the count. EMF cosmetic pens keep the
+one-CSS-pixel rule from #1554, and since the second stage below visible zero-width WMF pens follow it.
+
+## Office's GDI fallback draws with idioms a strict player rejects (#1706)
+
+Office writes a picture it renders as a dual EMF+ file: EMF+ records with the real drawing, then
+GDI records that redo it with what GDI can do. Windows makes a WMF from such an EMF when asked.
+A corpus of 74 metafiles written on Windows 11 by Word, Excel and PowerPoint 2024 (charts of ten
+kinds, shapes, SmartArt, WordArt, tables, symbol text, an equation and embedded-object previews;
+each EMF also as a WMF, from PowerPoint's own WMF export or GDI's `GetWinMetaFileBits`) shows what
+those GDI records rely on. GDI's behaviour was checked by drawing on a bitmap DC; what Word shows
+comes from its filtered-HTML export, which writes a PNG of each picture.
+
+Every one of the 39 Office EMFs that carried EMF+ was dual, and the two embedded-object icon
+previews carried no EMF+ at all: no Office or Windows writer in the corpus produced an EMF+-only
+file, so those keep the placeholder rather than getting an EMF+ player.
+
+| What the records do | Written by | GDI | Word shows | Docxodus |
+| --- | --- | --- | --- | --- |
+| A transparent bitmap as two blits to one rectangle, between `TNPP` comments: SRCPAINT with a one-bit mask (white = opaque), then SRCAND with the image (white where transparent) | Word and PowerPoint EMF: chart markers, shadows, glows, WordArt, 3-D charts | Exact over any background | The EMF+ image, with soft alpha | Merges the pair into one PNG with on/off alpha |
+| The icon form of the same: SRCAND with the mask (black = opaque), then SRCINVERT with the image | Embedded-object icon previews | Exact | Same as GDI | Same merge |
+| `EMR_CREATEDIBPATTERNBRUSHPT`: an 8×8 one-bit DIB in RGB colours | Pattern fills in charts and shapes | Paints the DIB's own colour table, not the text and background colours; tiles in the pixels of the device it plays onto | Stripes a few screen pixels apart | Tiles the bitmap as an SVG pattern in CSS pixels |
+| A reference device of 600 dpi (Frame 4.235 hundredths of a millimetre per pixel) | PowerPoint EMF | Brush tiles and hatches are output-device pixels, whatever the reference device | Coarse stripes | Hatches and tiles are sized in CSS pixels; at the reference device's 0.042 mm they were invisible |
+| `BEGINPATH`, world scaled by 1/8, the figure, the scale undone, `ENDPATH` | PowerPoint charts | Converts each point to device space as it is added; a geometric pen is realised at the transform in effect when the path is stroked | Drawn | The bracket takes its first figure's transform; stroking it with a geometric pen at another scale keeps the placeholder |
+| `META_SELECTCLIPREGION` with index 0, and no region ever created | PowerPoint WMF, `GetWinMetaFileBits` | The null region: resets the clip | Drawn | Resets the clip; any other index keeps the placeholder |
+| 471 one-unit `EXCLUDECLIPRECT` strips carving a shape's outline | PowerPoint WMF of gradient and glow shapes | A banded region | Drawn | Consecutive exclusions before anything is drawn become holes in one clip path (one nested `clipPath` each exceeded the depth bound) |
+| `SETROP2 R2_NOP` around polygons inside PostScript `BEGIN_PATH`/`END_PATH` escapes | PowerPoint WMF | Leaves the destination unchanged | Nothing drawn | Draws nothing with the pen or brush; PATBLT, a raster operation of its own, still paints |
+| `EXTTEXTOUTW` with `ETO_GLYPH_INDEX` and zero characters | Embedded-object icon previews | Draws nothing | Nothing drawn | Draws nothing (glyph-index runs with characters still keep the placeholder) |
+| Symbol and Wingdings text as the fonts' codes moved to U+F020–U+F0FF, or as bytes in a WMF | Word EMF; any WMF | The font's glyphs | α β ≥ ∑ ☺ ✓ | Maps through `SymbolFontMapper` and draws in an ordinary font; a code with no Unicode equivalent keeps the placeholder |
+| A zero-width pen outlining an arrowhead | PowerPoint WMF | One device pixel | One pixel | One CSS pixel, as EMF cosmetic pens (it was refused) |
+| The source EMF split across `META_ESCAPE_ENHANCED_METAFILE` comments ("WMFC") | `GetWinMetaFileBits`, LibreOffice WMF export | Plays the embedded EMF instead of the WMF records | αβ ≤ ± → (the EMF's text) | Plays the embedded EMF; when it cannot, plays the WMF records |
+| ANSI text records that lose characters ("αβ ≤ →" becomes "aß = ?"), and one-bit DIBs written without their colour table | `GetWinMetaFileBits` | Unused: the embedded EMF is played | The EMF's text | Unused for the same reason |
+| A gradient as abutting strips of solid polygons | Every Office gradient | Aliased, so the strips meet without a seam | The EMF+ gradient | Anti-aliased SVG shows faint lighter lines where strips meet (not fixed; already so for gradients drawn before) |
+| A semi-transparent fill as PATINVERT, a fill with `R2_MASKPEN` and a one-bit pattern, then PATINVERT again; or `R2_XORPEN` | SmartArt with transparency; PowerPoint WMF of a gradient area chart | A dithered approximation | The EMF+ alpha | Keeps the placeholder |
+| Equation text as glyph indices (Cambria Math) | Word EMF of an equation | The font's glyphs | Drawn | Keeps the placeholder: glyph indices need the font's own tables |
+
+```text
+EMR_STRETCHDIBITS  dest (4925,92) 1151×817  src 576×409  BI_RGB 1 bpp   rop 0x00EE0086 (SRCPAINT)
+EMR_STRETCHDIBITS  dest (4925,92) 1151×817  src 576×409  BI_RGB 8 bpp   rop 0x008800C6 (SRCAND)
+
+META_SAVEDC
+META_SELECTCLIPREGION  Region=0
+META_INTERSECTCLIPRECT 166,166 - 3500,2333
+```
+
+`Internal/MetafileCanvas.cs` evaluates a blit's raster operation per pixel from its truth table: a
+pixel whose result does not read the destination is drawn or left transparent, and one whose result
+does is exact only where the bitmap drawn just before, to the same rectangle, left the destination
+known. The fixtures under `TestFiles/Metafiles/office-*` are corpus files; their README records how
+each was written.
 
 ## Missing-font classes differ from native font selection (#1574)
 
@@ -8675,3 +8804,100 @@ text box, so references in text boxes of a modified paragraph are not tracked as
 **Code and tests.** `Docxodus/Ir/Diff/IrEditScriptBuilder.cs` (`KeptNoteReferences`,
 `AlignNoteReferences`), `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs`
 (`RenderCompositeNoteScopes`); `DocxDiffNoteReferenceTests`, `IrSdtDiffWalkerTests`.
+
+## An inline text box moves whole with its line (#1735)
+
+A legacy text box in the line flow (no absolute position) is an inline object: Word breaks the
+paragraph that holds it across pages like any other, and the box stays whole on its own line.
+
+```xml
+<w:p>
+  <w:r><w:t xml:space="preserve">Item 1 … Item 3 of the field log … </w:t></w:r>
+  <w:r><w:pict><v:shape type="#_x0000_t202" style="width:150pt;height:60pt" stroked="t">
+    <v:textbox><w:txbxContent><w:p><w:r><w:t>Readings in litres per minute.</w:t></w:r></w:p>
+    </w:txbxContent></v:textbox></v:shape></w:pict></w:r>
+  <w:r><w:t xml:space="preserve"> Item 4 … Item 120 of the field log …</w:t></w:r>
+</w:p>
+```
+
+Measured in desktop Word 2024 (Windows 11) by saving PDF through `SaveAs2`, on an A4 page with
+1 in margins. The same document with a styles part setting Times New Roman 12 pt, so that both
+renderers use metric-compatible faces:
+
+| Output | Pages | Page 2 starts | Page 3 starts | Box |
+| --- | --- | --- | --- | --- |
+| Word 2024 | 3 | "pump before the evening shift. Item 40" | "pump before the evening shift. Item 83" | Whole on page 1 |
+| Docxodus after the fix | 3 | same | same | Whole on page 1 |
+| Docxodus before | `pagination_failure`: page 2 body content clipped | — | — | — |
+| Same paragraph without the box (Word and Docxodus) | 3 | "Item 43" | "Item 86" | — |
+
+Without a styles part Word sets the text in Aptos 12 pt and Docxodus in Times New Roman 10 pt (see
+"A styles part without `w:pPrDefault`" above), so page counts differ (Word 4, Docxodus 3) while the
+split and the box placement agree.
+
+**Analysis.** The converter renders the box as `<span data-docx-textbox="true">` with
+`display: inline-block`, its story paragraphs as block spans inside it. The paginator splits a
+paragraph by cloning DOM ranges, and admitted only marked converter boxes (unrendered shapes, tab
+segments, math, ruby) as units that move whole, so any other inline block made the paragraph
+indivisible. An inline block lays out its content in its own formatting context, so no line, and
+therefore no page boundary, can fall inside it.
+
+**Fix.** `PaginationEngine.rangeAtomicInlineBoxes` admits every inline-block span, under the same
+checks the marked boxes had: no picture or line break inside, and no positioned, floating or
+transformed content. A rotated or vertical-text box still keeps its paragraph whole.
+
+**Not changed.** Word sits the box on the line's baseline, so it rises above the text it shares a
+line with: without a styles part, the box's story text prints 46 pt above that line's text. The
+converter writes `vertical-align: top`, so the box hangs from the line's top and its story text
+shares the line's baseline. The line is about as tall either way, so the page breaks agree.
+
+**Code and tests.** `npm/src/pagination.ts` (`rangeAtomicInlineBoxes`);
+`pagination-inline-layout-atoms.spec.ts` (`textbox`, `rotated-textbox`) and
+`export-inline-layout-atoms.spec.ts` (`textbox`, `no-textbox`).
+
+## A range boundary between the cells or rows of a table (#1737)
+
+A row and a table admit range markup among their cells and rows (`CT_Row` and `CT_Tbl` include
+`EG_RunLevelElements`), so a bookmark or a tracked custom XML range can sit there:
+
+```xml
+<w:tr>
+  <w:tc>…<w:t>Step 1</w:t>…</w:tc>
+  <w:customXmlInsRangeStart w:id="1" w:author="Reviewer" w:date="2026-01-05T09:00:00Z"/>
+  <w:customXmlInsRangeEnd w:id="1"/>
+  <w:tc>…<w:t>Load tray 1 and record the batch weight.</w:t>…</w:tc>
+  <w:tc>…<w:t>3 minutes</w:t>…</w:tc>
+</w:tr>
+```
+
+Measured with a 40-row, three-column table taller than an A4 page, one such pair in every row and
+no other revisions, beside the same table without the pairs. Word 2024 (16.0 build 20326) opened each
+read-only, set to All Markup, and saved it as PDF (`SaveAs2`, format 17):
+
+| | Word 2024, All Markup | Docxodus before #1737, markup | Docxodus after, markup | Docxodus, final |
+| --- | --- | --- | --- | --- |
+| a pair between cells 1 and 2 of every row | 4 pages (13, 11, 11, 5 rows), no mark at all; `Revisions.Count` is 0 | export fails: `pagination_failure`, page 2 body clipped | 4 pages (12, 12, 12, 4 rows), split between rows; the bracket marks open cell 2 on a line of their own | 3 pages (16, 16, 8 rows) |
+| no pairs (control) | 4 pages, the same rows per page | 3 pages (16, 16, 8 rows) | the same | the same |
+
+**Analysis.** Word strips custom XML markup and its range markers on open (see the #1189 entry
+above), so it draws nothing for these ranges and lays the table out as if they were absent.
+Docxodus draws each custom XML revision boundary as a bracket mark under markup (#538). The
+converter wrote whatever a row's or a table's non-cell children rendered straight into the `<tr>`
+or `<table>`. HTML allows only cells in a row and only rows in a table, so the browser's parser
+moved the marks out in front of the table, and the paginator, which splits a table only when its
+wrapper holds nothing but the table and empty bookmark targets (#1456), kept the 40 rows as one
+block taller than the page. A bookmark between rows went the same way: its `<a id>` landed at the
+top of the table instead of at its row.
+
+The page count that still differs is not about the ranges. The fixture has no styles part, which
+Word sets in 12 pt text and Docxodus in 10 pt (the missing `w:rPrDefault` note in the #1652 entry).
+
+**Fix.** `WmlToHtmlConverter.KeepContentInCells`, applied to a row's children (`ProcessTableRow`)
+and to a table's (`ProcessTable`), moves what renders among the cells or rows into the adjacent
+cell, where the same boundary inside that cell already rendered: at the start of the cell that
+follows it (between rows, the next row's first cell), or at the end of the last cell when none
+follows. A boundary between two cells marks where the next cell begins, and one after a row's last
+cell marks where the row ends. The filler cell for an omitted `w:gridBefore` is not a cell of the
+row, and an exact-height row's cell takes the content inside its clip box. Nothing is dropped: a
+row or table with no cell of its own keeps the content beside its cells or rows. The bracket marks
+stay, now inside the cell: Word offers no placement to follow. Tests: `TableRangeBoundaryTests`, `npm/tests/export-bookmarked-table.spec.ts`.

@@ -4336,12 +4336,14 @@ export class PaginationEngine {
       });
   }
 
-  /** Converter shapes, tabs, math and ruby pairs can move as complete inline boxes. */
+  /**
+   * Boxes that move whole: an inline block (a converter shape, text box or ruby pair) lays out its
+   * content in its own formatting context, and converter tab segments, inline math and fitted text
+   * are likewise single units. Range endpoints never enter one, so it keeps its inner layout.
+   */
   private rangeAtomicInlineBoxes(paragraph: HTMLElement): Set<HTMLElement> {
     const boxes = new Set<HTMLElement>();
-    for (const marker of Array.from(paragraph.querySelectorAll<HTMLElement>(
-      '[data-docx-shape="unrendered"], [data-docx-tab], [data-docx-ruby="true"], [data-docx-math="true"], [data-docx-frame-line], [data-docx-fit-text-group], [data-docx-line-metric]',
-    ))) {
+    for (const marker of Array.from(paragraph.querySelectorAll<HTMLElement>('span'))) {
       if (isMixedLineMetric(marker)) { boxes.add(marker); continue; }
       if (marker.hasAttribute('data-docx-frame-line')) { boxes.add(marker); continue; }
       let box: HTMLElement | null = marker;
@@ -4362,8 +4364,8 @@ export class PaginationEngine {
         }
         if (!box || box === paragraph) continue;
       } else if ((marker.dataset.docxRuby === "true"
-          ? marker.children.length !== 1 || marker.firstElementChild?.localName !== "ruby"
-          : marker.children.length > 0) || this.view.getComputedStyle(marker).display !== "inline-block") {
+          && (marker.children.length !== 1 || marker.firstElementChild?.localName !== "ruby"))
+          || this.view.getComputedStyle(marker).display !== "inline-block") {
         continue;
       }
       if (box.localName !== "span" || box.querySelector("br, img")) continue;

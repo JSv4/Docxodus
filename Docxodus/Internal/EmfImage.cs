@@ -171,7 +171,12 @@ internal sealed record EmfImage(XElement Drawing)
                     Need(24);
                     Store(objects, U(8), CreateBrush(U(12), U(12) == 1 ? "none" : Color(U(16)), U(20)));
                     break;
-                case 93 or 94: Need(12); Store(objects, U(8), new Brush("none", Pattern: true)); break; // CREATEMONOBRUSH, CREATEDIBPATTERNBRUSHPT
+                case 93: Need(12); Store(objects, U(8), new Brush("none", Pattern: true)); break; // CREATEMONOBRUSH
+                case 94: // CREATEDIBPATTERNBRUSHPT: only RGB colours (DIB_RGB_COLORS) can be drawn
+                    Need(32);
+                    Store(objects, U(8), U(12) != 0 ? new Brush("none", Pattern: true)
+                        : canvas.PatternBrush(Part(bytes, at, length, U(16), U(20)), Part(bytes, at, length, U(24), U(28))));
+                    break;
                 case 49 or 99 or 122: Need(12); Store(objects, U(8), new OtherObject()); break; // CREATEPALETTE, CREATECOLORSPACE(W)
                 case 101: // DELETECOLORSPACE
                     Need(12);
@@ -189,7 +194,7 @@ internal sealed record EmfImage(XElement Drawing)
                 {
                     Need(76);
                     uint chars = U(44), stringAt = U(48), options = U(52), dxAt = U(72);
-                    if ((options & 0x10) != 0) throw new NotSupportedException("EMF glyph-index text is not supported.");
+                    if ((options & 0x10) != 0 && chars > 0) throw new NotSupportedException("EMF glyph-index text is not supported.");
                     bool wide = kind == 84;
                     if (chars > MaxRecords || stringAt > length || stringAt + chars * (wide ? 2L : 1L) > length)
                         throw new InvalidDataException("Invalid EMF text record.");
@@ -271,7 +276,7 @@ internal sealed record EmfImage(XElement Drawing)
                     // BlendFlags (the second byte) should be zero; Word writes 0x80 there, and it changes nothing.
                     if ((blend & 0xff) != 0 || (blend >> 24) > 1) throw new NotSupportedException("Unsupported EMF blend function.");
                     if (U(88) == 0) throw new InvalidDataException("EMF ALPHABLEND requires a source bitmap.");
-                    Blit(canvas, bytes, at, length, I(24), I(28), I(32), I(36), 0x00CC0020, I(44), I(48), I(100), I(104),
+                    Blit(canvas, bytes, at, length, I(24), I(28), I(32), I(36), null, I(44), I(48), I(100), I(104),
                         U(80), U(84), U(88), U(92), U(96), fromBottom: false, (byte)(blend >> 16), (blend >> 24) == 1);
                     break;
                 }
@@ -284,10 +289,7 @@ internal sealed record EmfImage(XElement Drawing)
                     Need(12);
                     if (U(8) != 0) throw new NotSupportedException("Mirrored EMF layout is not supported.");
                     break;
-                case 20: // SETROP2: only R2_COPYPEN draws the pen and brush as they are
-                    Need(12);
-                    if (U(8) != 13) throw new NotSupportedException("Unsupported EMF binary raster operation.");
-                    break;
+                case 20: Need(12); canvas.SetBinaryRasterOperation(U(8)); break; // SETROP2
                 case 120: // SETTEXTJUSTIFICATION: break extra, then break count
                     Need(16);
                     if (I(8) != 0) throw new NotSupportedException("EMF text spacing adjustments are not supported.");
@@ -342,9 +344,9 @@ internal sealed record EmfImage(XElement Drawing)
         }
     }
 
-    /// <summary>BITBLT, STRETCHBLT and STRETCHDIBITS. Without a source bitmap only the pattern and constant
-    /// raster operations draw; with one, only SRCCOPY.</summary>
-    private static void Blit(MetafileCanvas canvas, byte[] bytes, int at, int length, int x, int y, int cx, int cy, uint rop,
+    /// <summary>BITBLT, STRETCHBLT, STRETCHDIBITS and ALPHABLEND (<paramref name="rop"/> null). Without a source
+    /// bitmap only the pattern and constant raster operations draw.</summary>
+    private static void Blit(MetafileCanvas canvas, byte[] bytes, int at, int length, int x, int y, int cx, int cy, uint? rop,
         int xSrc, int ySrc, int cxSrc, int cySrc, uint usage, uint infoAt, uint infoSize, uint bitsAt, uint bitsSize, bool fromBottom,
         byte constantAlpha = 255, bool sourceAlpha = false)
     {
@@ -355,13 +357,19 @@ internal sealed record EmfImage(XElement Drawing)
             if (color != "") canvas.FillRectangle(x, y, (double)x + cx, (double)y + cy, color);
             return;
         }
-        if (rop != 0x00CC0020 || usage != 0) throw new NotSupportedException("EMF bitmaps support SRCCOPY with RGB colours only.");
-        if (infoAt > length || infoSize > length - infoAt || bitsAt > length || bitsSize > length - bitsAt)
-            throw new InvalidDataException("EMF bitmap lies outside its record.");
+        if (usage != 0) throw new NotSupportedException("EMF bitmaps with palette colours are not supported.");
+        var info = Part(bytes, at, length, infoAt, infoSize);
+        var bits = Part(bytes, at, length, bitsAt, bitsSize);
         canvas.ReserveBitmap(Math.Abs((long)cxSrc * cySrc));
-        var image = DibImage.Decode(bytes.AsSpan(at + (int)infoAt, (int)infoSize), bytes.AsSpan(at + (int)bitsAt, (int)bitsSize),
-            xSrc, ySrc, cxSrc, cySrc, fromBottom, constantAlpha, sourceAlpha);
-        if (image is { } decoded) canvas.Image(x, y, cx, cy, decoded.Href, decoded.Pixels);
+        if (DibImage.Decode(info, bits, xSrc, ySrc, cxSrc, cySrc, fromBottom, constantAlpha, sourceAlpha) is { } image)
+            canvas.Bitmap(x, y, cx, cy, image, rop);
+    }
+
+    /// <summary>The bytes a record locates by offset and size from its own start.</summary>
+    private static ReadOnlySpan<byte> Part(byte[] bytes, int at, int length, uint offset, uint size)
+    {
+        if (offset > length || size > length - offset) throw new InvalidDataException("EMF bitmap lies outside its record.");
+        return bytes.AsSpan(at + (int)offset, (int)size);
     }
 
     private static (double X, double Y)[] Points(byte[] bytes, int at, int length, int first, uint count, bool small)
