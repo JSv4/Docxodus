@@ -3,7 +3,7 @@ import {getDocument,OPS} from 'pdfjs-dist/legacy/build/pdf.mjs';
 import {renderDocxArtifacts} from '../../npm-export/dist/index.js';
 import {inlineLayoutAtomDocx} from './docx-inline-layout-atom-fixture.js';
 test.use({launchOptions:{chromiumSandbox:true,...(process.env.DOCXODUS_CHROMIUM_PATH?{executablePath:process.env.DOCXODUS_CHROMIUM_PATH}:{})}});
-for(const kind of ['shape','tab','tab-cell'] as const) {
+for(const kind of ['shape','tab','tab-cell','textbox','no-textbox'] as const) {
   test(`whole ${kind} layout boxes continue without losing source content`,async({browser,page})=>{
     test.setTimeout(120_000);
     const result=await renderDocxArtifacts(inlineLayoutAtomDocx(kind),{browser,outputs:['html','pdf'],reviewProfile:'markup',markupPresentation:'word',commentProfile:'margin',commentColumnPlacement:'balloons',timeoutMs:120_000});
@@ -23,9 +23,15 @@ for(const kind of ['shape','tab','tab-cell'] as const) {
         expect(pages.join(' ').match(/Alder shape inventory complete\./g)).toHaveLength(1);
       }else{
         expect(pages.join(' ').match(/Willow\d+/g)).toEqual(Array.from({length:83},(_,i)=>`Willow${String(i+1).padStart(3,'0')}`));
-        expect(pages.join(' ').match(/R7\./g)).toHaveLength(1);
+        if(!kind.endsWith('textbox'))expect(pages.join(' ').match(/R7\./g)).toHaveLength(1);
         expect(pages.join(' ').match(/Willow tab inventory complete\./g)).toHaveLength(1);
         if(kind==='tab-cell')expect(pages.join(' ').match(/Willow neighbor\./g)).toHaveLength(1);
+        if(kind.endsWith('textbox')){
+          // The one labelled paragraph breaks across pages; its text box stays whole on the first.
+          expect(pages.filter(text=>/Willow\d+/.test(text)).length).toBeGreaterThan(1);
+          expect(pages.map(text=>text.match(/Willow gauge note\./g)?.length??0)).toEqual(
+            Array.from({length:pdf.numPages},(_,i)=>kind==='textbox'&&i===0?1:0));
+        }
       }
     }finally{await task.destroy();}
     await page.setContent(result.html!);
@@ -33,6 +39,12 @@ for(const kind of ['shape','tab','tab-cell'] as const) {
       await expect(page.locator('.page-content [data-docx-shape="unrendered"]')).toHaveCount(5);
       const size=await page.locator('.page-content img').evaluate(image=>({width:image.getBoundingClientRect().width*0.75,height:image.getBoundingClientRect().height*0.75}));
       expect(size.width).toBeCloseTo(320,1);expect(size.height).toBeCloseTo(590,1);
+    }else if(kind.endsWith('textbox')){
+      const boxes=await page.locator('.page-content [data-docx-textbox]').evaluateAll(boxes=>boxes.map(box=>({
+        page:Array.from(document.querySelectorAll('.page-box')).indexOf(box.closest('.page-box')!),
+        width:box.getBoundingClientRect().width*0.75,height:box.getBoundingClientRect().height*0.75})));
+      expect(boxes).toHaveLength(kind==='textbox'?1:0);
+      for(const box of boxes){expect(box.page).toBe(0);expect(box.width).toBeCloseTo(150,1);expect(box.height).toBeCloseTo(60,1);}
     }else await expect(page.locator('.page-content [data-docx-tab]')).toHaveCount(1);
   });
 }

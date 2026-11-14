@@ -8654,3 +8654,100 @@ text box, so references in text boxes of a modified paragraph are not tracked as
 **Code and tests.** `Docxodus/Ir/Diff/IrEditScriptBuilder.cs` (`KeptNoteReferences`,
 `AlignNoteReferences`), `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs`
 (`RenderCompositeNoteScopes`); `DocxDiffNoteReferenceTests`, `IrSdtDiffWalkerTests`.
+
+## An inline text box moves whole with its line (#1735)
+
+A legacy text box in the line flow (no absolute position) is an inline object: Word breaks the
+paragraph that holds it across pages like any other, and the box stays whole on its own line.
+
+```xml
+<w:p>
+  <w:r><w:t xml:space="preserve">Item 1 … Item 3 of the field log … </w:t></w:r>
+  <w:r><w:pict><v:shape type="#_x0000_t202" style="width:150pt;height:60pt" stroked="t">
+    <v:textbox><w:txbxContent><w:p><w:r><w:t>Readings in litres per minute.</w:t></w:r></w:p>
+    </w:txbxContent></v:textbox></v:shape></w:pict></w:r>
+  <w:r><w:t xml:space="preserve"> Item 4 … Item 120 of the field log …</w:t></w:r>
+</w:p>
+```
+
+Measured in desktop Word 2024 (Windows 11) by saving PDF through `SaveAs2`, on an A4 page with
+1 in margins. The same document with a styles part setting Times New Roman 12 pt, so that both
+renderers use metric-compatible faces:
+
+| Output | Pages | Page 2 starts | Page 3 starts | Box |
+| --- | --- | --- | --- | --- |
+| Word 2024 | 3 | "pump before the evening shift. Item 40" | "pump before the evening shift. Item 83" | Whole on page 1 |
+| Docxodus after the fix | 3 | same | same | Whole on page 1 |
+| Docxodus before | `pagination_failure`: page 2 body content clipped | — | — | — |
+| Same paragraph without the box (Word and Docxodus) | 3 | "Item 43" | "Item 86" | — |
+
+Without a styles part Word sets the text in Aptos 12 pt and Docxodus in Times New Roman 10 pt (see
+"A styles part without `w:pPrDefault`" above), so page counts differ (Word 4, Docxodus 3) while the
+split and the box placement agree.
+
+**Analysis.** The converter renders the box as `<span data-docx-textbox="true">` with
+`display: inline-block`, its story paragraphs as block spans inside it. The paginator splits a
+paragraph by cloning DOM ranges, and admitted only marked converter boxes (unrendered shapes, tab
+segments, math, ruby) as units that move whole, so any other inline block made the paragraph
+indivisible. An inline block lays out its content in its own formatting context, so no line, and
+therefore no page boundary, can fall inside it.
+
+**Fix.** `PaginationEngine.rangeAtomicInlineBoxes` admits every inline-block span, under the same
+checks the marked boxes had: no picture or line break inside, and no positioned, floating or
+transformed content. A rotated or vertical-text box still keeps its paragraph whole.
+
+**Not changed.** Word sits the box on the line's baseline, so it rises above the text it shares a
+line with: without a styles part, the box's story text prints 46 pt above that line's text. The
+converter writes `vertical-align: top`, so the box hangs from the line's top and its story text
+shares the line's baseline. The line is about as tall either way, so the page breaks agree.
+
+**Code and tests.** `npm/src/pagination.ts` (`rangeAtomicInlineBoxes`);
+`pagination-inline-layout-atoms.spec.ts` (`textbox`, `rotated-textbox`) and
+`export-inline-layout-atoms.spec.ts` (`textbox`, `no-textbox`).
+
+## A range boundary between the cells or rows of a table (#1737)
+
+A row and a table admit range markup among their cells and rows (`CT_Row` and `CT_Tbl` include
+`EG_RunLevelElements`), so a bookmark or a tracked custom XML range can sit there:
+
+```xml
+<w:tr>
+  <w:tc>…<w:t>Step 1</w:t>…</w:tc>
+  <w:customXmlInsRangeStart w:id="1" w:author="Reviewer" w:date="2026-01-05T09:00:00Z"/>
+  <w:customXmlInsRangeEnd w:id="1"/>
+  <w:tc>…<w:t>Load tray 1 and record the batch weight.</w:t>…</w:tc>
+  <w:tc>…<w:t>3 minutes</w:t>…</w:tc>
+</w:tr>
+```
+
+Measured with a 40-row, three-column table taller than an A4 page, one such pair in every row and
+no other revisions, beside the same table without the pairs. Word 2024 (16.0 build 20326) opened each
+read-only, set to All Markup, and saved it as PDF (`SaveAs2`, format 17):
+
+| | Word 2024, All Markup | Docxodus before #1737, markup | Docxodus after, markup | Docxodus, final |
+| --- | --- | --- | --- | --- |
+| a pair between cells 1 and 2 of every row | 4 pages (13, 11, 11, 5 rows), no mark at all; `Revisions.Count` is 0 | export fails: `pagination_failure`, page 2 body clipped | 4 pages (12, 12, 12, 4 rows), split between rows; the bracket marks open cell 2 on a line of their own | 3 pages (16, 16, 8 rows) |
+| no pairs (control) | 4 pages, the same rows per page | 3 pages (16, 16, 8 rows) | the same | the same |
+
+**Analysis.** Word strips custom XML markup and its range markers on open (see the #1189 entry
+above), so it draws nothing for these ranges and lays the table out as if they were absent.
+Docxodus draws each custom XML revision boundary as a bracket mark under markup (#538). The
+converter wrote whatever a row's or a table's non-cell children rendered straight into the `<tr>`
+or `<table>`. HTML allows only cells in a row and only rows in a table, so the browser's parser
+moved the marks out in front of the table, and the paginator, which splits a table only when its
+wrapper holds nothing but the table and empty bookmark targets (#1456), kept the 40 rows as one
+block taller than the page. A bookmark between rows went the same way: its `<a id>` landed at the
+top of the table instead of at its row.
+
+The page count that still differs is not about the ranges. The fixture has no styles part, which
+Word sets in 12 pt text and Docxodus in 10 pt (the missing `w:rPrDefault` note in the #1652 entry).
+
+**Fix.** `WmlToHtmlConverter.KeepContentInCells`, applied to a row's children (`ProcessTableRow`)
+and to a table's (`ProcessTable`), moves what renders among the cells or rows into the adjacent
+cell, where the same boundary inside that cell already rendered: at the start of the cell that
+follows it (between rows, the next row's first cell), or at the end of the last cell when none
+follows. A boundary between two cells marks where the next cell begins, and one after a row's last
+cell marks where the row ends. The filler cell for an omitted `w:gridBefore` is not a cell of the
+row, and an exact-height row's cell takes the content inside its clip box. Nothing is dropped: a
+row or table with no cell of its own keeps the content beside its cells or rows. The bracket marks
+stay, now inside the cell: Word offers no placement to follow. Tests: `TableRangeBoundaryTests`, `npm/tests/export-bookmarked-table.spec.ts`.
