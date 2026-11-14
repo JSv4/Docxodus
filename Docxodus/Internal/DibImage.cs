@@ -2,15 +2,21 @@ using System.Buffers.Binary;
 
 namespace Docxodus.Internal;
 
-/// <summary>Bounded decoding of the device-independent bitmaps that EMF and WMF records embed, to a PNG
-/// data URI. Unsupported encodings reject the whole picture: RLE, and the JPEG or PNG a DIB can wrap for a
+/// <summary>Bounded decoding of the device-independent bitmaps that EMF and WMF records embed, to RGBA
+/// pixels. Unsupported encodings reject the whole picture: RLE, and the JPEG or PNG a DIB can wrap for a
 /// printer (BI_JPEG, BI_PNG), whose real size its header does not bound.</summary>
 internal static class DibImage
 {
     private const int MaxSide = 32768, MaxPixels = 16 * 1024 * 1024;
 
-    /// <summary>A decoded source rectangle: its data URI and the pixel count it cost.</summary>
-    internal readonly record struct Result(string Href, long Pixels);
+    /// <summary>A decoded source rectangle: top-down, unpremultiplied RGBA.</summary>
+    internal sealed record Bitmap(int Width, int Height, byte[] Rgba)
+    {
+        private string? href;
+
+        /// <summary>The PNG data URI, encoded once: a pattern brush's tile is written for every fill.</summary>
+        internal string Href => href ??= "data:image/png;base64," + Convert.ToBase64String(TiffImage.Png(Width, Height, Rgba));
+    }
 
     /// <summary>Bytes taken by the header, colour masks and colour table of a packed DIB.</summary>
     internal static int InfoSize(ReadOnlySpan<byte> packed)
@@ -22,7 +28,7 @@ internal static class DibImage
     /// <summary>Decodes the source rectangle (top-down pixel coordinates) of a DIB. Returns null when the
     /// rectangle misses the bitmap. <paramref name="constantAlpha"/> and <paramref name="sourceAlpha"/>
     /// (premultiplied 32-bit alpha) are ALPHABLEND's blend function, baked into the PNG.</summary>
-    internal static Result? Decode(ReadOnlySpan<byte> info, ReadOnlySpan<byte> bits, int srcX, int srcY, int srcWidth, int srcHeight,
+    internal static Bitmap? Decode(ReadOnlySpan<byte> info, ReadOnlySpan<byte> bits, int srcX, int srcY, int srcWidth, int srcHeight,
         bool srcYFromBottom, byte constantAlpha = 255, bool sourceAlpha = false)
     {
         var h = Header(info);
@@ -85,7 +91,21 @@ internal static class DibImage
                 rgba[at] = (byte)r; rgba[at + 1] = (byte)g; rgba[at + 2] = (byte)b; rgba[at + 3] = (byte)(alpha * constantAlpha / 255);
             }
         }
-        return new Result("data:image/png;base64," + Convert.ToBase64String(TiffImage.Png(width, height, rgba)), (long)width * height);
+        return new Bitmap(width, height, rgba);
+    }
+
+    /// <summary>The pixel size a DIB header declares.</summary>
+    internal static (int Width, int Height) Size(ReadOnlySpan<byte> info)
+    {
+        var h = Header(info);
+        return (h.Width, h.Height);
+    }
+
+    /// <summary>Decodes a whole DIB, as a pattern brush carries it.</summary>
+    internal static Bitmap Decode(ReadOnlySpan<byte> info, ReadOnlySpan<byte> bits)
+    {
+        var (width, height) = Size(info);
+        return Decode(info, bits, 0, 0, width, height, false)!;
     }
 
     private static uint Channel(uint value, uint mask)
