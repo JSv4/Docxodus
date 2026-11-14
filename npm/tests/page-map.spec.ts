@@ -392,7 +392,7 @@ test.describe('PageMap materialization and citation navigation', () => {
            data-margin-bottom="1" data-margin-left="1">
         <section class="endnotes"><hr><ol style="list-style-type:lower-roman"><li id="en-1" value="1">
           <p data-source-anchor-id="p:en:unsafe" style="font:10pt/10pt Arial;margin:0">
-            <span style="display:inline-block;white-space:nowrap">${words} ${words}</span>
+            <span style="display:inline-block;position:relative;top:1px;white-space:nowrap">${words} ${words}</span>
           </p>
         </li></ol></section>
       </div>`));

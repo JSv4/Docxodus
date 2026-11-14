@@ -101,6 +101,7 @@ internal static class IrCompositeMarkupRenderer
         var bodyMarkers = IrMarkupRenderer.PlanCompositeBlockLevelMarkers(script.Operations, baseIr, reviewerIrs,
             script.ReviewerComparisons?.Select(o => (IReadOnlyList<IrEditOp>)o.Operations).ToList(), authors, state);
         var bodyBlocks = new List<XElement>();
+        state.IndexEditedMoves(script.Operations.Select(o => o.Op));
         for (int i = 0; i < script.Operations.Count; i++)
         {
             if (bodyMarkers?.GetValueOrDefault(i) is { } before)
@@ -698,6 +699,7 @@ internal static class IrCompositeMarkupRenderer
         else if (compositeOp.AuthoredWrapperOps is { } wrapperOps)
         {
             var children = new List<XElement>();
+            state.IndexEditedMoves(wrapperOps.Select(child => child.Op));
             foreach (var child in wrapperOps)
                 RenderOneCompositeBlock(child, baseIr, reviewerIrs, state, children);
             IrMarkupRenderer.EmitModifiedWrapper(op, op.WrapperOps!, state, sink, children);

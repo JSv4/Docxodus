@@ -122,6 +122,109 @@ internal sealed class IrBlockSimilarity
     public bool HasOnlyTextTokens(IrParagraph paragraph) => Bag(paragraph).Tokens
         .All(token => token.Kind is IrDiffTokenKind.Word or IrDiffTokenKind.Separator);
 
+    /// <summary>
+    /// True when two prose paragraphs keep too little of each other, in order, to be drawn as one edited
+    /// paragraph: matched longest run first, their words and punctuation keep less than an eighth of the longer
+    /// paragraph's text (issue #1739). Such a pair is replaced whole rather than diffed word by word.
+    /// </summary>
+    /// <remarks>
+    /// <para>A reference compare edits a paragraph pair in place only while its diff keeps about an eighth of
+    /// the longer paragraph's characters, each kept word counted with one space; below that it deletes the old
+    /// paragraph and inserts the new one. Characters count, not words: one kept twelve-letter word holds a
+    /// paragraph of short words in place, while five kept three-letter words are needed among long ones.</para>
+    /// <para>The match is Ratcliff/Obershelp's: keep the common prefix and suffix, take the longest common run
+    /// of what is left, and match either side of it the same way. A longest common subsequence instead threads
+    /// together every chance match of a recurring short word, so two unrelated sentences sharing their articles
+    /// and clause labels would clear the floor; the reference replaces those. This measure decides the pairing
+    /// only; a pair kept in place is still rendered by <see cref="IrTokenDiffer"/>.</para>
+    /// <para>Paragraphs carrying notes, images or other atoms keep their pairing, since text length does not
+    /// measure them, as does a pair whose match would visit more than <see cref="RewriteMatchCellCap"/>
+    /// token cells.</para>
+    /// </remarks>
+    public bool IsRewrite(IrBlock left, IrBlock right)
+    {
+        if (left is not IrParagraph lp || right is not IrParagraph rp || !HasOnlyTextTokens(lp) || !HasOnlyTextTokens(rp))
+            return false;
+        var keys = new Dictionary<string, int>();
+        var (a, aCredit, leftLength) = Visible(Bag(lp).Tokens, keys);
+        var (b, _, rightLength) = Visible(Bag(rp).Tokens, keys);
+        int floor = System.Math.Max(leftLength, rightLength);
+        if (floor == 0)
+            return false;
+
+        int lo = 0, aHi = a.Count, bHi = b.Count, kept = 0;
+        while (lo < aHi && lo < bHi && a[lo] == b[lo])
+            kept += aCredit[lo++];
+        while (aHi > lo && bHi > lo && a[aHi - 1] == b[bHi - 1])
+            kept += aCredit[--aHi];
+        if (kept * RewriteRetentionDivisor >= floor)
+            return false; // most edits: the shared prefix and suffix alone clear the floor
+
+        var runs = new Stack<(int ALo, int AHi, int BLo, int BHi)>();
+        runs.Push((lo, aHi, lo, bHi));
+        var previous = new int[b.Count + 1];
+        var current = new int[b.Count + 1];
+        long budget = RewriteMatchCellCap;
+        while (kept * RewriteRetentionDivisor < floor && runs.Count > 0)
+        {
+            var (aLo, aEnd, bLo, bEnd) = runs.Pop();
+            if ((budget -= (long)(aEnd - aLo) * (bEnd - bLo)) < 0)
+                return false;
+            // The longest common run, the earliest on the left and then on the right among equally long ones.
+            int length = 0, aAt = 0, bAt = 0;
+            System.Array.Clear(previous, bLo, bEnd - bLo + 1);
+            for (int i = aLo; i < aEnd; i++)
+            {
+                current[bLo] = 0;
+                for (int j = bLo; j < bEnd; j++)
+                {
+                    current[j + 1] = a[i] == b[j] ? previous[j] + 1 : 0;
+                    if (current[j + 1] > length)
+                        (length, aAt, bAt) = (current[j + 1], i + 1 - current[j + 1], j + 1 - current[j + 1]);
+                }
+                (previous, current) = (current, previous);
+            }
+            if (length == 0)
+                continue;
+            for (int i = aAt; i < aAt + length; i++)
+                kept += aCredit[i];
+            runs.Push((aLo, aAt, bLo, bAt));
+            runs.Push((aAt + length, aEnd, bAt + length, bEnd));
+        }
+        return kept * RewriteRetentionDivisor < floor;
+
+        // The non-blank tokens as interned keys, each with its credit when kept (its own characters and one
+        // separating space), and the paragraph's whole text length. A key drops its link or interruption
+        // suffix: a retargeted hyperlink keeps its text.
+        static (List<int> Keys, List<int> Credits, int TextLength) Visible(
+            IReadOnlyList<IrDiffToken> tokens, Dictionary<string, int> intern)
+        {
+            var visible = new List<int>(tokens.Count);
+            var credits = new List<int>(tokens.Count);
+            int textLength = 0;
+            foreach (var token in tokens)
+            {
+                textLength += token.Text.Length;
+                if (string.IsNullOrWhiteSpace(token.Text))
+                    continue;
+                int suffix = token.MatchKey.IndexOf('\u0001');
+                string text = suffix < 0 ? token.MatchKey : token.MatchKey[..suffix];
+                if (!intern.TryGetValue(text, out int key))
+                    intern[text] = key = intern.Count;
+                visible.Add(key);
+                credits.Add(token.Text.Length + 1);
+            }
+            return (visible, credits, textLength);
+        }
+    }
+
+    /// <summary>A pair whose match keeps less than 1/<c>RewriteRetentionDivisor</c> of the longer paragraph's
+    /// text is a rewrite (<see cref="IsRewrite"/>).</summary>
+    private const int RewriteRetentionDivisor = 8;
+
+    /// <summary>How many token cells <see cref="IsRewrite"/> may visit; a pair that needs more keeps its pairing.</summary>
+    private const long RewriteMatchCellCap = 1_000_000;
+
     /// <summary>Content-token total used by split/merge length gates, reusing cached tokenization.</summary>
     public int ContentTokenCount(IrParagraph paragraph)
     {
@@ -207,6 +310,9 @@ internal sealed class IrBlockSimilarity
         // lone "font". Our old "any shared word force-pairs" over-interleaved those (the font_size/
         // bold_italic tail-paragraph over-anchoring). Zero-overlap already stayed separate; this raises
         // the bar from 1 → 2 to match Word. (The 1-word-vs-1-word typo/renumber case above is exempt.)
+        // Shared words still leave a rewrite to be replaced when they keep too little in order (#1739).
+        if (IsRewrite(left, right))
+            return false;
         var (small, large) = a.TrimmedWords.Count <= b.TrimmedWords.Count ? (a, b) : (b, a);
         var seen = new System.Collections.Generic.HashSet<string>();
         int shared = 0;

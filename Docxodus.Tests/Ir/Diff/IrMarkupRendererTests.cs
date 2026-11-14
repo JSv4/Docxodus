@@ -1307,45 +1307,166 @@ public class IrMarkupRendererTests
         });
     }
 
-    [Fact]
-    public void Render_move_and_edit_uses_complete_atomic_move_pair_and_round_trips()
+    /// <summary>The moved text of each move range on one side of a redline body, in document order. Word
+    /// rejects a move by carrying each destination range's moved text back to the source range it pairs
+    /// with in order (issue #1716), so the two lists must be equal for its reject to restore the original.</summary>
+    private static List<string> MoveRangeTexts(XElement body, bool source)
     {
-        // Paragraph A is relocated AND edited (one word changed): a MoveModify. Keep its rich token diff in the
-        // data surface, but encode the document as complete old/new move halves. Word and LibreOffice process
-        // ordinary ins/del nested in a moveTo range independently; on Reject All that strands the nested del.
-        var left = MoveDoc(
-            "This is paragraph A with enough words for move detection here.",
-            "This is paragraph B with sufficient content to anchor it firmly.");
-        var right = MoveDoc(
-            "This is paragraph B with sufficient content to anchor it firmly.",
-            "This is paragraph A with PLENTY words for move detection here.");
-        var settings = new IrDiffSettings { MoveSimilarityThreshold = 0.6, MoveMinimumTokenCount = 3 };
-        var rendered = RenderMarkup(left, right, settings);
+        var (start, end, moved) = source
+            ? (W.moveFromRangeStart, W.moveFromRangeEnd, W.moveFrom)
+            : (W.moveToRangeStart, W.moveToRangeEnd, W.moveTo);
+        var texts = new List<string>();
+        System.Text.StringBuilder? open = null;
+        foreach (var e in body.Descendants())
+        {
+            if (e.Name == start)
+                open = new System.Text.StringBuilder();
+            else if (e.Name == end && open is not null)
+            {
+                texts.Add(open.ToString());
+                open = null;
+            }
+            else if (open is not null && e.Name == W.t && e.Ancestors(moved).Any())
+                open.Append(e.Value);
+        }
+        return texts;
+    }
 
+    private static XElement RedlineBody(WmlDocument rendered)
+    {
         using var ms = new MemoryStream(rendered.DocumentByteArray);
         using var wd = WordprocessingDocument.Open(ms, false);
-        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
-        var source = Assert.Single(body.Elements(W.p),
-            p => p.Descendants(W.moveFromRangeStart).Any());
-        var destination = Assert.Single(body.Elements(W.p),
-            p => p.Descendants(W.moveToRangeStart).Any());
-        Assert.NotEmpty(destination.Descendants(W.moveTo));
-        Assert.DoesNotContain(destination.Descendants(W.ins), e => !e.Ancestors(W.pPr).Any());
-        Assert.DoesNotContain(destination.Descendants(W.del), e => !e.Ancestors(W.pPr).Any());
-        Assert.Equal("This is paragraph A with enough words for move detection here.",
-            string.Concat(source.Descendants(W.moveFrom).Descendants()
-                .Where(e => e.Name == W.t || e.Name == W.delText).Select(e => (string?)e)));
-        Assert.Equal("This is paragraph A with PLENTY words for move detection here.",
-            string.Concat(destination.Descendants(W.moveTo).Descendants(W.t).Select(t => (string?)t)));
-        AssertRoundTrip(left, right, settings, label: "move-modify");
+        return wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+    }
+
+    /// <summary>The run-level revision text of one kind in a paragraph, paragraph-mark markers excluded.</summary>
+    private static string RevisionText(XElement paragraph, XName kind) =>
+        string.Concat(paragraph.Descendants(kind).Where(e => !e.Ancestors(W.pPr).Any())
+            .Descendants().Where(e => e.Name == W.t || e.Name == W.delText).Select(e => e.Value));
+
+    [Theory]
+    [InlineData("THIRD. Maintenance. The tenant keeps the premises in good condition.",
+        "FIFTH. Maintenance. The tenant keeps the premises in good condition.", "THIRD", "FIFTH")]
+    [InlineData("The governing law of this Agreement is the law of Delaware without regard to conflicts principles.",
+        "The governing law of this Agreement is the law of California without regard to conflicts principles.",
+        "Delaware", "California")]
+    [InlineData("Each party keeps the confidential information of the other secret for five years.",
+        "Each party keeps the confidential information of the other secret for five years after termination.",
+        "", " after termination")]
+    [InlineData("Each party keeps the confidential information of the other secret for five years after termination.",
+        "Each party keeps the confidential information of the other secret for five years.",
+        " after termination", "")]
+    // Control: an unedited move moves its whole text under one range per side.
+    [InlineData("Each party keeps the confidential information of the other secret for five years.",
+        "Each party keeps the confidential information of the other secret for five years.", "", "")]
+    public void Render_moved_and_edited_paragraph_moves_the_same_text_in_each_range_pair(
+        string moved, string edited, string removed, string added)
+    {
+        // Issue #1716: the source range and its destination range hold the same text; the edit is a deletion at
+        // the source and an insertion at the destination, outside the move.
+        var left = MoveDoc("Alpha opens the document.", moved, "Omega anchors the middle.", "Closing line.");
+        var right = MoveDoc("Alpha opens the document.", "Omega anchors the middle.", "Closing line.", edited);
+
+        var body = RedlineBody(RenderMarkup(left, right));
+
+        var source = Assert.Single(body.Elements(W.p), p => p.Descendants(W.moveFromRangeStart).Any());
+        var destination = Assert.Single(body.Elements(W.p), p => p.Descendants(W.moveToRangeStart).Any());
+        var sourceRanges = MoveRangeTexts(body, source: true);
+        Assert.Equal(MoveRangeTexts(body, source: false), sourceRanges);
+        Assert.All(sourceRanges, text => Assert.NotEmpty(text));
+        Assert.Equal(removed, RevisionText(source, W.del));
+        Assert.Equal(added, RevisionText(destination, W.ins));
+        Assert.Empty(RevisionText(source, W.ins) + RevisionText(destination, W.del));
+        AssertRoundTrip(left, right, label: "move-modify");
     }
 
     [Fact]
-    public void Render_moved_format_change_is_preserved_by_complete_move_halves()
+    public void Render_moved_and_edited_hyperlink_keeps_its_move_ranges_at_paragraph_level()
     {
-        // Exact text relocation with a bold change is a MoveModify. The source and destination move halves
-        // already carry the complete old and new formatting, so no independently-rejectable nested format
-        // revision is needed to reconstruct either side.
+        // Word loses an edit inside a hyperlink when a move range sits inside the link, and a link split at the
+        // ranges accepts as several links. So the link holding the edit is deleted and inserted whole, and the
+        // text around it moves (issue #1716).
+        static string Moved(string state) =>
+            "<w:p><w:r><w:t xml:space=\"preserve\">The governing law is described in </w:t></w:r>" +
+            $"<w:hyperlink w:anchor=\"target\"><w:r><w:t>the {state} section of the schedule</w:t></w:r></w:hyperlink>" +
+            "<w:r><w:t xml:space=\"preserve\"> without regard to conflicts principles.</w:t></w:r></w:p>";
+        const string intro = "<w:p><w:r><w:t>Introduction paragraph with some length to it.</w:t></w:r></w:p>";
+        const string closing = "<w:p><w:bookmarkStart w:id=\"9\" w:name=\"target\"/><w:r><w:t>Closing paragraph.</w:t></w:r>" +
+            "<w:bookmarkEnd w:id=\"9\"/></w:p>";
+        var left = IrTestDocuments.FromBodyXml(Moved("Delaware") + intro + closing);
+        var right = IrTestDocuments.FromBodyXml(intro + closing + Moved("California"));
+
+        var body = RedlineBody(RenderMarkup(left, right));
+
+        var moved = new[] { "The governing law is described in ", " without regard to conflicts principles." };
+        Assert.Equal(moved, MoveRangeTexts(body, source: true));
+        Assert.Equal(moved, MoveRangeTexts(body, source: false));
+        Assert.Equal(2, body.Descendants(W.hyperlink).Count());
+        Assert.All(body.Descendants().Where(e => e.Name.LocalName.StartsWith("move") && e.Name.LocalName.Contains("Range")),
+            marker => Assert.Equal(W.p, marker.Parent!.Name));
+        AssertRoundTrip(left, right, label: "move-modify-hyperlink");
+    }
+
+    [Fact]
+    public void Render_long_moved_and_edited_paragraph_costs_about_what_the_same_edit_in_place_does()
+    {
+        // The moved halves look up the hyperlink holding each token. In a paragraph of thousands of runs that must
+        // not scan every run per token, which made this move four times slower than the in-place edit (#1716).
+        const int words = 16000;
+        static string Runs(int from, int count) => string.Concat(Enumerable.Range(from, count)
+            .Select(i => $"<w:r><w:t xml:space=\"preserve\">word{i} </w:t></w:r>"));
+        static string Edited(string state) => "<w:p>" + Runs(0, words / 2) +
+            $"<w:hyperlink w:anchor=\"target\"><w:r><w:t xml:space=\"preserve\">the {state} section </w:t></w:r></w:hyperlink>" +
+            Runs(words / 2, words / 2) + "</w:p>";
+        const string other = "<w:p><w:bookmarkStart w:id=\"9\" w:name=\"target\"/><w:r><w:t>Closing paragraph.</w:t></w:r>" +
+            "<w:bookmarkEnd w:id=\"9\"/></w:p>";
+        var left = IrTestDocuments.FromBodyXml(Edited("Delaware") + other);
+        static TimeSpan Time(Action render)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            render();
+            return clock.Elapsed;
+        }
+
+        XElement? body = null;
+        var inPlace = Time(() => RenderMarkup(left, IrTestDocuments.FromBodyXml(Edited("California") + other)));
+        var moved = Time(() => body = RedlineBody(RenderMarkup(left, IrTestDocuments.FromBodyXml(other + Edited("California")))));
+
+        _out.WriteLine($"moved {moved}, in place {inPlace}");
+        Assert.Equal(2, MoveRangeTexts(body!, source: true).Count);
+        Assert.Equal(MoveRangeTexts(body!, source: false), MoveRangeTexts(body!, source: true));
+        Assert.True(moved < inPlace * 2 + TimeSpan.FromSeconds(2), $"moved {moved}, in place {inPlace}");
+    }
+
+    [Fact]
+    public void Session_resolves_a_moved_and_edited_paragraph_as_one_move_beside_its_edit()
+    {
+        var left = MoveDoc("Alpha opens the document.",
+            "THIRD. Maintenance. The tenant keeps the premises in good condition.", "Omega anchors the middle.");
+        var right = MoveDoc("Alpha opens the document.", "Omega anchors the middle.",
+            "FIFTH. Maintenance. The tenant keeps the premises in good condition.");
+        var redline = RenderMarkup(left, right).DocumentByteArray;
+
+        using (var session = new DocxSession(redline))
+        {
+            var move = Assert.Single(session.ListRevisions(), r => r.Family == RevisionFamily.Move);
+            Assert.Equal(RevisionResolutionStatus.Supported, move.ResolutionStatus);
+            Assert.True(session.RejectAllRevisions().Success);
+            Assert.Equal(BodyContentHashes(left), BodyContentHashes(new WmlDocument("rejected.docx", session.Save())));
+        }
+        using (var session = new DocxSession(redline))
+        {
+            Assert.True(session.AcceptAllRevisions().Success);
+            Assert.Equal(BodyContentHashes(right), BodyContentHashes(new WmlDocument("accepted.docx", session.Save())));
+        }
+    }
+
+    [Fact]
+    public void Render_moved_format_change_is_the_destination_rPrChange()
+    {
+        // Exact text relocation with a bold change is a MoveModify. Word rejects the move by carrying the
+        // destination's text back with the formatting it has after its own revisions are rejected, so the
+        // destination records the old formatting as w:rPrChange (issue #1716); the source keeps the old.
         const string anchor = "Anchor paragraph holds the document spine steady.";
         const string moved = "Moved paragraph contains enough distinct words for move detection today.";
         const string trailing = "Trailing paragraph also has enough words to stabilize matching.";
@@ -1367,19 +1488,16 @@ public class IrMarkupRendererTests
             op => op.Kind == IrEditOpKind.MoveModifyBlock && op.IsMoveSource == false);
         Assert.Contains(destinationOp.TokenDiff!.Ops, op => op.Kind == IrTokenOpKind.FormatChanged);
 
-        var rendered = RenderMarkup(left, right, settings);
+        var body = RedlineBody(RenderMarkup(left, right, settings));
 
-        using var ms = new MemoryStream(rendered.DocumentByteArray);
-        using var wd = WordprocessingDocument.Open(ms, false);
-        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
-        var source = Assert.Single(body.Elements(W.p),
-            p => p.Descendants(W.moveFromRangeStart).Any());
-        var destination = Assert.Single(body.Elements(W.p),
-            p => p.Descendants(W.moveToRangeStart).Any());
-        Assert.NotEmpty(destination.Descendants(W.moveTo));
-        Assert.Empty(destination.Descendants(W.rPrChange));
+        var source = Assert.Single(body.Elements(W.p), p => p.Descendants(W.moveFromRangeStart).Any());
+        var destination = Assert.Single(body.Elements(W.p), p => p.Descendants(W.moveToRangeStart).Any());
+        Assert.Equal(new[] { moved }, MoveRangeTexts(body, source: false));
+        Assert.Equal(new[] { moved }, MoveRangeTexts(body, source: true));
         Assert.Empty(source.Descendants(W.b));
-        Assert.NotEmpty(destination.Descendants(W.b));
+        var run = Assert.Single(destination.Descendants(W.moveTo).Elements(W.r));
+        Assert.NotNull(run.Element(W.rPr)!.Element(W.b));
+        Assert.Empty(run.Element(W.rPr)!.Element(W.rPrChange)!.Element(W.rPr)!.Elements());
         AssertRoundTrip(left, right, settings, label: "move-format");
     }
 
@@ -1449,11 +1567,16 @@ public class IrMarkupRendererTests
         // One move has two revisions, its source and its destination.
         Assert.Equal(2, moved.Count);
         Assert.All(moved, revision => Assert.Contains("Upkeep", revision.Text));
+        // The renumbered ordinal is deleted and inserted beside the move, which moves the same text (#1716).
+        var body = RedlineBody(DocxCompare.Compare(left, right));
+        Assert.Equal(new[] { ". Upkeep. The lessee looks after the flat and covers small repairs from everyday wear." },
+            MoveRangeTexts(body, source: true));
+        Assert.Equal(MoveRangeTexts(body, source: true), MoveRangeTexts(body, source: false));
         AssertRoundTrip(left, right, label: "issue-1714");
     }
 
     [Fact]
-    public void Render_issue_359_move_and_edit_keeps_the_destination_atomic()
+    public void Render_issue_359_move_and_edit_keeps_deleted_text_out_of_the_destination()
     {
         const string movedLeft =
             "The governing law of this Agreement is the law of Delaware without regard to conflicts principles.";
@@ -1484,20 +1607,12 @@ public class IrMarkupRendererTests
             revision => revision.Type == DocxDiffRevisionType.Deleted && revision.Text.Contains("Delaware"));
         Assert.Equal(0, SchemaErrorCount(rendered));
 
-        using var ms = new MemoryStream(rendered.DocumentByteArray);
-        using var wd = WordprocessingDocument.Open(ms, false);
-        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
-        var source = Assert.Single(body.Elements(W.p),
-            p => p.Descendants(W.moveFromRangeStart).Any());
-        var destination = Assert.Single(body.Elements(W.p),
-            p => p.Descendants(W.moveToRangeStart).Any());
-        Assert.DoesNotContain(destination.Descendants(W.ins), e => !e.Ancestors(W.pPr).Any());
-        Assert.DoesNotContain(destination.Descendants(W.del), e => !e.Ancestors(W.pPr).Any());
-        Assert.Equal(movedLeft,
-            string.Concat(source.Descendants(W.moveFrom).Descendants()
-                .Where(e => e.Name == W.t || e.Name == W.delText).Select(e => (string?)e)));
-        Assert.Equal(movedRight,
-            string.Concat(destination.Descendants(W.moveTo).Descendants(W.t).Select(t => (string?)t)));
+        // A deletion nested in the destination is rejected on its own and left behind (issue #359): the old word
+        // is deleted at the source, and both halves move the same text (issue #1716).
+        var body = RedlineBody(rendered);
+        var destination = Assert.Single(body.Elements(W.p), p => p.Descendants(W.moveToRangeStart).Any());
+        Assert.Empty(RevisionText(destination, W.del));
+        Assert.Equal(MoveRangeTexts(body, source: false), MoveRangeTexts(body, source: true));
         AssertRoundTrip(left, right, settings, label: "issue-359");
     }
 

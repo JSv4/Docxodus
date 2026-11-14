@@ -6648,7 +6648,8 @@ namespace Docxodus
                     : null,
                 SourceAnchorIdentityAttribute(settings, element),
                 CreateColGroup(element),
-                element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
+                KeepContentInCells(element.Elements()
+                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)), Xhtml.tr));
             // Some producers retain a table after removing its last row. Keep its source identity,
             // but an empty table has no painted row and cannot supply a PageMap rectangle.
             if (!table.Descendants(Xhtml.tr).Any())
@@ -6720,6 +6721,54 @@ namespace Docxodus
                     { { "display", "flex" }, { "justify-content", "center" } });
             }
             return tableDiv;
+        }
+
+        /// <summary>
+        /// The rendered rows of a table (<paramref name="item"/> <c>tr</c>) or cells of a row
+        /// (<c>td</c>), with everything else rendered among them moved into a cell (issue #1737).
+        /// </summary>
+        /// <remarks>
+        /// HTML admits only rows in a table and only cells in a row. A parser moves anything else out
+        /// in front of the table, away from the row it marks, and a table with content beside it no
+        /// longer splits between rows. WordprocessingML lets range boundaries such as bookmarks and
+        /// tracked custom XML ranges sit between cells and between rows, so each one renders as the
+        /// adjacent cell's own content would: at the start of the cell that follows it (between rows,
+        /// the next row's first cell), or else at the end of the last cell before it. Nothing is
+        /// dropped: a row or table with no cell of its own keeps the content beside its rows or cells.
+        /// </remarks>
+        private static List<XNode> KeepContentInCells(IEnumerable<object?> content, XName item)
+        {
+            // Flatten nested projections (a custom XML wrapper renders a list) without cloning:
+            // a clone drops the style annotations every converted element carries.
+            var container = new XElement(Xhtml.div, content);
+            var loose = new List<XNode>();
+            XElement? lastCell = null;
+            foreach (var node in container.Nodes().ToList())
+            {
+                if (node is not XElement element || element.Name != item)
+                {
+                    node.Remove();
+                    loose.Add(node);
+                }
+                else if (CellsOf(element) is { Count: > 0 } cells)
+                {
+                    cells[0].AddFirst(loose);
+                    loose.Clear();
+                    lastCell = cells[^1];
+                }
+            }
+            (lastCell ?? container).Add(loose);
+            var nodes = container.Nodes().ToList();
+            container.RemoveNodes();
+            return nodes;
+
+            // A row's own cells, without the filler for an omitted w:gridBefore, each as the box that
+            // holds its content: an exact-height row's cell holds it in a clip box.
+            static List<XElement> CellsOf(XElement element) =>
+                (element.Name == Xhtml.td ? new[] { element } : element.Elements(Xhtml.td))
+                    .Where(cell => cell.Attribute("aria-hidden") == null)
+                    .Select(cell => cell.Elements().FirstOrDefault(e => e.Attribute("data-docx-exact-row-cell") != null) ?? cell)
+                    .ToList();
         }
 
         /// <summary>
@@ -7077,7 +7126,8 @@ namespace Docxodus
             var heightElement = element.Elements(W.trPr).Elements(W.trHeight).FirstOrDefault();
             var trHeight = TableRowHeightInTwips(heightElement?.Attribute(W.val));
             var heightRule = (string?)heightElement?.Attribute(W.hRule) ?? "atLeast";
-            var cells = element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)).ToList();
+            var cells = KeepContentInCells(element.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)), Xhtml.td);
             var grid = element.Ancestors(W.tbl).FirstOrDefault()?.Annotation<TableRenderingGrid>();
             var omitted = grid == null ? 0 : Internal.TableGridModel.GridBefore(element) - grid.LeadingColumns;
             if (omitted > 0)
@@ -13639,9 +13689,15 @@ namespace Docxodus
                 return imageHtml;
 
             // The anchor's dist* attributes are text clearance around the object, which is
-            // exactly what CSS margins are on a float.
+            // exactly what CSS margins are on a float. A picture placed below its paragraph's
+            // top also carries that offset in its top margin (see the inset below).
             var style = new Dictionary<string, string> { { "float", side } };
-            AddEmuPadding(style, "margin-top", DrawingWrapDistance((long?)drawingContainer.Attribute(NoNamespace.distT)));
+            var positionV = drawingContainer.Element(WP.positionV);
+            var paragraphOffset = (string?)positionV?.Attribute(NoNamespace.relativeFrom) == "paragraph"
+                ? (long?)positionV?.Element(WP.posOffset) : null;
+            var lowered = paragraphOffset is > 0 ? paragraphOffset.Value : 0L;
+            var topDistance = DrawingWrapDistance((long?)drawingContainer.Attribute(NoNamespace.distT));
+            AddEmuPadding(style, "margin-top", lowered > 0 ? (topDistance ?? 0) + lowered : topDistance);
             var rightDistance = DrawingWrapDistance((long?)wrap.Attribute(NoNamespace.distR)
                 ?? (long?)drawingContainer.Attribute(NoNamespace.distR));
             var leftDistance = DrawingWrapDistance((long?)wrap.Attribute(NoNamespace.distL)
@@ -13688,11 +13744,10 @@ namespace Docxodus
             }
 
             var wrapper = new XElement(Xhtml.span, imageHtml);
-            var positionV = drawingContainer.Element(WP.positionV);
-            if (relativeFrom == "column" &&
-                ((side == "left" && (alignment == "left" || offset == 0)) || (side == "right" && alignment == "right")) &&
-                (string?)positionV?.Attribute(NoNamespace.relativeFrom) == "paragraph" &&
-                (long?)positionV?.Element(WP.posOffset) == 0)
+            // Every wrapping float rests against a column edge, an offset one behind its clearance
+            // margin. One placed from its paragraph's top keeps that place below the top of whichever
+            // page fragment holds it, so pagination can split the paragraph around it (#1736).
+            if (paragraphOffset >= 0)
                 wrapper.SetAttributeValue("data-docx-edge-picture", "true");
             if (style.ContainsKey("shape-outside"))
             {
@@ -13700,6 +13755,10 @@ namespace Docxodus
                 style["--docx-wrap-distance-left"] = ((leftDistance ?? 0) / 12700m).ToString("0.####", NumberFormatInfo.InvariantInfo) + "pt";
                 style["--docx-wrap-distance-right"] = ((rightDistance ?? 0) / 12700m).ToString("0.####", NumberFormatInfo.InvariantInfo) + "pt";
             }
+            // Text above a lowered picture is not wrapped: its rectangle excludes text only from the
+            // picture's own clearance down. A contour is drawn from the picture's border box already.
+            else if (lowered > 0)
+                style["shape-outside"] = "inset(" + (lowered / 12700m).ToString("0.####", NumberFormatInfo.InvariantInfo) + "pt 0 0 0) margin-box";
             wrapper.AddAnnotation(style);
             return wrapper;
         }

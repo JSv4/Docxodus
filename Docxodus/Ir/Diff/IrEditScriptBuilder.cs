@@ -1505,6 +1505,8 @@ internal static class IrEditScriptBuilder
             for (; j < entries.Count &&
                    entries[j].Kind is IrAlignmentKind.Inserted or IrAlignmentKind.Deleted; j++)
             {
+                if (entries[j].Rewrite)
+                    return 0;
                 if (entries[j].Kind == IrAlignmentKind.Deleted)
                 {
                     if (!Eligible(entries[j].Left, out var dp))
@@ -1593,6 +1595,7 @@ internal static class IrEditScriptBuilder
         var rightParas = new List<IrParagraph>();
         var pairs = new List<(int L, int R)>();
         var sectionEntries = new List<IrAlignedBlock>();
+        bool hasRewrite = false;
         int j = start;
         for (; j < entries.Count; j++)
         {
@@ -1624,12 +1627,14 @@ internal static class IrEditScriptBuilder
                     HasStructuralCarrier(dp))
                     break;
                 leftParas.Add(dp);
+                hasRewrite |= e.Rewrite;
             }
             else if (e.Kind == IrAlignmentKind.Inserted)
             {
                 if (e.Right is not IrParagraph ip || !IrCrossParagraphSegmenter.IsStreamable(ip) ||
                     HasStructuralCarrier(ip))
                     break;
+                hasRewrite |= e.Rewrite;
                 rightParas.Add(ip);
             }
             else if (e.Kind == IrAlignmentKind.Modified)
@@ -1660,6 +1665,12 @@ internal static class IrEditScriptBuilder
             pairsOnlyRegionEnd = j;
             return null;
         }
+        // A pair the aligner released as a rewrite (#1739) is not streamed into a region that still
+        // holds a pair: matching its labels and articles against that pair, or its old against its
+        // new text, would restore the correspondence just rejected. Without a pair, the zero-pair
+        // rules below still demand a shared content word.
+        if (hasRewrite && pairs.Count > 0)
+            return null;
         // MAXIMALITY: the stream owns whole regions, never fragments. If more one-sided gap matter
         // directly precedes the start (an upstream non-streamable/table break) or the collection
         // broke ON a one-sided entry (a mid-gap table or non-streamable paragraph), this run is a

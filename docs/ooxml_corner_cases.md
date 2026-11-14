@@ -2971,6 +2971,200 @@ paragraph mark in Docxodus output.
 `Docxodus.Tests/DocxDiffTextMoveTests.cs` (`TextBelowTheMinimumWordCount_IsNotAMove`,
 `TextBelowTheMinimum_IsAMove_WhenTheMinimumIsLowered`).
 
+## Compare: a paragraph is edited in place only while its diff keeps an eighth of its text (#1739)
+
+### The corner case
+
+Word's Compare draws an old and a new paragraph as one edited paragraph only while its word diff keeps
+about an eighth of the longer paragraph's characters. Below that it deletes the old paragraph and inserts
+the new one, even when the two share a clause label and a dozen articles and prepositions. Docxodus paired
+any two paragraphs that shared such words and diffed them word by word, so a document rewritten throughout
+came back as thousands of short insertions and deletions threaded around the shared words.
+
+### Minimal reproducer
+
+```xml
+<!-- original body -->
+<w:p><w:r><w:t>Clause 1</w:t></w:r></w:p>
+<w:p><w:r><w:t>(a) For courier by with for warehouse on supplier voucher for by ledger supplier manifest courier with.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Clause 2</w:t></w:r></w:p>
+<!-- revised body: the middle paragraph only -->
+<w:p><w:r><w:t>(a) Lease garden tenant of for utilities and utilities on fixtures notice repair fixtures by notice tenant.</w:t></w:r></w:p>
+```
+
+Word deletes the old clause and inserts the new one. Docxodus used to keep `(a) `, `for`, `on`, `by` and the
+period unmarked and interleave the rest.
+
+### Behavior table
+
+Word 2024, Compare Documents at word level; each case is one paragraph between unchanged ones. "Kept" is the
+share of the longer paragraph's characters that Word's diff leaves unmarked, spaces included (for a replaced
+pair, what the obvious in-order diff would keep). LibreOffice was not measured.
+
+| Pair | Kept | Word | Docxodus before | Docxodus after |
+|---|---|---|---|---|
+| 20 six-letter words, 3 kept in place | 0.18 | edited in place | edited in place | edited in place |
+| 20 six-letter words, 2 kept | 0.11 | deleted + inserted | edited in place | deleted + inserted |
+| 10 six-letter words, 1 kept | 0.13 | edited in place | edited in place | edited in place |
+| 12 six-letter words, 1 kept | 0.11 | deleted + inserted | edited in place | deleted + inserted |
+| one 12-letter word kept among 19 four-letter words | 0.14 | edited in place | edited in place | edited in place |
+| 5 three-letter words kept among 15 nine-letter words | 0.14 | edited in place | edited in place | edited in place |
+| 4 three-letter words kept among 16 nine-letter words | 0.11 | deleted + inserted | edited in place | deleted + inserted |
+| every noun replaced, articles and prepositions where they were | 0.44 | edited in place | edited in place | edited in place |
+| a rewritten clause sharing its label and scattered short words | — | deleted + inserted | edited in place | deleted + inserted |
+| the same twenty words in reverse order | 0.06 | deleted + inserted | edited in place | deleted + inserted |
+| 2 words, 8 appended | 0.20 | edited in place | edited in place | edited in place |
+| 2 words, 16 appended | 0.11 | deleted + inserted | edited in place | edited in place |
+| 30 words cut to their first 2 (the WC007 pair) | 0.07 | deleted + inserted | edited in place | deleted + inserted |
+| 30 words cut to their first 4 | 0.13 | deleted + inserted | edited in place | edited in place |
+| the issue's 400-clause rewrite: text-bearing `w:del` | | 428, median 239 characters | 2,233, median 28 | 462, median 235 |
+| the same: revisions as Word counts them | | 161 | 4,462 | 268 |
+| the 3,000-clause rewrite: text-bearing `w:del` | | 3,275, median 238 | 16,680, median 28 | 3,554, median 234 |
+
+The story's final paragraph follows the same rule; Word then draws the deletion and the insertion inside one
+paragraph, since the last paragraph mark stays.
+
+### Analysis
+
+Across 152 single-paragraph probes, Word's decision follows the kept share with a boundary between 0.118 and
+0.129 for edits that keep their words in order. Characters count, not words: one kept 12-letter word holds
+twenty short words in place, while five kept three-letter words are needed among long ones. Short words are
+not discounted as such: articles and prepositions left where they were hold a paragraph whose every noun
+changed, and so do four aligned "the" (a case Docxodus does not pair at all, before or after this change).
+
+What separates a heavy edit from a rewrite is which words a diff can keep. A longest common subsequence of two
+unrelated sentences threads together every chance match of a recurring short word, keeping 0.13–0.20 of the
+text, and Word's own diff keeps fewer of them and replaces the paragraph. Docxodus therefore measures the kept
+share with a longest-run-first match (Ratcliff/Obershelp): common prefix and suffix, then the longest common
+run of words and punctuation, then the same on either side of it, each kept token counting its characters
+plus one space. With a floor of one eighth it agrees with Word on 140 of the 152 probes (118 before) and
+replaces 388 of the issue fixture's 400 rewritten clauses (Word replaced all 400). The disagreements sit at
+the boundary, where Word's diff keeps sometimes more and sometimes less than the longest-run-first match:
+
+- six of ten one-sentence rewrites of about sixteen words, where Word kept two shared function words and
+  edited in place (share about 0.10 here);
+- twelve of the fixture's two-sentence clauses (share 0.125–0.152), which Word replaced. In isolation Word
+  kept one of the four highest of them in place and replaced the other three;
+- a paragraph cut from 30 words to its first four (0.13), and one grown from two words to eighteen (0.11 in
+  Word's count, 0.127 in this one), both replaced by Word.
+
+A released pair must also stay released when the redline is arranged. The cross-paragraph token stream
+would otherwise take released rewrites into the region of a neighbouring pair that stayed paired, or stream
+a gap of rewrites on their shared clause labels, matching labels, articles and stray parentheses across
+paragraph boundaries; on the fixture that interleaved 176 paragraphs. A region that still holds a pair
+therefore does not take in a released rewrite, and a lone letter such as the `b` of `(b)` no longer counts
+as the content word a pairless region needs to stream, any more than a number does. A pairless region whose
+paragraphs share real words still streams as before: Word, too, keeps a deleted paragraph's leading word
+when it reappears at the head of the next one. In regions of short one-sentence clauses Word sometimes
+streams a shared label and two or three articles across rewritten clauses; Docxodus keeps those clauses
+whole.
+
+The match decides only whether two paragraphs correspond; a pair kept in place is still rendered by the
+token diff. A rewrite is not matched as a moved paragraph either.
+
+Observed in the same runs and left unchanged: in a region of several replaced paragraphs Word 2024 writes all
+the deleted paragraphs before the inserted ones, where Docxodus's replace-gap arrangement writes the insertions
+first; and Word deletes and inserts a one-word paragraph replaced by another word (`Two` → `Two1`), which
+Docxodus keeps paired so that reviewer edits of such labels still compose in `Consolidate`.
+
+### Relevant code
+
+- `Docxodus/Ir/Diff/IrBlockSimilarity.cs` — `IsRewrite`, also consulted by `ResidueForcePair`.
+- `Docxodus/Ir/Diff/IrBlockAligner.cs` — `ReleaseRewrites` in the gap fill, and `DetectCrossGapMoves`.
+- `Docxodus/Ir/Diff/IrEditScriptBuilder.cs` (`TryBuildStoryFinalMixedRegionOp`, `TryCollectStoryFinalTail`) and
+  `Docxodus/Ir/Diff/IrCrossParagraphSegmenter.cs` — released rewrites in the token stream.
+
+### Tests
+
+`Docxodus.Tests/Ir/Diff/IrBlockAlignerTests.cs`
+(`Paragraph_stays_paired_only_while_its_diff_keeps_an_eighth_of_its_text`,
+`Clause_label_and_scattered_short_words_do_not_keep_a_rewrite_paired`,
+`Short_words_in_place_and_long_kept_words_keep_a_heavy_edit_paired`,
+`Reversed_paragraph_is_replaced_not_moved`), `Docxodus.Tests/DocxDiffGapArrangementTests.cs`
+(`InteriorRewrite_IsReplacedWhole_UnlessItKeepsAnEighthOfItsText`,
+`RewrittenClauses_StayWhole_BesideAnEditedClauseOrNone`) and
+`Docxodus.Tests/DocxDiffWordShapeTests.cs` (`InteriorWeakPair_IsReplacedWhole`).
+
+## Compare: rejecting a moved and edited paragraph (#1716)
+
+### The corner case
+
+Word rejects a move by carrying the destination's moved text back to the source; it does not restore what
+`w:moveFrom` holds. A redline whose `w:moveFrom` holds the complete original paragraph and whose `w:moveTo`
+holds the complete revised one therefore rejects, in Word, to the revised paragraph in the original's place.
+Word pairs a name's move ranges in order, the k-th source range with the k-th destination range, and it
+replaces the whole content of a source range, so a deletion inside a source range is lost too.
+
+### Minimal XML reproducer
+
+Original: `Alpha` / `THIRD. Maintenance. The tenant keeps the premises in good condition.` / `Omega`.
+Revised: `Alpha` / `Omega` / `FIFTH. Maintenance. …`. What Docxodus wrote before the fix:
+
+```xml
+<w:p><w:moveFromRangeStart w:id="1" w:name="move1" .../>
+  <w:moveFrom ...><w:r><w:t>THIRD. Maintenance. …</w:t></w:r></w:moveFrom><w:moveFromRangeEnd w:id="1"/></w:p>
+<w:p><w:r><w:t>Omega</w:t></w:r></w:p>
+<w:p><w:moveToRangeStart w:id="4" w:name="move1" .../>
+  <w:moveTo ...><w:r><w:t>FIFTH. Maintenance. …</w:t></w:r></w:moveTo><w:moveToRangeEnd w:id="4"/></w:p>
+```
+
+What it writes now: only the shared text moves, and the edit sits outside every range.
+
+```xml
+<w:p><w:del ...><w:r><w:delText>THIRD</w:delText></w:r></w:del>
+  <w:moveFromRangeStart w:id="1" w:name="move1" .../>
+  <w:moveFrom ...><w:r><w:t>. Maintenance. …</w:t></w:r></w:moveFrom><w:moveFromRangeEnd w:id="1"/></w:p>
+<w:p><w:ins ...><w:r><w:t>FIFTH</w:t></w:r></w:ins>
+  <w:moveToRangeStart w:id="4" w:name="move1" .../>
+  <w:moveTo ...><w:r><w:t>. Maintenance. …</w:t></w:r></w:moveTo><w:moveToRangeEnd w:id="4"/></w:p>
+```
+
+### Behavior table
+
+Hand-written redlines of one moved paragraph, opened in Word 2024 (16.0.20326) and resolved with
+`Revisions.RejectAll` / `AcceptAll`. Accept All gave the revised document for every shape.
+
+| Shape | Word Reject All | Docxodus `RevisionProcessor` reject | LibreOffice |
+|---|---|---|---|
+| Complete old text in `w:moveFrom`, complete new text in `w:moveTo` | the revised wording at the source | the original | not adjudicated |
+| The same, the destination run bold (a format-only change) with no `w:rPrChange` | the moved text stays bold | the original | not adjudicated |
+| The destination run bold, with `w:rPrChange` recording the old formatting | the original | the original | not adjudicated |
+| Shared text moved; edit `w:del` at the source and `w:ins` at the destination, outside the ranges, one range per stretch | the original | the original | not adjudicated |
+| The same, but one range per side with the `w:del`/`w:ins` inside it | the deleted word is lost | the original | not adjudicated |
+| One range per stretch under one `w:name`, or a name per stretch; stretches adjacent on one side | the original | the original | not adjudicated |
+| A pure insertion: one source range, two destination ranges under one name | the first stretch is lost | the original | not adjudicated |
+| A pure deletion: two source ranges, one destination range | the text is duplicated | the original | not adjudicated |
+| An edit inside a hyperlink, the move ranges inside the link | the deleted word is lost | the original | not adjudicated |
+| An edit inside a hyperlink, ranges at paragraph level and the link split at them | the original | the original, but as three links | not adjudicated |
+| An edit inside a hyperlink, the whole link deleted at the source and inserted at the destination, ranges around the text outside it | the original; Word leaves an empty `w:hyperlink` shell where it removed a link | the original | not adjudicated |
+| The destination centred with or without `w:pPrChange` | the original (paragraph properties stay with the source) | the original | not adjudicated |
+
+Word's own Compare of the same pair writes this shape. For the #1714 fixture it moves
+` Upkeep. The lessee looks after the flat …` and inserts `FIFTH.` beside the destination range.
+
+### Analysis
+
+A move is one piece of content in two places, so Word keeps one copy of it, the destination's, and rejects
+by moving that copy back, range for range. The redline must therefore hold the same moved text in both
+halves, in the same number of ranges, and express the edit as ordinary revisions outside the ranges: a
+deletion at the source, an insertion at the destination. A deletion is never placed at the destination,
+where a consumer that rejects it on its own leaves the old text behind (#359).
+
+### Docxodus code
+
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs` — `EditedMoveContent` draws both halves from the pair's token diff;
+  `RenderState.IndexEditedMoves` lets either half find the other. Shared text is cut at hyperlink edges and a
+  hyperlink that holds an edit is all edit, so no range sits inside a link and the link stays whole on accept
+  and reject.
+
+### Tests
+
+`IrMarkupRendererTests.Render_moved_and_edited_paragraph_moves_the_same_text_in_each_range_pair`,
+`Render_moved_format_change_is_the_destination_rPrChange`,
+`Render_moved_and_edited_hyperlink_keeps_its_move_ranges_at_paragraph_level`,
+`Session_resolves_a_moved_and_edited_paragraph_as_one_move_beside_its_edit`, and
+`IrCompositeMoveTests.Single_reviewer_moved_and_edited_paragraph_moves_the_same_text_in_both_halves`.
+
 ## Tables: a negative `w:tblInd` pulls an over-wide table into the left margin
 
 Word indents a table wider than the text column by a negative amount so it spreads across both
@@ -6474,7 +6668,7 @@ with `<v:imagedata r:id="picture"/>`. The related part belongs to its body/heade
 | Identical PNG/TIFF pixels | Fresh PDF capture paints the graphic | Both paint the same graphic | PNG unchanged; TIFF normalized to PNG with identical rendered pixels |
 | WMF picture stretched to twice its height | Fresh DrawingML capture stretches the complete outline: 3pt vertical edges, 6pt horizontal edges | Keeps a uniform 3pt outline | SVG transforms the complete painted graphic, matching Word's scaling |
 | WMF window x scales 0.5, 1 and 2 | Fresh captures exclude 2, 1 and 0 logical units from right bounds; pen scales on both axes | Uses different ellipse center rounding and uniform pen scaling | Resolves device-pixel exclusion before transforming logical shapes and paint |
-| Visible zero-width WMF pen | Fresh PDF uses a printer-device hairline (about 0.14pt before picture scaling) | Device-dependent | Explicit unsupported-content diagnostic; no assumed printer resolution |
+| Visible zero-width WMF pen | Fresh PDF uses a printer-device hairline (about 0.14pt before picture scaling) | Device-dependent | One CSS pixel, as EMF cosmetic pens (#1706; was an unsupported-content diagnostic) |
 | Grouped VML image sizing | Not measured; the diagnostic VML carrier printed a linked-image error | Uniform pen width follows horizontal scale | Uses the same transformed image as DrawingML; carrier placement is tested separately |
 | Unsupported TIFF colorimetry or WMF records | Not measured | Provider-dependent | Explicit placeholder/warning; strict export refuses it |
 
@@ -6494,10 +6688,12 @@ later picture stretching also stretches the outline. LibreOffice instead shifts 
 ellipse's integer center and keeps its pen uniform, so it is not the geometry oracle here.
 
 The SVG viewBox retains the unrounded physical size. Only its width/height attributes round
-up to positive intrinsic dimensions. Bounds that collapse after device-pixel exclusion and
-visible zero-width pens reject the whole image, including previously decoded shapes. Null
-pens remain supported. This prevents a printer-specific hairline from silently becoming a
-different CSS-pixel stroke.
+up to positive intrinsic dimensions. Bounds that collapse after device-pixel exclusion reject
+the whole image, including previously decoded shapes. A visible zero-width pen first did too, so
+that a printer-specific hairline would not silently become a different stroke; since #1706 it draws
+one CSS pixel wide, as an EMF cosmetic pen does, because PowerPoint's WMF export outlines shapes
+with such pens and refusing them kept those pictures as placeholders. That is a screen pixel, not
+the printer hairline above.
 
 The supported subsets and bounds follow [TIFF 6.0](https://www.itu.int/itudoc/itu-t/com16/tiff-fx/docs/tiff6.pdf)
 and Microsoft's [WMF format](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wmf/).
@@ -6956,16 +7152,63 @@ Other things the render settled:
 - **Word sets under/over limits beside an inline n-ary operator** (`∑` with `limLoc` `undOvr`
   draws as `∑ᵢⁿ` in a line of text and stacked in a display equation), which is what
   `movablelimits="true"` gives.
-- **Known remaining differences, not fixed here.** Word sets `k=0` in a limit or script tight;
-  Chromium keeps full operator spacing at script size. And a run that *starts* with an operator
-  (`<m:r>a</m:r><m:r>+c</m:r>`) loses the space before it: each run is its own `mrow`, so MathML
-  reads a leading `+` as a prefix operator. That is how runs were already projected before these
-  structures were added.
+- **Known remaining difference, not fixed here.** Word sets `k=0` in a limit or script tight;
+  Chromium keeps full operator spacing at script size. (A run that *starts* with an operator after
+  an operand, `<m:r>a</m:r><m:r>+c</m:r>`, used to lose the space before it; see the next section.)
 
 Code: `WmlToHtmlConverter.Math.cs` (`MathExpression`, `MathCellAlignment`). Tests:
 `A_bar_is_a_rule_as_wide_as_its_operand`, `Matrix_columns_keep_their_justification`,
 `Display_equation_arrays_keep_display_style_and_align_rows_at_their_points`,
 `A_linear_fraction_slash_is_set_tight`.
+
+### What Word 2024 draws for the rest of OMML: spaces, ordinary text, styles, phantoms, skewed fractions, strikes, lines (#1705)
+
+Two kinds of document, both exported to PDF by Word 16.0.20326 and measured from the PDF's glyph
+positions (12 pt Cambria Math): documents written by hand with one equation per variant, and a
+document Word built itself through its object model, with its equation gallery and typed equations
+made bold, italic or coloured, phantoms, struck border boxes, a skewed fraction, Shift+Enter lines
+and "Align at this character". Word wrote `w:eastAsiaTheme="minorEastAsia"` into that document's
+run fonts, which still keeps every equation on the placeholder (#1726 handles it), so it was counted
+with that attribute removed: on `main` 28 of its 37 equations were placeholders; with this change all
+37 draw. The MathML was rendered in Chromium with Cambria Math and compared by
+eye.
+
+| OMML | Word 2024 | Docxodus |
+| --- | --- | --- |
+| spaces in `m:t` (`a b`, `a  b`, `a    b`, no-break space) | each at the font's space width (about 0.22 em), added to any operator spacing; an em space is 1 em | an `mtext` keeping the characters (`white-space: pre`): the font's own widths |
+| one space after a comma | absorbed: `a, b` is exactly as wide as `a,b` | drawn, so 0.2 em wider |
+| exactly two spaces after a comma, display math | a 2 em gap, which the gallery's Taylor expansion (`+⋯,  −∞<x<∞`) relies on; three or more are drawn at their width, and inline two are | drawn at their width: the Taylor expansion's gap is about 0.5 em where Word's is 2 em |
+| `m:nor` | text in the run's font (Cambria Math from the `w:rFonts` Word writes on it; the paragraph's Calibri without them), no math italics, no operator spacing (`speed+2`); `w:b`/`w:i` make it bold or italic; an `m:sty` on it changes nothing | one `mtext` in the run's weight, slope and colour; without `w:rFonts` it keeps the placeholder |
+| `m:sty` `b`/`bi` | letters and digits bold; `+ = , ( ) ∞` plain; `∂ ∇` bold | the same |
+| `w:b`, `w:i` on a math run | change nothing | change nothing |
+| letters with no form in the run's alphabet | Cyrillic plain in every style; script, fraktur and sans-serif Greek plain; Hebrew bold under `b`/`bi` | placeholder, as before |
+| `m:phant` | shown unless `m:show` is off; `zeroWid` draws the operand from its start over what follows (`x` over the next `+`); `zeroAsc`/`zeroDesc` let it overflow a radical around it; a shown phantom of `+` between `a` and `b` is set tight, like an ordinary atom; `m:transp` changed nothing in four cases | `mphantom` and `mpadded`; a phantom made of one operator has the operator's spacing removed |
+| `m:f` `skw` | operands full size beside U+2044, the numerator raised about 0.33 em and the denominator lowered until its top is about 0.25 em above the baseline (0.44 em for `b`, 0.41 em for `2`, 0.21 em for `y`); the slash overlaps each operand by about 0.07 em and grows around a stacked fraction | fixed offsets of 0.33 em and −0.42 em, slash at its own size: an x-height denominator sits 0.2 em lower than Word's, the fraction is about 0.15 em wider, and a tall operand gets a smaller slash. MathML Core has no bevelled fraction, and Chromium clamps a negative `lspace` |
+| `m:borderBox` `strikeH`/`strikeV`/`strikeBLTR`/`strikeTLBR` | a line through the box's middle, or from corner to corner | one `linear-gradient` background layer each, with `print-color-adjust: exact` so printing keeps it |
+| `m:brk`, with or without `m:alnAt` | ignored while the equation fits its line; in a longer one the line breaks there and the rest wraps | drawn as one line (the projection never breaks an equation) |
+| `w:br` in a run, as Shift+Enter writes it | starts a new line; several `m:oMath` without one run on as one line | the same, as `mtable` rows |
+| `m:aln` under `m:defJc` `centerGroup` | the lines sit at the first line's left edge; a line with a point moves so the point lines up with the first such line's; one point changes nothing | every line or one line with a point: aligned columns or one left-aligned column; points on only some lines: placeholder |
+| `m:aln` under `m:defJc` `center` | each line centred on its own; points change nothing | one centred column |
+| `w:color` in a structure's `m:ctrlPr` | paints only the structure's own glyphs (fraction bar, radical, fences, ∑, accent, border); the operands keep theirs | CSS `color` on the structure; since MathML operands inherit it, drawn only when every run inside carries a colour of its own |
+| an operator starting a run after an operand (`x²` then `+1`) | binary: `x² + 1` | the run joins its argument's row, so MathML reads the operator as binary; before, first in the run's own `mrow`, it was a tight prefix (`x²+1`). An explicit `form="infix"` would give `!` or a typed `)` default spacing in Chromium |
+
+Line breaks are why `m:oMathPara` can hold several `m:oMath`: Word writes Shift+Enter as
+`<m:r><w:rPr>…</w:rPr><w:br/></m:r>` closing one `m:oMath` and starts the next, and "Align at this
+character" as `<m:rPr><m:aln/></m:rPr>` on the run that begins with the chosen operator. The
+object model's `OMathBreaks.Add` writes `<m:rPr><m:brk/></m:rPr>` on the run starting at the operator,
+which, as the table says, Word then ignores while the equation fits.
+
+Not modelled, and recorded here: Word's comma-and-space rule above, the skewed fraction's
+content-dependent offsets and growing slash, and lines where only some carry an alignment point.
+
+Code: `WmlToHtmlConverter.Math.cs` (`MathRunTokens`, `MathLines`, `MathAddRows`, `MathExpression`).
+Tests: `HtmlMathTests` (`A_display_equation_with_a_run_of_spaces_draws_through_the_public_converter`,
+`Ordinary_text_is_one_text_token_in_its_own_weight_and_slope`,
+`Math_run_styles_change_letters_and_digits_and_leave_operators_plain`,
+`Display_lines_are_table_rows_lined_up_at_their_alignment_points`, `A_manual_break_changes_nothing_on_one_line`,
+`A_structure_is_drawn_in_its_control_colour_when_its_operands_carry_their_own`,
+`An_operator_that_starts_a_run_after_an_operand_is_not_first_in_its_row` and the phantom, skewed-fraction and
+strike tests).
 
 ### Bounds on equation input (#1705)
 
@@ -7188,6 +7431,73 @@ while a direct CSS float stays below the preceding text. Moving only the cloned 
 would invalidate source line measurements and wrapping. That requires destination-fragment
 reflow, beyond this fix. The partial-page difference above also remains an explicit policy
 limitation; neither it nor minimum-height-row clipping is resolved by this change.
+
+## A picture placed from its paragraph's top sits below the top of its page fragment (#1736)
+
+A square-wrapped picture placed by a vertical offset from its paragraph prints that far below the
+top of the paragraph, however its horizontal position is given, and the lines above it are not
+wrapped. When the paragraph runs over several pages, Word measures the offset from the top of the
+part of the paragraph that holds the picture's run, not from the top of the whole paragraph.
+
+```xml
+<w:p>
+  <w:r><w:t xml:space="preserve">Item 1 … Item 3 of the field log … </w:t></w:r>
+  <w:r><w:drawing><wp:anchor distT="0" distB="0" distL="114300" distR="114300" …>
+    <wp:simplePos x="0" y="0"/>
+    <wp:positionH relativeFrom="column"><wp:posOffset>3800000</wp:posOffset></wp:positionH>
+    <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+    <wp:extent cx="1828800" cy="1280160"/><wp:wrapSquare wrapText="bothSides"/>
+    <!-- docPr and an ordinary picture graphic follow -->
+  </wp:anchor></w:drawing></w:r>
+  <w:r><w:t xml:space="preserve">Item 4 … Item 120 of the field log …</w:t></w:r>
+</w:p>
+```
+
+Measured in desktop Word 2024 (16.0.20326, Windows 11) by saving PDF through `SaveAs2`: A4 with 1 in
+margins, a styles part setting Times New Roman 12 pt so both renderers use metric-compatible faces,
+and a 2 × 1.4 in picture. x is the picture's left edge on the page, top its top edge.
+
+| Placement | Word 2024 | Docxodus before | Docxodus after |
+| --- | --- | --- | --- |
+| `posOffset` 3,800,000 from the column (above) | 3 pages; x 371.2, top 96 (the paragraph's top) on page 1 | export fails: page 2 body content clipped | 3 pages, the same page breaks; x 370.5, top 96 on page 1 |
+| `wp:align right` (control) | 3 pages; x 379.3, top 96 on page 1 | 3 pages, the same page breaks; x 379.5, top 96 | unchanged |
+| the same offset from the margin | as from the column | export fails | as from the column |
+| `posOffset` 1,500,000, text on both sides | x 190.1, text left and right of it | export fails | 3 pages; x 81, top 96, text on its right only |
+| the first placement, anchored before "Item 100" | top 72 on page 3, the top of that page's part of the paragraph | export fails | top 72 on page 3; page 1 ends one line short (below) |
+| the first placement 254,000 lower (`positionV` offset 20 pt) | top 116 on page 1; the line above it unwrapped | export fails | 3 pages, the same page breaks; top 116, the line above it unwrapped |
+| 1,270,000 lower (100 pt) | top 196 | export fails | top 196 |
+| 254,000 lower, anchored before "Item 100" | top 92 on page 3 (72 + 20) | export fails | top 92 on page 3 |
+
+**Analysis.** The converter renders a square, tight or through picture as a CSS float, which
+always rests against a column edge: an aligned picture flush with it, an offset one behind its
+clearance margin on the far side (`distR` here, 9 pt), which is where the reference puts it to
+within about 1 pt here (the 8 pt gap the offset leaves, against 9 pt of clearance). It marked the float `data-docx-edge-picture` only
+when it was aligned to a column edge, or at a zero left offset, and at a zero vertical offset.
+The paginator may split a paragraph only around a marked float: it keeps the picture at the top of
+whichever fragment holds its run and rebuilds the wrapping exclusion there, which is the
+placement measured above. That needs only the vertical anchor; the paginator copies the float's
+side, margins and `shape-outside` as the converter wrote them, so a vertical offset can travel in
+the float's top margin.
+
+**Fix.** `ApplyAnchorTextWrap` marks every wrapping float placed from its paragraph's top, at a
+vertical offset of zero or more, whatever its horizontal placement. A positive offset is added to
+the float's top margin; for a rectangular wrap, `shape-outside: inset(<offset> 0 0 0) margin-box`
+keeps that margin from excluding the text above the picture (a contour is drawn from the border box
+already). The horizontal approximation is unchanged: a picture with text on both sides in Word still
+has text on one side only.
+
+**Not changed.** A picture placed above its paragraph's top (a negative offset), or vertically relative
+to the page, margin or a line, is not marked, so a paragraph longer than a page holding one still fails
+to export. The top clearance `distT` still lowers the picture as well (zero in the measurements above). When the picture's run lies past the paragraph's first page, the paginator chooses
+the earlier pages' break points from a layout with the picture's exclusion at the paragraph's top,
+so the last line before the first break can end a few words short ("Item 42 … the north" here,
+where Word fills the line). An aligned picture does the same on `main`.
+
+**Code and tests.** `Docxodus/WmlToHtmlConverter.cs` (`ApplyAnchorTextWrap`);
+`RenderingFidelityImageWrapTests` (`OffsetPictureAtItsParagraphTopKeepsItsFloatFallbackAsAnEdgePicture`,
+`PictureBelowItsParagraphTopCarriesItsOffsetAsAnEdgePicture`,
+`PictureAboveItsParagraphOrPlacedOnThePageIsNotAnEdgePicture`); `export-floating-paragraph.spec.ts`
+(column-offset picture on page 1, lowered on page 1 and on page 2, with a right-aligned control).
 
 ## Empty runs enlarged every line of a nonempty paragraph (#1565)
 
@@ -7582,9 +7892,56 @@ EMR_ALPHABLEND  xDest=35 yDest=1 cxDest=32 cyDest=32  BLENDFUNCTION=0x01FF8000
 
 `Internal/EmfImage.cs` handles the header count and the blend function; `Internal/DibImage.cs`
 unpremultiplies the alpha before encoding PNG. GDI itself plays files by byte length, and
-LibreOffice reads its own exports, so neither notices the count. Visible zero-width WMF pens are
-still refused (see "TIFF and WMF need browser image normalization"); EMF cosmetic pens keep the
-one-CSS-pixel rule from #1554.
+LibreOffice reads its own exports, so neither notices the count. EMF cosmetic pens keep the
+one-CSS-pixel rule from #1554, and since the second stage below visible zero-width WMF pens follow it.
+
+## Office's GDI fallback draws with idioms a strict player rejects (#1706)
+
+Office writes a picture it renders as a dual EMF+ file: EMF+ records with the real drawing, then
+GDI records that redo it with what GDI can do. Windows makes a WMF from such an EMF when asked.
+A corpus of 74 metafiles written on Windows 11 by Word, Excel and PowerPoint 2024 (charts of ten
+kinds, shapes, SmartArt, WordArt, tables, symbol text, an equation and embedded-object previews;
+each EMF also as a WMF, from PowerPoint's own WMF export or GDI's `GetWinMetaFileBits`) shows what
+those GDI records rely on. GDI's behaviour was checked by drawing on a bitmap DC; what Word shows
+comes from its filtered-HTML export, which writes a PNG of each picture.
+
+Every one of the 39 Office EMFs that carried EMF+ was dual, and the two embedded-object icon
+previews carried no EMF+ at all: no Office or Windows writer in the corpus produced an EMF+-only
+file, so those keep the placeholder rather than getting an EMF+ player.
+
+| What the records do | Written by | GDI | Word shows | Docxodus |
+| --- | --- | --- | --- | --- |
+| A transparent bitmap as two blits to one rectangle, between `TNPP` comments: SRCPAINT with a one-bit mask (white = opaque), then SRCAND with the image (white where transparent) | Word and PowerPoint EMF: chart markers, shadows, glows, WordArt, 3-D charts | Exact over any background | The EMF+ image, with soft alpha | Merges the pair into one PNG with on/off alpha |
+| The icon form of the same: SRCAND with the mask (black = opaque), then SRCINVERT with the image | Embedded-object icon previews | Exact | Same as GDI | Same merge |
+| `EMR_CREATEDIBPATTERNBRUSHPT`: an 8×8 one-bit DIB in RGB colours | Pattern fills in charts and shapes | Paints the DIB's own colour table, not the text and background colours; tiles in the pixels of the device it plays onto | Stripes a few screen pixels apart | Tiles the bitmap as an SVG pattern in CSS pixels |
+| A reference device of 600 dpi (Frame 4.235 hundredths of a millimetre per pixel) | PowerPoint EMF | Brush tiles and hatches are output-device pixels, whatever the reference device | Coarse stripes | Hatches and tiles are sized in CSS pixels; at the reference device's 0.042 mm they were invisible |
+| `BEGINPATH`, world scaled by 1/8, the figure, the scale undone, `ENDPATH` | PowerPoint charts | Converts each point to device space as it is added; a geometric pen is realised at the transform in effect when the path is stroked | Drawn | The bracket takes its first figure's transform; stroking it with a geometric pen at another scale keeps the placeholder |
+| `META_SELECTCLIPREGION` with index 0, and no region ever created | PowerPoint WMF, `GetWinMetaFileBits` | The null region: resets the clip | Drawn | Resets the clip; any other index keeps the placeholder |
+| 471 one-unit `EXCLUDECLIPRECT` strips carving a shape's outline | PowerPoint WMF of gradient and glow shapes | A banded region | Drawn | Consecutive exclusions before anything is drawn become holes in one clip path (one nested `clipPath` each exceeded the depth bound) |
+| `SETROP2 R2_NOP` around polygons inside PostScript `BEGIN_PATH`/`END_PATH` escapes | PowerPoint WMF | Leaves the destination unchanged | Nothing drawn | Draws nothing with the pen or brush; PATBLT, a raster operation of its own, still paints |
+| `EXTTEXTOUTW` with `ETO_GLYPH_INDEX` and zero characters | Embedded-object icon previews | Draws nothing | Nothing drawn | Draws nothing (glyph-index runs with characters still keep the placeholder) |
+| Symbol and Wingdings text as the fonts' codes moved to U+F020–U+F0FF, or as bytes in a WMF | Word EMF; any WMF | The font's glyphs | α β ≥ ∑ ☺ ✓ | Maps through `SymbolFontMapper` and draws in an ordinary font; a code with no Unicode equivalent keeps the placeholder |
+| A zero-width pen outlining an arrowhead | PowerPoint WMF | One device pixel | One pixel | One CSS pixel, as EMF cosmetic pens (it was refused) |
+| The source EMF split across `META_ESCAPE_ENHANCED_METAFILE` comments ("WMFC") | `GetWinMetaFileBits`, LibreOffice WMF export | Plays the embedded EMF instead of the WMF records | αβ ≤ ± → (the EMF's text) | Plays the embedded EMF; when it cannot, plays the WMF records |
+| ANSI text records that lose characters ("αβ ≤ →" becomes "aß = ?"), and one-bit DIBs written without their colour table | `GetWinMetaFileBits` | Unused: the embedded EMF is played | The EMF's text | Unused for the same reason |
+| A gradient as abutting strips of solid polygons | Every Office gradient | Aliased, so the strips meet without a seam | The EMF+ gradient | Anti-aliased SVG shows faint lighter lines where strips meet (not fixed; already so for gradients drawn before) |
+| A semi-transparent fill as PATINVERT, a fill with `R2_MASKPEN` and a one-bit pattern, then PATINVERT again; or `R2_XORPEN` | SmartArt with transparency; PowerPoint WMF of a gradient area chart | A dithered approximation | The EMF+ alpha | Keeps the placeholder |
+| Equation text as glyph indices (Cambria Math) | Word EMF of an equation | The font's glyphs | Drawn | Keeps the placeholder: glyph indices need the font's own tables |
+
+```text
+EMR_STRETCHDIBITS  dest (4925,92) 1151×817  src 576×409  BI_RGB 1 bpp   rop 0x00EE0086 (SRCPAINT)
+EMR_STRETCHDIBITS  dest (4925,92) 1151×817  src 576×409  BI_RGB 8 bpp   rop 0x008800C6 (SRCAND)
+
+META_SAVEDC
+META_SELECTCLIPREGION  Region=0
+META_INTERSECTCLIPRECT 166,166 - 3500,2333
+```
+
+`Internal/MetafileCanvas.cs` evaluates a blit's raster operation per pixel from its truth table: a
+pixel whose result does not read the destination is drawn or left transparent, and one whose result
+does is exact only where the bitmap drawn just before, to the same rectangle, left the destination
+known. The fixtures under `TestFiles/Metafiles/office-*` are corpus files; their README records how
+each was written.
 
 ## Missing-font classes differ from native font selection (#1574)
 
@@ -7720,6 +8077,76 @@ PDF export printed 23 lines at the 15pt remainder. It now keeps every run's conv
 unchanged and for re-wrapped lines, because the vector painter places baselines from the paragraph
 box whatever the DOM offset is. The shared fit applies in export too: 24 lines at 15pt and 23 at
 13pt, pinned by `export-last-line-leading.spec.ts`.
+
+## A paragraph that cites a note keeps its leading beside the note band (#1738)
+
+The rule above holds at the page foot. Above a note band it depends on the paragraph and on the
+compatibility mode. The issue's fixture is five justified paragraphs at double spacing, each citing
+a one-line note about 70% of the way through, with no settings or styles part:
+
+```xml
+<w:p><w:pPr><w:spacing w:after="0" w:line="480" w:lineRule="auto"/><w:ind w:firstLine="720"/><w:jc w:val="both"/></w:pPr>
+  <w:r><w:t xml:space="preserve">In season 5 the orchard crew pruned row 1, … compared it with the estimate</w:t></w:r>
+  <w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="5"/></w:r>
+  <w:r><w:t xml:space="preserve"> kept in the shed. …</w:t></w:r></w:p>
+<!-- footnotes.xml: <w:footnote w:id="5"><w:p><w:pPr><w:spacing w:after="0"/></w:pPr>… one line …</w:p></w:footnote>,
+     separators at w:line="240" -->
+```
+
+Without a styles part Word sets it in Aptos 12pt (the missing-`w:rPrDefault` case of #1576), where
+the converter uses Times New Roman 10pt. The comparison fixtures therefore add a styles part stating
+Times New Roman 10pt and `w:line="278"` as document defaults, the converter's values. Word 2024
+(16.0.20326) saved each as PDF (`SaveAs2`). A body line is then a 23pt line box holding 11.5pt of
+text, and a note line is 13.3pt. Without `w:compat` Word opens the files in compatibility mode 12;
+mode 14 lays out every row below the same way. LibreOffice was not available on the test machine.
+
+| Fixture | Word 2024, mode 12 or 14 | Word 2024, mode 15 | Docxodus 16.0.0 | Fixed |
+| --- | --- | --- | --- | --- |
+| five paragraphs (the issue) | p1: 23 lines, notes 1–4; p2: the citing line, the last line, note 5 | same | export fails: "A footnote continuation is clipped" | as Word |
+| six paragraphs | p1: 23 lines, notes 1–4; p2: 7 lines, notes 5–6 | not run | fails | as Word |
+| paragraph 1 cites two notes, paragraph 5 none | 1 page: 25 lines, notes 1–5 | p1: 23 lines, notes 1–5; p2: 2 lines | fails | as mode 14 |
+| widow control off | 1 page: 25 lines, notes 1–5 | p1: 24 lines, notes 1–5; p2: 1 line | fails | as mode 14 |
+| widow control off, note 5 four lines long | p1: 24 lines, notes 1–4, two lines of note 5; p2: 1 line, the rest of note 5 | not run | fails | p1 holds three lines of note 5 |
+| widow control on, note 5 four lines long | p1: 23 lines, notes 1–4; p2: 2 lines, note 5 | not run | as Word | as Word |
+| four paragraphs (control) | 1 page | not run | 1 page | 1 page |
+| `w:line="360"`, eight paragraphs (control) | p1: 32 lines, notes 1–6; p2: 8 lines, notes 7–8 | not run | as Word | as Word |
+
+Threshold sweeps isolate the rule. Each case is a fresh page holding one exact-height spacer line,
+then the double-spaced test text. R is the room the spacer leaves above the band of every note on
+the page, stepped by 0.5pt:
+
+| Case | Mode 12: Word keeps the text from | Mode 15 |
+| --- | --- | --- |
+| one test line, no notes on the page | R = 11.5pt, its text height (#1571) | 11.5pt |
+| one test line, the spacer cites the note (exact 12pt separator and note) | R = 11.5pt | 23pt, its full line box |
+| one test line that cites the note (exact 12pt separator and note) | R = 23pt | 23pt |
+| three lines A, B, C under widow control, B or C cites, notes as in the issue | R = 67.5pt: 3 × 23pt less the note's own 1.8pt of leading; below that the paragraph moves whole with its note | not run |
+| the same without widow control, B cites | A and B from R = 44.5pt (B's full box less 1.8pt), C from R = 57.5pt (C's text height) | 46pt and 69pt, full boxes |
+
+In mode 15 the note band clears the full line box of the body above it: only at the page foot does
+a line's leading run past. Before mode 15 a line that brings no note may end the page at its text
+height above the band, as at the page foot. The exception is a paragraph under widow control that
+brings notes: Word lays its lines on the page out together beside those notes, leading included.
+When they do not fit, the paragraph breaks before the citing line if widow control allows, and that
+line moves to the next page with its note. Without widow control the test is per line: a citing
+line keeps its full box, and a later last line needs only its text. The band's own last line also
+ends at its text height before mode 15 (the 1.8pt), but not in mode 15.
+
+Docxodus measured a whole paragraph by its text height even when it brought notes, but measured a
+paragraph head beside its notes by its full height (`tryFragmentParagraph`). The note band's cap,
+which keeps the band off body already placed (`noteBandLimit`), also counted the full height. In the
+issue the fit test gave five notes a 78.1pt band beside the fifth paragraph, counting its last
+11.5pt of leading as free; the cap then allowed only 73.2pt, so note 5 was clipped. `PaginationEngine`
+now measures a paragraph under widow control by its full height beside the notes it brings, so the
+issue's citing line moves to page 2 through the existing note-aware split. When a block's clone ends
+at its text height (`droppedLeadingPt`), the cap gives that leading to the band. A block the band
+expands beside is cloned after its notes are packed, so it too ends at its text height when they
+take its leading.
+
+Not modelled: the mode 15 rule, in which the last line above a band keeps its leading whether or
+not it cites (Docxodus lays such pages out as mode 14 does, one line more than Word); the band's own
+last-line leading before mode 15; and a paragraph without widow control whose last line on the page
+is its citing line (the four-line note above). Test: `export-footnote-page-bottom.spec.ts`.
 
 ## Fractional whole-number measures truncate in Word (#1622)
 
@@ -8609,3 +9036,153 @@ text box, so references in text boxes of a modified paragraph are not tracked as
 **Code and tests.** `Docxodus/Ir/Diff/IrEditScriptBuilder.cs` (`KeptNoteReferences`,
 `AlignNoteReferences`), `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs`
 (`RenderCompositeNoteScopes`); `DocxDiffNoteReferenceTests`, `IrSdtDiffWalkerTests`.
+
+## An inline text box moves whole with its line (#1735)
+
+A legacy text box in the line flow (no absolute position) is an inline object: Word breaks the
+paragraph that holds it across pages like any other, and the box stays whole on its own line.
+
+```xml
+<w:p>
+  <w:r><w:t xml:space="preserve">Item 1 … Item 3 of the field log … </w:t></w:r>
+  <w:r><w:pict><v:shape type="#_x0000_t202" style="width:150pt;height:60pt" stroked="t">
+    <v:textbox><w:txbxContent><w:p><w:r><w:t>Readings in litres per minute.</w:t></w:r></w:p>
+    </w:txbxContent></v:textbox></v:shape></w:pict></w:r>
+  <w:r><w:t xml:space="preserve"> Item 4 … Item 120 of the field log …</w:t></w:r>
+</w:p>
+```
+
+Measured in desktop Word 2024 (Windows 11) by saving PDF through `SaveAs2`, on an A4 page with
+1 in margins. The same document with a styles part setting Times New Roman 12 pt, so that both
+renderers use metric-compatible faces:
+
+| Output | Pages | Page 2 starts | Page 3 starts | Box |
+| --- | --- | --- | --- | --- |
+| Word 2024 | 3 | "pump before the evening shift. Item 40" | "pump before the evening shift. Item 83" | Whole on page 1 |
+| Docxodus after the fix | 3 | same | same | Whole on page 1 |
+| Docxodus before | `pagination_failure`: page 2 body content clipped | — | — | — |
+| Same paragraph without the box (Word and Docxodus) | 3 | "Item 43" | "Item 86" | — |
+
+Without a styles part Word sets the text in Aptos 12 pt and Docxodus in Times New Roman 10 pt (see
+"A styles part without `w:pPrDefault`" above), so page counts differ (Word 4, Docxodus 3) while the
+split and the box placement agree.
+
+**Analysis.** The converter renders the box as `<span data-docx-textbox="true">` with
+`display: inline-block`, its story paragraphs as block spans inside it. The paginator splits a
+paragraph by cloning DOM ranges, and admitted only marked converter boxes (unrendered shapes, tab
+segments, math, ruby) as units that move whole, so any other inline block made the paragraph
+indivisible. An inline block lays out its content in its own formatting context, so no line, and
+therefore no page boundary, can fall inside it.
+
+**Fix.** `PaginationEngine.rangeAtomicInlineBoxes` admits every inline-block span, under the same
+checks the marked boxes had: no picture or line break inside, and no positioned, floating or
+transformed content. A rotated or vertical-text box still keeps its paragraph whole.
+
+**Not changed.** Word sits the box on the line's baseline, so it rises above the text it shares a
+line with: without a styles part, the box's story text prints 46 pt above that line's text. The
+converter writes `vertical-align: top`, so the box hangs from the line's top and its story text
+shares the line's baseline. The line is about as tall either way, so the page breaks agree.
+
+**Code and tests.** `npm/src/pagination.ts` (`rangeAtomicInlineBoxes`);
+`pagination-inline-layout-atoms.spec.ts` (`textbox`, `rotated-textbox`) and
+`export-inline-layout-atoms.spec.ts` (`textbox`, `no-textbox`).
+
+## A range boundary between the cells or rows of a table (#1737)
+
+A row and a table admit range markup among their cells and rows (`CT_Row` and `CT_Tbl` include
+`EG_RunLevelElements`), so a bookmark or a tracked custom XML range can sit there:
+
+```xml
+<w:tr>
+  <w:tc>…<w:t>Step 1</w:t>…</w:tc>
+  <w:customXmlInsRangeStart w:id="1" w:author="Reviewer" w:date="2026-01-05T09:00:00Z"/>
+  <w:customXmlInsRangeEnd w:id="1"/>
+  <w:tc>…<w:t>Load tray 1 and record the batch weight.</w:t>…</w:tc>
+  <w:tc>…<w:t>3 minutes</w:t>…</w:tc>
+</w:tr>
+```
+
+Measured with a 40-row, three-column table taller than an A4 page, one such pair in every row and
+no other revisions, beside the same table without the pairs. Word 2024 (16.0 build 20326) opened each
+read-only, set to All Markup, and saved it as PDF (`SaveAs2`, format 17):
+
+| | Word 2024, All Markup | Docxodus before #1737, markup | Docxodus after, markup | Docxodus, final |
+| --- | --- | --- | --- | --- |
+| a pair between cells 1 and 2 of every row | 4 pages (13, 11, 11, 5 rows), no mark at all; `Revisions.Count` is 0 | export fails: `pagination_failure`, page 2 body clipped | 4 pages (12, 12, 12, 4 rows), split between rows; the bracket marks open cell 2 on a line of their own | 3 pages (16, 16, 8 rows) |
+| no pairs (control) | 4 pages, the same rows per page | 3 pages (16, 16, 8 rows) | the same | the same |
+
+**Analysis.** Word strips custom XML markup and its range markers on open (see the #1189 entry
+above), so it draws nothing for these ranges and lays the table out as if they were absent.
+Docxodus draws each custom XML revision boundary as a bracket mark under markup (#538). The
+converter wrote whatever a row's or a table's non-cell children rendered straight into the `<tr>`
+or `<table>`. HTML allows only cells in a row and only rows in a table, so the browser's parser
+moved the marks out in front of the table, and the paginator, which splits a table only when its
+wrapper holds nothing but the table and empty bookmark targets (#1456), kept the 40 rows as one
+block taller than the page. A bookmark between rows went the same way: its `<a id>` landed at the
+top of the table instead of at its row.
+
+The page count that still differs is not about the ranges. The fixture has no styles part, which
+Word sets in 12 pt text and Docxodus in 10 pt (the missing `w:rPrDefault` note in the #1652 entry).
+
+**Fix.** `WmlToHtmlConverter.KeepContentInCells`, applied to a row's children (`ProcessTableRow`)
+and to a table's (`ProcessTable`), moves what renders among the cells or rows into the adjacent
+cell, where the same boundary inside that cell already rendered: at the start of the cell that
+follows it (between rows, the next row's first cell), or at the end of the last cell when none
+follows. A boundary between two cells marks where the next cell begins, and one after a row's last
+cell marks where the row ends. The filler cell for an omitted `w:gridBefore` is not a cell of the
+row, and an exact-height row's cell takes the content inside its clip box. Nothing is dropped: a
+row or table with no cell of its own keeps the content beside its cells or rows. The bracket marks
+stay, now inside the cell: Word offers no placement to follow. Tests: `TableRangeBoundaryTests`, `npm/tests/export-bookmarked-table.spec.ts`.
+
+## Content wholly off the paper: Word prints what the paper holds (#1733, #1734)
+
+Two layouts put source content entirely outside the paper. A fixed-layout table wider than its page
+(fixed `w:tblLayout`, DXA `w:tblW` and grid):
+
+```xml
+<!-- A4 (11906 twips) with 1418-twip margins; the grid is 14700 twips wide -->
+<w:tblGrid><w:gridCol w:w="1800"/><w:gridCol w:w="2200"/><w:gridCol w:w="1500"/><w:gridCol w:w="1500"/>
+  <w:gridCol w:w="1500"/><w:gridCol w:w="3000"/><w:gridCol w:w="3200"/></w:tblGrid>
+<!-- the last row fills all seven columns: the sixth cell crosses the paper edge, the seventh starts past it -->
+```
+
+and a linked text-box story whose frames are offset below the paper:
+
+```xml
+<wp:positionV relativeFrom="paragraph"><wp:posOffset>10058400</wp:posOffset></wp:positionV> <!-- 11 in on 11.69 in paper -->
+<wps:txbx id="1"><w:txbxContent><w:p>…</w:p><w:p>…</w:p></w:txbxContent></wps:txbx>   <!-- frame 1 -->
+<wps:linkedTxbx id="1" seq="1"/>                                                     <!-- frame 2, same offset -->
+```
+
+Measured in desktop Word 2024 (16.0 build 20326, Windows 11) by `SaveAs2` to PDF and reading the PDF
+text. LibreOffice was not measured.
+
+| Document | Word 2024 | Docxodus before | Docxodus after |
+|---|---|---|---|
+| The table above | One page; the sixth cell's "Checked by" printed at the paper edge, the seventh cell's text absent | `source anchor tc:… has no measurable fragment` | One page, same text; `source_text_clipped` for the seventh cell's paragraph |
+| Same table, last row five columns wide (control) | One page, all text | Exports | Unchanged |
+| A 780pt fixed grid on Letter paper (`wideBodyTableDocx`) | Two pages; columns A–D printed, E absent | `has no measurable fragment` | Two pages, A–D; 39 `source_text_clipped` |
+| A 540pt fixed header and footer grid on 360pt paper | Two pages; the third cell of each absent | `has no measurable fragment` | Same; one warning each for header and footer |
+| The linked story above | One page, no box text | `source anchor p:… has no measurable fragment` | One page, no box text; `source_text_clipped` for both paragraphs |
+| Same story offset 2 in (control) | Both paragraphs printed in frame 1 | Exports | Unchanged |
+| A single unlinked box at the 11 in offset | One page, no box text | Exports with `source_text_clipped` | Unchanged |
+
+Word applies one rule: the paper edge clips. Whatever of a table or a text-box frame lies past it is
+not printed, a cell crossing it is cut there, and nothing about the off-paper part makes Word refuse
+or move the content. Docxodus already clipped the same way and reported the partly cut table text
+(`source_table_content_clipped`, #1563), but its PageMap completeness check admitted a source anchor
+with no visible fragment only through named proofs, and none covered a table cell or a linked story.
+An unlinked box is covered by its own proof, which binds each paragraph's original geometry to its
+placement; a linked story cannot use it, because `flowLinkedTextBoxes` distributes the paragraphs
+over the frames after the frames are placed.
+
+**Fix.** `hiddenByPaper` (`npm/src/pagination.ts`) admits an element the paper alone hides: its
+layout box has area and lies wholly outside the paper, it is visible under every other clip (so a
+body band cutting content off still fails), and it is inside an authored box whose geometry comes
+from the source, a fixed-width table or a linked frame placed from its source offsets on a
+supported basis. Each such paragraph is reported as `source_text_clipped`, which strict content
+policy rejects. A table, a frame or other content the layout placed off the paper still fails
+completeness, as does an element with no box.
+
+**Tests.** `pagination-table-clipping.spec.ts`, `page-map-source-textbox-clip.spec.ts`,
+`export-wide-body-table.spec.ts`, `export-story-table-width.spec.ts`, `export-linked-textboxes.spec.ts`.

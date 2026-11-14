@@ -107,13 +107,17 @@ export function floatingPictureDocx(height = 300, tight = false): Uint8Array {
     <w:p><w:r><w:t>Float inventory complete.</w:t></w:r></w:p>`);
 }
 
-/** Original numbered lines around one anchored tile; source order determines its page. */
-export function floatingParagraphDocx(wrap: 'none' | 'square' | 'tight' | 'top-bottom', after: number | readonly number[] = 0, count = 82, prefix = 0, prefixPicture = false): Uint8Array {
+/** Original numbered lines around one anchored tile; source order determines its page.
+ * `horizontal` places a wrapping tile by a column offset in EMU, or aligns it to the right edge;
+ * `lowered` places it that many EMU below its paragraph's top. */
+export function floatingParagraphDocx(wrap: 'none' | 'square' | 'tight' | 'top-bottom', after: number | readonly number[] = 0, count = 82, prefix = 0, prefixPicture = false,
+  horizontal: number | 'right' = 0, lowered = 0): Uint8Array {
   const positions = typeof after === 'number' ? [after] : after;
   const picture = (id: number) => fittingImageRun(id, 72, 72)
     .replace('<wp:inline>', `<wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
-      <wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>${wrap === 'none' ? 3810000 : 0}</wp:posOffset></wp:positionH>
-      <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>`)
+      <wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column">${horizontal === 'right' ? '<wp:align>right</wp:align>'
+        : `<wp:posOffset>${wrap === 'none' ? 3810000 : horizontal}</wp:posOffset>`}</wp:positionH>
+      <wp:positionV relativeFrom="paragraph"><wp:posOffset>${lowered}</wp:posOffset></wp:positionV>`)
     .replace('<wp:docPr', (wrap === 'none' ? '<wp:wrapNone/>' : wrap === 'top-bottom' ? '<wp:wrapTopAndBottom/>'
       : wrap === 'square' ? '<wp:wrapSquare wrapText="bothSides"/>'
         : '<wp:wrapTight wrapText="bothSides"><wp:wrapPolygon edited="0"><wp:start x="0" y="0"/><wp:lineTo x="21600" y="0"/><wp:lineTo x="21600" y="21600"/><wp:lineTo x="0" y="21600"/><wp:lineTo x="0" y="0"/></wp:wrapPolygon></wp:wrapTight>') + '<wp:docPr')

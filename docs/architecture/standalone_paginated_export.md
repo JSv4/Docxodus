@@ -578,7 +578,7 @@ last frame (clipped there) and marks the frame `data-docx-textbox-overflow`. A p
 outside that frame is admitted like the fixed-box case above and warned as `source_text_clipped`.
 Because the first hidden paragraph is usually still partly visible, and so mapped, each such story
 also produces one `linked_textbox_overflow` warning naming it. `unsupportedContent: "strict"`
-rejects both.
+rejects both. Frames placed off the paper are covered by the paper rule below.
 
 A separate source-position marker admits a paragraph whose original ink is wholly off paper,
 even when part of its fixed box intersects the paper. DrawingML fit resolves from the selected
@@ -630,8 +630,23 @@ does not itself indicate missing text. Nonwhitespace text or a source visual cut
 `source_table_content_clipped` warning with its source paragraph anchor; `unsupportedContent: "strict"`
 rejects it at `output_verification`. Hidden runs and content already hidden by authored clips do not
 produce this warning. Promoted pictures and textbox text retain their original table ownership;
-the diagnostic follows their final placement while applying their authored clips. This diagnostic does not exempt wholly missing source anchors from PageMap
-completeness checks, so a table with an entirely off-paper cell still fails export.
+the diagnostic follows their final placement while applying their authored clips. This diagnostic
+by itself does not exempt a wholly missing source anchor from PageMap completeness; a cell entirely
+off the paper is admitted by the rule below.
+
+### Content the paper alone hides (issues #1733, #1734)
+
+The paper clips every page, and Word prints a document whose content runs past it, leaving that
+content out. PageMap completeness admits a source anchor with no visible fragment of this kind when
+its layout box has area and lies wholly outside the paper, it is visible under every other clip
+(measured with the paper's own bound lifted, so a body band that cuts content off still counts), and
+an authored box carries it there: a fixed-width table, or a frame of a linked text-box story placed
+from its source offsets on a page, margin, column or paragraph basis. The linked frame needs this
+frame-level rule because its story is distributed over the frames after they are placed, so the
+per-paragraph placement proof above cannot apply. Each admitted paragraph produces a
+`source_text_clipped` warning naming the paragraph that holds the text (not the cell or table around
+it); `unsupportedContent: "strict"` rejects it. Content the layout itself placed off the paper, an
+ordinary flow box, a table whose width the layout chose, and an element with no box still fail.
 
 ### Text clipped by exact-height rows (issue #1140)
 
@@ -1610,9 +1625,17 @@ indivisible note content retains the typed clipped-content failure rather than s
 result with missing text.
 
 Body paragraph fragmentation retains unshifted revision change-bar hosts and their inline revision
-metadata on each continuation (#1521). Fixed-base `wrapNone` drawings stay whole with their source
+metadata on each continuation (#1521). Any inline block, such as an inline text box, moves whole
+with the line that holds it (#1735): no fragment boundary enters it, so its story keeps its own
+layout. One with positioned, floating or transformed content, a picture or a line break still
+keeps its paragraph whole. Fixed-base `wrapNone` drawings stay whole with their source
 Range, including drawings after body text; their textbox text does not participate in body line
-or widow measurements. Existing anchor placement resolves coordinates after pagination. Leading
+or widow measurements. Existing anchor placement resolves coordinates after pagination. The
+converter marks as an edge picture every square, tight or through picture float placed from its
+paragraph's top (a vertical offset of zero or more), whatever its horizontal position (#1736); an
+offset one keeps its float to the nearer edge behind its clearance margin. A lowered picture carries
+its offset in the float's top margin, and a rectangle's `shape-outside` inset leaves the text above
+it unwrapped, so the picture paints that far below its fragment's top and its exclusion follows. Leading
 converter-owned edge pictures preserve their float and clearance on the head, using the existing
 float-height measurement and page-prefix exclusion paths. The shared layout gate receives the
 same admitted carriers as the structural gate; notes, cells and textbox stories retain the prior
