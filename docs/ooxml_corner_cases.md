@@ -7034,16 +7034,63 @@ Other things the render settled:
 - **Word sets under/over limits beside an inline n-ary operator** (`∑` with `limLoc` `undOvr`
   draws as `∑ᵢⁿ` in a line of text and stacked in a display equation), which is what
   `movablelimits="true"` gives.
-- **Known remaining differences, not fixed here.** Word sets `k=0` in a limit or script tight;
-  Chromium keeps full operator spacing at script size. And a run that *starts* with an operator
-  (`<m:r>a</m:r><m:r>+c</m:r>`) loses the space before it: each run is its own `mrow`, so MathML
-  reads a leading `+` as a prefix operator. That is how runs were already projected before these
-  structures were added.
+- **Known remaining difference, not fixed here.** Word sets `k=0` in a limit or script tight;
+  Chromium keeps full operator spacing at script size. (A run that *starts* with an operator after
+  an operand, `<m:r>a</m:r><m:r>+c</m:r>`, used to lose the space before it; see the next section.)
 
 Code: `WmlToHtmlConverter.Math.cs` (`MathExpression`, `MathCellAlignment`). Tests:
 `A_bar_is_a_rule_as_wide_as_its_operand`, `Matrix_columns_keep_their_justification`,
 `Display_equation_arrays_keep_display_style_and_align_rows_at_their_points`,
 `A_linear_fraction_slash_is_set_tight`.
+
+### What Word 2024 draws for the rest of OMML: spaces, ordinary text, styles, phantoms, skewed fractions, strikes, lines (#1705)
+
+Two kinds of document, both exported to PDF by Word 16.0.20326 and measured from the PDF's glyph
+positions (12 pt Cambria Math): documents written by hand with one equation per variant, and a
+document Word built itself through its object model, with its equation gallery and typed equations
+made bold, italic or coloured, phantoms, struck border boxes, a skewed fraction, Shift+Enter lines
+and "Align at this character". Word wrote `w:eastAsiaTheme="minorEastAsia"` into that document's
+run fonts, which still keeps every equation on the placeholder (#1726 handles it), so it was counted
+with that attribute removed: on `main` 28 of its 37 equations were placeholders; with this change all
+37 draw. The MathML was rendered in Chromium with Cambria Math and compared by
+eye.
+
+| OMML | Word 2024 | Docxodus |
+| --- | --- | --- |
+| spaces in `m:t` (`a b`, `a  b`, `a    b`, no-break space) | each at the font's space width (about 0.22 em), added to any operator spacing; an em space is 1 em | an `mtext` keeping the characters (`white-space: pre`): the font's own widths |
+| one space after a comma | absorbed: `a, b` is exactly as wide as `a,b` | drawn, so 0.2 em wider |
+| exactly two spaces after a comma, display math | a 2 em gap, which the gallery's Taylor expansion (`+⋯,  −∞<x<∞`) relies on; three or more are drawn at their width, and inline two are | drawn at their width: the Taylor expansion's gap is about 0.5 em where Word's is 2 em |
+| `m:nor` | text in the run's font (Cambria Math from the `w:rFonts` Word writes on it; the paragraph's Calibri without them), no math italics, no operator spacing (`speed+2`); `w:b`/`w:i` make it bold or italic; an `m:sty` on it changes nothing | one `mtext` in the run's weight, slope and colour; without `w:rFonts` it keeps the placeholder |
+| `m:sty` `b`/`bi` | letters and digits bold; `+ = , ( ) ∞` plain; `∂ ∇` bold | the same |
+| `w:b`, `w:i` on a math run | change nothing | change nothing |
+| letters with no form in the run's alphabet | Cyrillic plain in every style; script, fraktur and sans-serif Greek plain; Hebrew bold under `b`/`bi` | placeholder, as before |
+| `m:phant` | shown unless `m:show` is off; `zeroWid` draws the operand from its start over what follows (`x` over the next `+`); `zeroAsc`/`zeroDesc` let it overflow a radical around it; a shown phantom of `+` between `a` and `b` is set tight, like an ordinary atom; `m:transp` changed nothing in four cases | `mphantom` and `mpadded`; a phantom made of one operator has the operator's spacing removed |
+| `m:f` `skw` | operands full size beside U+2044, the numerator raised about 0.33 em and the denominator lowered until its top is about 0.25 em above the baseline (0.44 em for `b`, 0.41 em for `2`, 0.21 em for `y`); the slash overlaps each operand by about 0.07 em and grows around a stacked fraction | fixed offsets of 0.33 em and −0.42 em, slash at its own size: an x-height denominator sits 0.2 em lower than Word's, the fraction is about 0.15 em wider, and a tall operand gets a smaller slash. MathML Core has no bevelled fraction, and Chromium clamps a negative `lspace` |
+| `m:borderBox` `strikeH`/`strikeV`/`strikeBLTR`/`strikeTLBR` | a line through the box's middle, or from corner to corner | one `linear-gradient` background layer each, with `print-color-adjust: exact` so printing keeps it |
+| `m:brk`, with or without `m:alnAt` | ignored while the equation fits its line; in a longer one the line breaks there and the rest wraps | drawn as one line (the projection never breaks an equation) |
+| `w:br` in a run, as Shift+Enter writes it | starts a new line; several `m:oMath` without one run on as one line | the same, as `mtable` rows |
+| `m:aln` under `m:defJc` `centerGroup` | the lines sit at the first line's left edge; a line with a point moves so the point lines up with the first such line's; one point changes nothing | every line or one line with a point: aligned columns or one left-aligned column; points on only some lines: placeholder |
+| `m:aln` under `m:defJc` `center` | each line centred on its own; points change nothing | one centred column |
+| `w:color` in a structure's `m:ctrlPr` | paints only the structure's own glyphs (fraction bar, radical, fences, ∑, accent, border); the operands keep theirs | CSS `color` on the structure; since MathML operands inherit it, drawn only when every run inside carries a colour of its own |
+| an operator starting a run after an operand (`x²` then `+1`) | binary: `x² + 1` | the run joins its argument's row, so MathML reads the operator as binary; before, first in the run's own `mrow`, it was a tight prefix (`x²+1`). An explicit `form="infix"` would give `!` or a typed `)` default spacing in Chromium |
+
+Line breaks are why `m:oMathPara` can hold several `m:oMath`: Word writes Shift+Enter as
+`<m:r><w:rPr>…</w:rPr><w:br/></m:r>` closing one `m:oMath` and starts the next, and "Align at this
+character" as `<m:rPr><m:aln/></m:rPr>` on the run that begins with the chosen operator. The
+object model's `OMathBreaks.Add` writes `<m:rPr><m:brk/></m:rPr>` on the run starting at the operator,
+which, as the table says, Word then ignores while the equation fits.
+
+Not modelled, and recorded here: Word's comma-and-space rule above, the skewed fraction's
+content-dependent offsets and growing slash, and lines where only some carry an alignment point.
+
+Code: `WmlToHtmlConverter.Math.cs` (`MathRunTokens`, `MathLines`, `MathAddRows`, `MathExpression`).
+Tests: `HtmlMathTests` (`A_display_equation_with_a_run_of_spaces_draws_through_the_public_converter`,
+`Ordinary_text_is_one_text_token_in_its_own_weight_and_slope`,
+`Math_run_styles_change_letters_and_digits_and_leave_operators_plain`,
+`Display_lines_are_table_rows_lined_up_at_their_alignment_points`, `A_manual_break_changes_nothing_on_one_line`,
+`A_structure_is_drawn_in_its_control_colour_when_its_operands_carry_their_own`,
+`An_operator_that_starts_a_run_after_an_operand_is_not_first_in_its_row` and the phantom, skewed-fraction and
+strike tests).
 
 ### Bounds on equation input (#1705)
 
@@ -7912,6 +7959,76 @@ PDF export printed 23 lines at the 15pt remainder. It now keeps every run's conv
 unchanged and for re-wrapped lines, because the vector painter places baselines from the paragraph
 box whatever the DOM offset is. The shared fit applies in export too: 24 lines at 15pt and 23 at
 13pt, pinned by `export-last-line-leading.spec.ts`.
+
+## A paragraph that cites a note keeps its leading beside the note band (#1738)
+
+The rule above holds at the page foot. Above a note band it depends on the paragraph and on the
+compatibility mode. The issue's fixture is five justified paragraphs at double spacing, each citing
+a one-line note about 70% of the way through, with no settings or styles part:
+
+```xml
+<w:p><w:pPr><w:spacing w:after="0" w:line="480" w:lineRule="auto"/><w:ind w:firstLine="720"/><w:jc w:val="both"/></w:pPr>
+  <w:r><w:t xml:space="preserve">In season 5 the orchard crew pruned row 1, … compared it with the estimate</w:t></w:r>
+  <w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="5"/></w:r>
+  <w:r><w:t xml:space="preserve"> kept in the shed. …</w:t></w:r></w:p>
+<!-- footnotes.xml: <w:footnote w:id="5"><w:p><w:pPr><w:spacing w:after="0"/></w:pPr>… one line …</w:p></w:footnote>,
+     separators at w:line="240" -->
+```
+
+Without a styles part Word sets it in Aptos 12pt (the missing-`w:rPrDefault` case of #1576), where
+the converter uses Times New Roman 10pt. The comparison fixtures therefore add a styles part stating
+Times New Roman 10pt and `w:line="278"` as document defaults, the converter's values. Word 2024
+(16.0.20326) saved each as PDF (`SaveAs2`). A body line is then a 23pt line box holding 11.5pt of
+text, and a note line is 13.3pt. Without `w:compat` Word opens the files in compatibility mode 12;
+mode 14 lays out every row below the same way. LibreOffice was not available on the test machine.
+
+| Fixture | Word 2024, mode 12 or 14 | Word 2024, mode 15 | Docxodus 16.0.0 | Fixed |
+| --- | --- | --- | --- | --- |
+| five paragraphs (the issue) | p1: 23 lines, notes 1–4; p2: the citing line, the last line, note 5 | same | export fails: "A footnote continuation is clipped" | as Word |
+| six paragraphs | p1: 23 lines, notes 1–4; p2: 7 lines, notes 5–6 | not run | fails | as Word |
+| paragraph 1 cites two notes, paragraph 5 none | 1 page: 25 lines, notes 1–5 | p1: 23 lines, notes 1–5; p2: 2 lines | fails | as mode 14 |
+| widow control off | 1 page: 25 lines, notes 1–5 | p1: 24 lines, notes 1–5; p2: 1 line | fails | as mode 14 |
+| widow control off, note 5 four lines long | p1: 24 lines, notes 1–4, two lines of note 5; p2: 1 line, the rest of note 5 | not run | fails | p1 holds three lines of note 5 |
+| widow control on, note 5 four lines long | p1: 23 lines, notes 1–4; p2: 2 lines, note 5 | not run | as Word | as Word |
+| four paragraphs (control) | 1 page | not run | 1 page | 1 page |
+| `w:line="360"`, eight paragraphs (control) | p1: 32 lines, notes 1–6; p2: 8 lines, notes 7–8 | not run | as Word | as Word |
+
+Threshold sweeps isolate the rule. Each case is a fresh page holding one exact-height spacer line,
+then the double-spaced test text. R is the room the spacer leaves above the band of every note on
+the page, stepped by 0.5pt:
+
+| Case | Mode 12: Word keeps the text from | Mode 15 |
+| --- | --- | --- |
+| one test line, no notes on the page | R = 11.5pt, its text height (#1571) | 11.5pt |
+| one test line, the spacer cites the note (exact 12pt separator and note) | R = 11.5pt | 23pt, its full line box |
+| one test line that cites the note (exact 12pt separator and note) | R = 23pt | 23pt |
+| three lines A, B, C under widow control, B or C cites, notes as in the issue | R = 67.5pt: 3 × 23pt less the note's own 1.8pt of leading; below that the paragraph moves whole with its note | not run |
+| the same without widow control, B cites | A and B from R = 44.5pt (B's full box less 1.8pt), C from R = 57.5pt (C's text height) | 46pt and 69pt, full boxes |
+
+In mode 15 the note band clears the full line box of the body above it: only at the page foot does
+a line's leading run past. Before mode 15 a line that brings no note may end the page at its text
+height above the band, as at the page foot. The exception is a paragraph under widow control that
+brings notes: Word lays its lines on the page out together beside those notes, leading included.
+When they do not fit, the paragraph breaks before the citing line if widow control allows, and that
+line moves to the next page with its note. Without widow control the test is per line: a citing
+line keeps its full box, and a later last line needs only its text. The band's own last line also
+ends at its text height before mode 15 (the 1.8pt), but not in mode 15.
+
+Docxodus measured a whole paragraph by its text height even when it brought notes, but measured a
+paragraph head beside its notes by its full height (`tryFragmentParagraph`). The note band's cap,
+which keeps the band off body already placed (`noteBandLimit`), also counted the full height. In the
+issue the fit test gave five notes a 78.1pt band beside the fifth paragraph, counting its last
+11.5pt of leading as free; the cap then allowed only 73.2pt, so note 5 was clipped. `PaginationEngine`
+now measures a paragraph under widow control by its full height beside the notes it brings, so the
+issue's citing line moves to page 2 through the existing note-aware split. When a block's clone ends
+at its text height (`droppedLeadingPt`), the cap gives that leading to the band. A block the band
+expands beside is cloned after its notes are packed, so it too ends at its text height when they
+take its leading.
+
+Not modelled: the mode 15 rule, in which the last line above a band keeps its leading whether or
+not it cites (Docxodus lays such pages out as mode 14 does, one line more than Word); the band's own
+last-line leading before mode 15; and a paragraph without widow control whose last line on the page
+is its citing line (the four-line note above). Test: `export-footnote-page-bottom.spec.ts`.
 
 ## Fractional whole-number measures truncate in Word (#1622)
 
@@ -8898,3 +9015,56 @@ cell marks where the row ends. The filler cell for an omitted `w:gridBefore` is 
 row, and an exact-height row's cell takes the content inside its clip box. Nothing is dropped: a
 row or table with no cell of its own keeps the content beside its cells or rows. The bracket marks
 stay, now inside the cell: Word offers no placement to follow. Tests: `TableRangeBoundaryTests`, `npm/tests/export-bookmarked-table.spec.ts`.
+
+## Content wholly off the paper: Word prints what the paper holds (#1733, #1734)
+
+Two layouts put source content entirely outside the paper. A fixed-layout table wider than its page
+(fixed `w:tblLayout`, DXA `w:tblW` and grid):
+
+```xml
+<!-- A4 (11906 twips) with 1418-twip margins; the grid is 14700 twips wide -->
+<w:tblGrid><w:gridCol w:w="1800"/><w:gridCol w:w="2200"/><w:gridCol w:w="1500"/><w:gridCol w:w="1500"/>
+  <w:gridCol w:w="1500"/><w:gridCol w:w="3000"/><w:gridCol w:w="3200"/></w:tblGrid>
+<!-- the last row fills all seven columns: the sixth cell crosses the paper edge, the seventh starts past it -->
+```
+
+and a linked text-box story whose frames are offset below the paper:
+
+```xml
+<wp:positionV relativeFrom="paragraph"><wp:posOffset>10058400</wp:posOffset></wp:positionV> <!-- 11 in on 11.69 in paper -->
+<wps:txbx id="1"><w:txbxContent><w:p>…</w:p><w:p>…</w:p></w:txbxContent></wps:txbx>   <!-- frame 1 -->
+<wps:linkedTxbx id="1" seq="1"/>                                                     <!-- frame 2, same offset -->
+```
+
+Measured in desktop Word 2024 (16.0 build 20326, Windows 11) by `SaveAs2` to PDF and reading the PDF
+text. LibreOffice was not measured.
+
+| Document | Word 2024 | Docxodus before | Docxodus after |
+|---|---|---|---|
+| The table above | One page; the sixth cell's "Checked by" printed at the paper edge, the seventh cell's text absent | `source anchor tc:… has no measurable fragment` | One page, same text; `source_text_clipped` for the seventh cell's paragraph |
+| Same table, last row five columns wide (control) | One page, all text | Exports | Unchanged |
+| A 780pt fixed grid on Letter paper (`wideBodyTableDocx`) | Two pages; columns A–D printed, E absent | `has no measurable fragment` | Two pages, A–D; 39 `source_text_clipped` |
+| A 540pt fixed header and footer grid on 360pt paper | Two pages; the third cell of each absent | `has no measurable fragment` | Same; one warning each for header and footer |
+| The linked story above | One page, no box text | `source anchor p:… has no measurable fragment` | One page, no box text; `source_text_clipped` for both paragraphs |
+| Same story offset 2 in (control) | Both paragraphs printed in frame 1 | Exports | Unchanged |
+| A single unlinked box at the 11 in offset | One page, no box text | Exports with `source_text_clipped` | Unchanged |
+
+Word applies one rule: the paper edge clips. Whatever of a table or a text-box frame lies past it is
+not printed, a cell crossing it is cut there, and nothing about the off-paper part makes Word refuse
+or move the content. Docxodus already clipped the same way and reported the partly cut table text
+(`source_table_content_clipped`, #1563), but its PageMap completeness check admitted a source anchor
+with no visible fragment only through named proofs, and none covered a table cell or a linked story.
+An unlinked box is covered by its own proof, which binds each paragraph's original geometry to its
+placement; a linked story cannot use it, because `flowLinkedTextBoxes` distributes the paragraphs
+over the frames after the frames are placed.
+
+**Fix.** `hiddenByPaper` (`npm/src/pagination.ts`) admits an element the paper alone hides: its
+layout box has area and lies wholly outside the paper, it is visible under every other clip (so a
+body band cutting content off still fails), and it is inside an authored box whose geometry comes
+from the source, a fixed-width table or a linked frame placed from its source offsets on a
+supported basis. Each such paragraph is reported as `source_text_clipped`, which strict content
+policy rejects. A table, a frame or other content the layout placed off the paper still fails
+completeness, as does an element with no box.
+
+**Tests.** `pagination-table-clipping.spec.ts`, `page-map-source-textbox-clip.spec.ts`,
+`export-wide-body-table.spec.ts`, `export-story-table-width.spec.ts`, `export-linked-textboxes.spec.ts`.

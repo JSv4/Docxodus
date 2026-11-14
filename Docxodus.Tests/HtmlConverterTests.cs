@@ -2523,7 +2523,7 @@ namespace Docxodus.Tests
         [Fact]
         public void HC028_UnsupportedContentPlaceholders_MathEquation()
         {
-            // Unsupported phantoms retain the math placeholder when enabled
+            // Unsupported aligned scripts retain the math placeholder when enabled
             using (MemoryStream ms = new MemoryStream())
             {
                 using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -2545,9 +2545,11 @@ namespace Docxodus.Tests
                     var body = new XElement(W.body,
                         new XElement(W.p,
                             new XElement(mathNs + "oMath",
-                                new XElement(mathNs + "phant",
-                                    new XElement(mathNs + "e", new XElement(mathNs + "r",
-                                        new XElement(mathNs + "t", "x + y = z"))))
+                                new XElement(mathNs + "sSubSup",
+                                    new XElement(mathNs + "sSubSupPr", new XElement(mathNs + "alnScr")),
+                                    new XElement(mathNs + "e", new XElement(mathNs + "r", new XElement(mathNs + "t", "x"))),
+                                    new XElement(mathNs + "sub", new XElement(mathNs + "r", new XElement(mathNs + "t", "i"))),
+                                    new XElement(mathNs + "sup", new XElement(mathNs + "r", new XElement(mathNs + "t", "2"))))
                             )
                         )
                     );

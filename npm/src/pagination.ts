@@ -451,7 +451,7 @@ const MIN_FOOTNOTE_START_PT = 20;
 /** Internal provenance retained only while a note element waits between pages. */
 const FOOTNOTE_SOURCE_POSITION_ATTR = "data-pagination-footnote-source-position";
 /** The MathML vocabulary `WmlToHtmlConverter.Math.cs` emits; such an inline equation moves as one box. */
-const CONVERTER_MATHML_ELEMENTS = /^m(ath|row|[ino]|space|frac|sqrt|root|sub|sup|subsup|multiscripts|prescripts|under|over|underover|table|tr|td)$/;
+const CONVERTER_MATHML_ELEMENTS = /^m(ath|row|[ino]|text|space|frac|sqrt|root|sub|sup|subsup|multiscripts|prescripts|under|over|underover|table|tr|td|phantom|padded)$/;
 
 /**
  * Pagination engine that converts HTML with pagination metadata
@@ -751,17 +751,23 @@ function eligibleSourceTextBox(box: HTMLElement, placement = false): boolean {
       const percent = anchor.getAttribute(`data-docx-anchor-${axis}-percent`);
       return percent === null || (percent.trim() !== '' && Number(percent) === 0);
     })
-    && (!placement || (anchor.dataset.docxDrawingAnchor === 'true'
-      && ((['page', 'margin'].includes(anchor.dataset.docxAnchorHRelative ?? '')
-        && ['page', 'margin'].includes(anchor.dataset.docxAnchorVRelative ?? ''))
-        || (['column', 'margin'].includes(anchor.dataset.docxAnchorHRelative ?? '') && anchor.dataset.docxAnchorVRelative === 'paragraph'))));
+    && (!placement || sourcePlacedDrawing(anchor));
+}
+
+/** A floating drawing placed from its source offsets against a page, margin, column or paragraph reference. */
+function sourcePlacedDrawing(anchor: HTMLElement): boolean {
+  const h = anchor.dataset.docxAnchorHRelative ?? '', v = anchor.dataset.docxAnchorVRelative ?? '';
+  return anchor.dataset.docxDrawingAnchor === 'true'
+    && ((['page', 'margin'].includes(h) && ['page', 'margin'].includes(v)) || (['column', 'margin'].includes(h) && v === 'paragraph'));
+}
+
+function outsidePaper(rect: DOMRect, paper: DOMRect): boolean {
+  return rect.right <= paper.left || rect.left >= paper.right || rect.bottom <= paper.top || rect.top >= paper.bottom;
 }
 
 function sourcePlacementBounds(box: DOMRect, rects: DOMRect[], paper: DOMRect,
   scaleX = 1, scaleY = 1): number[] | undefined {
-  const outside = (rect: DOMRect) => rect.right <= paper.left || rect.left >= paper.right
-    || rect.bottom <= paper.top || rect.top >= paper.bottom;
-  if (!(box.width > 0 && box.height > 0) || !rects.length || !rects.every(outside)) return;
+  if (!(box.width > 0 && box.height > 0) || !rects.length || !rects.every(rect => outsidePaper(rect, paper))) return;
   return textBounds(box, rects, paper, scaleX, scaleY);
 }
 
@@ -813,6 +819,14 @@ function clippedByTextBox(view: Window, element: HTMLElement, rects: DOMRect[], 
 function rendersOnlyItsLine(element: HTMLElement): boolean {
   return (element.textContent ?? '').replace(/[\s\u00a0]/g, '') === ''
     && element.querySelector('img, svg, canvas, [data-docx-drawing-anchor]') === null;
+}
+
+/** True when `element` holds non-whitespace text outside every source anchor nested in it. */
+function ownsText(element: HTMLElement): boolean {
+  const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode())
+    if (/\S/.test(node.textContent ?? '') && node.parentElement?.closest('[data-source-anchor-id]') === element) return true;
+  return false;
 }
 
 /** Self-contained closure for trusted host evaluation in the script-disabled print context. */
@@ -1801,9 +1815,9 @@ export class PaginationEngine {
           if (collapsedBlankLine || clippedAwayByExactRow(element, rect) || blankLineClippedByTextBox(this.view, element, rect, sourceFrame.paper))
             unpaintedAnchorIds.add(anchorId);
           else if (this.isInitiallyClippedText(element, sourceFrame, page.element, partialTextBoxInk)
-            || hiddenPastLinkedStoryEnd(element, rect)) {
+            || hiddenPastLinkedStoryEnd(element, rect) || this.hiddenByPaper(element, rect, sourceFrame)) {
             unpaintedAnchorIds.add(anchorId);
-            if (/\S/.test(element.textContent ?? '')) clippedTextAnchorIds.add(anchorId);
+            if (ownsText(element)) clippedTextAnchorIds.add(anchorId);
           }
           continue;
         }
@@ -1978,12 +1992,7 @@ export class PaginationEngine {
     const inspect = (element: HTMLElement, rect: DOMRect, anchorId: string) => {
       if (!(rect.width > 0 && rect.height > 0) || anchors.has(anchorId)) return;
       // Apply authored row/text-box clips before asking whether paper cuts this content.
-      const left = Math.min(paper.left, rect.left), right = Math.max(paper.right, rect.right);
-      const horizontalOverflow = new this.view.DOMRect(left, paper.top, right - left, paper.height);
-      // Export's promoted-drawing layer repeats the paper clip; it is not an authored box.
-      const layer = element.closest<HTMLElement>('.page-drawing-layer');
-      const { visible } = measureRenderedSource(this.view, element, page, horizontalOverflow, rect,
-        layer?.parentElement === page ? layer : undefined);
+      const visible = this.visibleWithoutPaper(element, rect, page, paper);
       if (visible.right > visible.left && visible.bottom > visible.top
         && (visible.left < paper.left || visible.right > paper.right)) anchors.add(anchorId);
     };
@@ -2018,6 +2027,34 @@ export class PaginationEngine {
         if (anchorId && isVisible(visual)) inspect(visual, visual.getBoundingClientRect(), anchorId);
       }
     }
+  }
+
+  /** Where `rect` of `element` shows under every clip except the paper (`page`, sized `paper`). */
+  private visibleWithoutPaper(element: HTMLElement, rect: DOMRect, page: HTMLElement, paper: DOMRect): VisibleBox {
+    const left = Math.min(paper.left, rect.left), top = Math.min(paper.top, rect.top);
+    const unbounded = new this.view.DOMRect(left, top,
+      Math.max(paper.right, rect.right) - left, Math.max(paper.bottom, rect.bottom) - top);
+    // Export's promoted-drawing layer repeats the paper clip; it is not an authored box.
+    const layer = element.closest<HTMLElement>('.page-drawing-layer');
+    return measureRenderedSource(this.view, element, page, unbounded, rect,
+      layer?.parentElement === page ? layer : undefined).visible;
+  }
+
+  /**
+   * Whether the paper alone hides `element`, as Word prints it (issues #1733, #1734): its layout
+   * box has area and lies wholly outside the paper, every other clip would show it, and an
+   * authored box carries it there — a fixed-width table, or a frame of a linked text-box story
+   * placed from its source offsets. Anything else off the paper may be content the layout lost,
+   * so it still fails completeness. An unlinked text box proves its own paragraphs off the paper
+   * ({@link isInitiallyClippedText}); a linked story is distributed over its frames after they
+   * are placed, so only the frames' placement comes from the source.
+   */
+  private hiddenByPaper(element: HTMLElement, rect: DOMRect, frame: SourcePageFrame): boolean {
+    if (!(rect.width > 0 && rect.height > 0) || !outsidePaper(rect, frame.paper)) return false;
+    const linkedFrame = element.closest<HTMLElement>('[data-docx-textbox="true"][data-docx-textbox-linked="true"]');
+    if (!element.closest('table[data-docx-fixed-width="true"]') && !(linkedFrame && sourcePlacedDrawing(linkedFrame))) return false;
+    const visible = this.visibleWithoutPaper(element, rect, frame.element, frame.paper);
+    return visible.right > visible.left && visible.bottom > visible.top;
   }
 
   private sourcePageFrame(page: HTMLElement, dimensions: PageDimensions): SourcePageFrame {
@@ -2135,8 +2172,7 @@ export class PaginationEngine {
         && (box.right <= paper.left || box.left >= paper.right);
       const outsideY = (style.overflowY === 'hidden' || style.overflowY === 'clip')
         && (box.bottom <= paper.top || box.top >= paper.bottom);
-      if (!outsideX && !outsideY && !rects.every(rect => rect.right <= paper.left || rect.left >= paper.right
-        || rect.bottom <= paper.top || rect.top >= paper.bottom)) return;
+      if (!outsideX && !outsideY && !rects.every(rect => outsidePaper(rect, paper))) return;
     }
     const clip = clippedByTextBox(this.view, element, rects, paper, true);
     if (clip?.dataset.docxSourceClipId === boxId)
@@ -3195,6 +3231,11 @@ export class PaginationEngine {
     return Math.max(0, block.heightPt - (block.trailingLeadingPt ?? 0));
   }
 
+  /** The leading a block placed in `availablePt` lets run past: its last line fits only by its text height. */
+  private droppedLeadingPt(block: MeasuredBlock, availablePt: number): number {
+    return block.heightPt > availablePt ? block.heightPt - this.fitHeightPt(block) : 0;
+  }
+
   private shouldSuppressPageTopSpacing(
     block: MeasuredBlock,
     isFirstOnPage: boolean,
@@ -3232,7 +3273,7 @@ export class PaginationEngine {
   ): HTMLElement {
     const clone = block.element.cloneNode(true) as HTMLElement;
     // A last line that fits only by its text height ends the block there; its leading runs past.
-    if (block.heightPt > availablePt) {
+    if (this.droppedLeadingPt(block, availablePt) > 0) {
       clone.style.setProperty("--docx-word-text-height", `${this.fitHeightPt(block)}pt`);
       clone.style.height = "var(--docx-word-text-height)";
     }
@@ -6695,6 +6736,9 @@ export class PaginationEngine {
 
     // Track the previous block's bottom margin for margin collapsing
     let prevMarginBottomPt = 0;
+    // The leading the previous block's clone lets run under the note band (cloneBlockForPage):
+    // body flow still counts it, but it is not body text the band must stay clear of.
+    let prevDroppedLeadingPt = 0;
     // Track footnote IDs for the current page
     let currentFootnoteIds: string[] = [];
     let currentPageHasFootnoteReference = false;
@@ -6725,7 +6769,7 @@ export class PaginationEngine {
     // The note band a page offers: up to the cap, never over the body already placed on it.
     // An indivisible note part taller than that is clipped in the band, leaving the body visible.
     const noteBandLimit = (bodyHeight: number) => Math.max(0, Math.min(bodyHeight * MAX_FOOTNOTE_AREA_RATIO,
-      bodyHeight - (effectiveContentHeight - remainingHeight - prevMarginBottomPt)));
+      bodyHeight - (effectiveContentHeight - remainingHeight - prevMarginBottomPt - prevDroppedLeadingPt)));
 
     const adoptEmptyPageOwner = (owner: number) => {
       pageSectionIndex = owner;
@@ -6930,6 +6974,7 @@ export class PaginationEngine {
       remainingHeight = effectiveContentHeight;
 
       prevMarginBottomPt = 0; // Reset margin tracking for new page
+      prevDroppedLeadingPt = 0;
       currentFootnoteIds = []; // Reset footnotes for new page
       currentPageHasFootnoteReference = false;
       currentPartialFootnotes = []; // Reset partial footnotes for new page
@@ -7307,7 +7352,14 @@ export class PaginationEngine {
       // Note: bottom margin is NOT included in the fit check because the last block's
       // bottom margin extends beyond the content area and is clipped by overflow:hidden.
       // It is still tracked in remainingHeight for correct margin collapsing with the next block.
-      const requiredHeight = Math.max(this.fitHeightPt(block), block.frameExtentPt ?? 0);
+      // A page's last line needs only its text height: its leading may run past the page foot
+      // (issue #1571) and, as Word lays pages out before compatibility mode 15, under the note band.
+      // Under widow control Word lays a paragraph out whole beside the notes it brings, leading
+      // included, as a citing head is measured (tryFragmentParagraph), so a paragraph whose notes do
+      // not fit beside it breaks before the citing line (#1738).
+      const ownHeight = newFootnoteIds.length > 0 && block.element.dataset.widowControl !== "false"
+        ? block.heightPt : this.fitHeightPt(block);
+      const requiredHeight = Math.max(ownHeight, block.frameExtentPt ?? 0);
       const blockSpace = effectiveMarginTop + requiredHeight + additionalFootnoteHeight;
 
       // Effective remaining height (content area minus footnotes already on page)
@@ -7341,7 +7393,7 @@ export class PaginationEngine {
       // oversized fallback so the cloned head participates in the same margin
       // and footnote accounting as every other block. Only the paragraph's own lines decide
       // this: notes too tall for the page are split or moved by the note placement below.
-      if (effectiveMarginTop + this.fitHeightPt(block) > effectiveRemainingHeight) {
+      if (effectiveMarginTop + ownHeight > effectiveRemainingHeight) {
         const fragments = this.tryFragmentParagraph(
           block,
           blockDimensions,
@@ -7384,14 +7436,16 @@ export class PaginationEngine {
       ) {
         // Block fits with current footnote allocation
         markSectionPlaced(block.sectionIndex);
+        const availablePt = effectiveRemainingHeight - effectiveMarginTop - additionalFootnoteHeight;
         currentContent.push(this.cloneBlockForPage(
           block,
           isFirstOnPage,
           pageInSection(block.sectionIndex),
-          effectiveRemainingHeight - effectiveMarginTop - additionalFootnoteHeight,
+          availablePt,
         ));
         remainingHeight -= (effectiveMarginTop + block.heightPt + block.marginBottomPt);
         prevMarginBottomPt = block.marginBottomPt;
+        prevDroppedLeadingPt = this.droppedLeadingPt(block, availablePt);
         // Add new footnotes to current page
         if (newFootnoteIds.length > 0) {
           currentFootnoteIds.push(...newFootnoteIds);
@@ -7441,14 +7495,6 @@ export class PaginationEngine {
           }
           // Block itself fits, but footnotes don't - expand footnote area
           markSectionPlaced(block.sectionIndex);
-          currentContent.push(this.cloneBlockForPage(
-            block,
-            isFirstOnPage,
-            pageInSection(block.sectionIndex),
-            effectiveRemainingHeight - effectiveMarginTop,
-          ));
-          remainingHeight -= (effectiveMarginTop + block.heightPt + block.marginBottomPt);
-          prevMarginBottomPt = block.marginBottomPt;
 
           // Calculate EXPANDED space available for footnotes
           // Footnotes can take up to maxFootnoteArea or all remaining space, whichever is less
@@ -7560,6 +7606,17 @@ export class PaginationEngine {
               }
             }
           }
+          // Clone the block beside the notes now packed with it, which may take its last line's leading.
+          const availablePt = remainingHeight - currentFootnoteHeight - effectiveMarginTop;
+          currentContent.push(this.cloneBlockForPage(
+            block,
+            isFirstOnPage,
+            pageInSection(block.sectionIndex),
+            availablePt,
+          ));
+          remainingHeight -= (effectiveMarginTop + block.heightPt + block.marginBottomPt);
+          prevMarginBottomPt = block.marginBottomPt;
+          prevDroppedLeadingPt = this.droppedLeadingPt(block, availablePt);
           currentPageHasFootnoteReference ||= allBlockFootnoteIds.length > 0;
         } else {
           // Block itself doesn't fit. Retry after the page turn so carried

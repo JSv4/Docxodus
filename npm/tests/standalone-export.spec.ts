@@ -759,8 +759,8 @@ test.describe('standalone paginated HTML', () => {
   });
 
   test('preserves a structured failed report for strict unsupported content', async ({ page }, testInfo) => {
-    // A phantom is one of the equation structures the converter still reports instead of drawing.
-    const source = mathDocx('phantom', 'inline');
+    // Aligned scripts are one of the equation forms the converter still reports instead of drawing.
+    const source = mathDocx('alignedScripts', 'inline');
     const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone.convertFailure(
       bytes,
       { reviewProfile: 'final', commentProfile: 'hidden', unsupportedContent: 'strict' },
