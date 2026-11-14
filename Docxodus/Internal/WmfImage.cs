@@ -26,11 +26,17 @@ internal static class WmfImage
         double pixelWidth = Math.Ceiling(viewportWidth), pixelHeight = Math.Ceiling(viewportHeight);
         if (pixelWidth > 32768 || pixelHeight > 32768 || pixelWidth * pixelHeight > 16 * 1024 * 1024)
             throw new InvalidDataException("WMF intrinsic size exceeds the 16-megapixel limit.");
+        // GDI plays an embedded EMF in place of the WMF records. The records are a whole drawing of their
+        // own, so a picture whose EMF cannot be played still draws from them.
+        if (EmbeddedEmf(bytes) is { } emf)
+        {
+            try { return Encoding.UTF8.GetBytes(EmfImage.Read(emf).Drawing.ToXmlString(SaveOptions.DisableFormatting)); }
+            catch (Exception e) when (e is InvalidDataException or NotSupportedException or OverflowException) { }
+        }
         var svg = new XElement(Svg + "svg", new XAttribute("width", N(pixelWidth)), new XAttribute("height", N(pixelHeight)),
             new XAttribute("viewBox", $"0 0 {N(viewportWidth)} {N(viewportHeight)}"), new XAttribute("preserveAspectRatio", "none"));
-        // The placeable header fixes the device box; the window always maps onto it. Word draws visible
-        // zero-width pens as printer hairlines, which have no resolution-independent width.
-        var canvas = new MetafileCanvas(svg, bytes, fixedDevice: (viewportWidth, viewportHeight), rejectCosmeticPens: true, defaultJoin: "miter");
+        // The placeable header fixes the device box; the window always maps onto it.
+        var canvas = new MetafileCanvas(svg, bytes, fixedDevice: (viewportWidth, viewportHeight), defaultJoin: "miter");
         canvas.SetWindowOrigin(left, top);
         canvas.SetWindowExtent(width, height);
         var table = new GdiObject?[objects];
@@ -97,7 +103,16 @@ internal static class WmfImage
                         with { Charset = bytes[start + 13] });
                     break;
                 }
-                case 0x01f9 or 0x0142: Store(table, new Brush("none", Pattern: true)); break; // CREATEPATTERNBRUSH, DIBCREATEPATTERNBRUSH
+                case 0x01f9: Store(table, new Brush("none", Pattern: true)); break; // CREATEPATTERNBRUSH
+                case 0x0142: // DIBCREATEPATTERNBRUSH: only a BS_DIBPATTERN in RGB colours can be drawn
+                {
+                    Need(2);
+                    var dib = bytes.AsSpan(start + 4, parameters - 4);
+                    int info = W(0) == 5 && W(1) == 0 ? DibImage.InfoSize(dib) : -1;
+                    if (info > dib.Length) throw new InvalidDataException("Truncated WMF pattern brush.");
+                    Store(table, info < 0 ? new Brush("none", Pattern: true) : canvas.PatternBrush(dib[..info], dib[info..]));
+                    break;
+                }
                 case 0x00f7 or 0x06ff: Store(table, new OtherObject()); break; // CREATEPALETTE, CREATEREGION
                 case 0x012d or 0x01f0: // SELECTOBJECT, DELETEOBJECT
                 {
@@ -173,7 +188,7 @@ internal static class WmfImage
                         if ((options & 0x2) != 0) opaque = (P(4), P(5), P(6), P(7));
                         at += 8;
                     }
-                    if ((options & 0x10) != 0) throw new NotSupportedException("WMF glyph-index text is not supported.");
+                    if ((options & 0x10) != 0 && count > 0) throw new NotSupportedException("WMF glyph-index text is not supported.");
                     int padded = (count + 1) & ~1;
                     if (parameters < at + padded) throw new InvalidDataException("Invalid WMF text record.");
                     double[]? advances = null;
@@ -217,9 +232,11 @@ internal static class WmfImage
                     Need(1);
                     if (W(0) != 0) throw new NotSupportedException("Mirrored WMF layout is not supported.");
                     break;
-                case 0x0104: // SETROP2: only R2_COPYPEN draws the pen and brush as they are
+                case 0x0104: Need(1); canvas.SetBinaryRasterOperation(W(0)); break; // SETROP2
+                case 0x012c: // SELECTCLIPREGION: index 0 is the null region, which resets the clip
                     Need(1);
-                    if (W(0) != 13) throw new NotSupportedException("Unsupported WMF binary raster operation.");
+                    if (W(0) != 0) throw new NotSupportedException("WMF clip regions are not supported.");
+                    canvas.ResetClip();
                     break;
                 case 0x0108 or 0x020a: // SETTEXTCHAREXTRA; SETTEXTJUSTIFICATION (break count, then break extra)
                     Need(function == 0x0108 ? 1 : 2);
@@ -238,6 +255,33 @@ internal static class WmfImage
         throw new InvalidDataException("WMF is missing EOF.");
     }
 
+    /// <summary>The EMF that GDI's EMF-to-WMF conversion (and LibreOffice's WMF export) splits across
+    /// META_ESCAPE_ENHANCED_METAFILE comments, or null when the comments are absent or inconsistent.</summary>
+    private static byte[]? EmbeddedEmf(byte[] bytes)
+    {
+        byte[]? emf = null;
+        long filled = 0;
+        for (int offset = 40; bytes.Length - offset >= 6;)
+        {
+            uint words = U32(bytes, offset);
+            if (words < 3 || (ulong)words * 2 > (ulong)(bytes.Length - offset)) return null;
+            int length = (int)words * 2;
+            // MFCOMMENT escape, "WMFC" identifier, comment type 1; the chunk follows a 44-byte prefix.
+            if (U16(bytes, offset + 4) == 0x0626 && length >= 44 && U16(bytes, offset + 6) == 0x000f
+                && U32(bytes, offset + 10) == 0x43464d57 && U32(bytes, offset + 14) == 1)
+            {
+                uint chunk = U32(bytes, offset + 32), remaining = U32(bytes, offset + 36), total = U32(bytes, offset + 40);
+                if (total > bytes.Length || chunk > length - 44 || (emf != null && total != emf.Length) || filled + chunk + remaining != total)
+                    return null;
+                emf ??= new byte[total];
+                Array.Copy(bytes, offset + 44, emf, filled, chunk);
+                filled += chunk;
+            }
+            offset += length;
+        }
+        return emf != null && filled == emf.Length ? emf : null;
+    }
+
     private static void Fill(MetafileCanvas canvas, uint rop, int x, int y, int width, int height)
     {
         string? color = rop switch { 0x00F00021 => null, 0x00000042 => "#000000", 0x00FF0062 => "#ffffff",
@@ -248,12 +292,12 @@ internal static class WmfImage
     private static void Blit(MetafileCanvas canvas, uint rop, int usage, int x, int y, int width, int height,
         int xSrc, int ySrc, int srcWidth, int srcHeight, ReadOnlySpan<byte> dib, bool fromBottom)
     {
-        if (rop != 0x00CC0020 || usage != 0) throw new NotSupportedException("WMF bitmaps support SRCCOPY with RGB colours only.");
+        if (usage != 0) throw new NotSupportedException("WMF bitmaps with palette colours are not supported.");
         int info = DibImage.InfoSize(dib);
         if (info > dib.Length) throw new InvalidDataException("Truncated WMF bitmap.");
         canvas.ReserveBitmap(Math.Abs((long)srcWidth * srcHeight));
         if (DibImage.Decode(dib[..info], dib[info..], xSrc, ySrc, srcWidth, srcHeight, fromBottom) is { } image)
-            canvas.Image(x, y, width, height, image.Href, image.Pixels);
+            canvas.Bitmap(x, y, width, height, image, rop);
     }
 
     private static (double X, double Y)[] Points(byte[] bytes, int at, long count, int available)

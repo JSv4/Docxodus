@@ -6554,7 +6554,7 @@ with `<v:imagedata r:id="picture"/>`. The related part belongs to its body/heade
 | Identical PNG/TIFF pixels | Fresh PDF capture paints the graphic | Both paint the same graphic | PNG unchanged; TIFF normalized to PNG with identical rendered pixels |
 | WMF picture stretched to twice its height | Fresh DrawingML capture stretches the complete outline: 3pt vertical edges, 6pt horizontal edges | Keeps a uniform 3pt outline | SVG transforms the complete painted graphic, matching Word's scaling |
 | WMF window x scales 0.5, 1 and 2 | Fresh captures exclude 2, 1 and 0 logical units from right bounds; pen scales on both axes | Uses different ellipse center rounding and uniform pen scaling | Resolves device-pixel exclusion before transforming logical shapes and paint |
-| Visible zero-width WMF pen | Fresh PDF uses a printer-device hairline (about 0.14pt before picture scaling) | Device-dependent | Explicit unsupported-content diagnostic; no assumed printer resolution |
+| Visible zero-width WMF pen | Fresh PDF uses a printer-device hairline (about 0.14pt before picture scaling) | Device-dependent | One CSS pixel, as EMF cosmetic pens (#1706; was an unsupported-content diagnostic) |
 | Grouped VML image sizing | Not measured; the diagnostic VML carrier printed a linked-image error | Uniform pen width follows horizontal scale | Uses the same transformed image as DrawingML; carrier placement is tested separately |
 | Unsupported TIFF colorimetry or WMF records | Not measured | Provider-dependent | Explicit placeholder/warning; strict export refuses it |
 
@@ -6574,10 +6574,12 @@ later picture stretching also stretches the outline. LibreOffice instead shifts 
 ellipse's integer center and keeps its pen uniform, so it is not the geometry oracle here.
 
 The SVG viewBox retains the unrounded physical size. Only its width/height attributes round
-up to positive intrinsic dimensions. Bounds that collapse after device-pixel exclusion and
-visible zero-width pens reject the whole image, including previously decoded shapes. Null
-pens remain supported. This prevents a printer-specific hairline from silently becoming a
-different CSS-pixel stroke.
+up to positive intrinsic dimensions. Bounds that collapse after device-pixel exclusion reject
+the whole image, including previously decoded shapes. A visible zero-width pen first did too, so
+that a printer-specific hairline would not silently become a different stroke; since #1706 it draws
+one CSS pixel wide, as an EMF cosmetic pen does, because PowerPoint's WMF export outlines shapes
+with such pens and refusing them kept those pictures as placeholders. That is a screen pixel, not
+the printer hairline above.
 
 The supported subsets and bounds follow [TIFF 6.0](https://www.itu.int/itudoc/itu-t/com16/tiff-fx/docs/tiff6.pdf)
 and Microsoft's [WMF format](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wmf/).
@@ -7658,9 +7660,56 @@ EMR_ALPHABLEND  xDest=35 yDest=1 cxDest=32 cyDest=32  BLENDFUNCTION=0x01FF8000
 
 `Internal/EmfImage.cs` handles the header count and the blend function; `Internal/DibImage.cs`
 unpremultiplies the alpha before encoding PNG. GDI itself plays files by byte length, and
-LibreOffice reads its own exports, so neither notices the count. Visible zero-width WMF pens are
-still refused (see "TIFF and WMF need browser image normalization"); EMF cosmetic pens keep the
-one-CSS-pixel rule from #1554.
+LibreOffice reads its own exports, so neither notices the count. EMF cosmetic pens keep the
+one-CSS-pixel rule from #1554, and since the second stage below visible zero-width WMF pens follow it.
+
+## Office's GDI fallback draws with idioms a strict player rejects (#1706)
+
+Office writes a picture it renders as a dual EMF+ file: EMF+ records with the real drawing, then
+GDI records that redo it with what GDI can do. Windows makes a WMF from such an EMF when asked.
+A corpus of 74 metafiles written on Windows 11 by Word, Excel and PowerPoint 2024 (charts of ten
+kinds, shapes, SmartArt, WordArt, tables, symbol text, an equation and embedded-object previews;
+each EMF also as a WMF, from PowerPoint's own WMF export or GDI's `GetWinMetaFileBits`) shows what
+those GDI records rely on. GDI's behaviour was checked by drawing on a bitmap DC; what Word shows
+comes from its filtered-HTML export, which writes a PNG of each picture.
+
+Every one of the 39 Office EMFs that carried EMF+ was dual, and the two embedded-object icon
+previews carried no EMF+ at all: no Office or Windows writer in the corpus produced an EMF+-only
+file, so those keep the placeholder rather than getting an EMF+ player.
+
+| What the records do | Written by | GDI | Word shows | Docxodus |
+| --- | --- | --- | --- | --- |
+| A transparent bitmap as two blits to one rectangle, between `TNPP` comments: SRCPAINT with a one-bit mask (white = opaque), then SRCAND with the image (white where transparent) | Word and PowerPoint EMF: chart markers, shadows, glows, WordArt, 3-D charts | Exact over any background | The EMF+ image, with soft alpha | Merges the pair into one PNG with on/off alpha |
+| The icon form of the same: SRCAND with the mask (black = opaque), then SRCINVERT with the image | Embedded-object icon previews | Exact | Same as GDI | Same merge |
+| `EMR_CREATEDIBPATTERNBRUSHPT`: an 8×8 one-bit DIB in RGB colours | Pattern fills in charts and shapes | Paints the DIB's own colour table, not the text and background colours; tiles in the pixels of the device it plays onto | Stripes a few screen pixels apart | Tiles the bitmap as an SVG pattern in CSS pixels |
+| A reference device of 600 dpi (Frame 4.235 hundredths of a millimetre per pixel) | PowerPoint EMF | Brush tiles and hatches are output-device pixels, whatever the reference device | Coarse stripes | Hatches and tiles are sized in CSS pixels; at the reference device's 0.042 mm they were invisible |
+| `BEGINPATH`, world scaled by 1/8, the figure, the scale undone, `ENDPATH` | PowerPoint charts | Converts each point to device space as it is added; a geometric pen is realised at the transform in effect when the path is stroked | Drawn | The bracket takes its first figure's transform; stroking it with a geometric pen at another scale keeps the placeholder |
+| `META_SELECTCLIPREGION` with index 0, and no region ever created | PowerPoint WMF, `GetWinMetaFileBits` | The null region: resets the clip | Drawn | Resets the clip; any other index keeps the placeholder |
+| 471 one-unit `EXCLUDECLIPRECT` strips carving a shape's outline | PowerPoint WMF of gradient and glow shapes | A banded region | Drawn | Consecutive exclusions before anything is drawn become holes in one clip path (one nested `clipPath` each exceeded the depth bound) |
+| `SETROP2 R2_NOP` around polygons inside PostScript `BEGIN_PATH`/`END_PATH` escapes | PowerPoint WMF | Leaves the destination unchanged | Nothing drawn | Draws nothing with the pen or brush; PATBLT, a raster operation of its own, still paints |
+| `EXTTEXTOUTW` with `ETO_GLYPH_INDEX` and zero characters | Embedded-object icon previews | Draws nothing | Nothing drawn | Draws nothing (glyph-index runs with characters still keep the placeholder) |
+| Symbol and Wingdings text as the fonts' codes moved to U+F020–U+F0FF, or as bytes in a WMF | Word EMF; any WMF | The font's glyphs | α β ≥ ∑ ☺ ✓ | Maps through `SymbolFontMapper` and draws in an ordinary font; a code with no Unicode equivalent keeps the placeholder |
+| A zero-width pen outlining an arrowhead | PowerPoint WMF | One device pixel | One pixel | One CSS pixel, as EMF cosmetic pens (it was refused) |
+| The source EMF split across `META_ESCAPE_ENHANCED_METAFILE` comments ("WMFC") | `GetWinMetaFileBits`, LibreOffice WMF export | Plays the embedded EMF instead of the WMF records | αβ ≤ ± → (the EMF's text) | Plays the embedded EMF; when it cannot, plays the WMF records |
+| ANSI text records that lose characters ("αβ ≤ →" becomes "aß = ?"), and one-bit DIBs written without their colour table | `GetWinMetaFileBits` | Unused: the embedded EMF is played | The EMF's text | Unused for the same reason |
+| A gradient as abutting strips of solid polygons | Every Office gradient | Aliased, so the strips meet without a seam | The EMF+ gradient | Anti-aliased SVG shows faint lighter lines where strips meet (not fixed; already so for gradients drawn before) |
+| A semi-transparent fill as PATINVERT, a fill with `R2_MASKPEN` and a one-bit pattern, then PATINVERT again; or `R2_XORPEN` | SmartArt with transparency; PowerPoint WMF of a gradient area chart | A dithered approximation | The EMF+ alpha | Keeps the placeholder |
+| Equation text as glyph indices (Cambria Math) | Word EMF of an equation | The font's glyphs | Drawn | Keeps the placeholder: glyph indices need the font's own tables |
+
+```text
+EMR_STRETCHDIBITS  dest (4925,92) 1151×817  src 576×409  BI_RGB 1 bpp   rop 0x00EE0086 (SRCPAINT)
+EMR_STRETCHDIBITS  dest (4925,92) 1151×817  src 576×409  BI_RGB 8 bpp   rop 0x008800C6 (SRCAND)
+
+META_SAVEDC
+META_SELECTCLIPREGION  Region=0
+META_INTERSECTCLIPRECT 166,166 - 3500,2333
+```
+
+`Internal/MetafileCanvas.cs` evaluates a blit's raster operation per pixel from its truth table: a
+pixel whose result does not read the destination is drawn or left transparent, and one whose result
+does is exact only where the bitmap drawn just before, to the same rectangle, left the destination
+known. The fixtures under `TestFiles/Metafiles/office-*` are corpus files; their README records how
+each was written.
 
 ## Missing-font classes differ from native font selection (#1574)
 

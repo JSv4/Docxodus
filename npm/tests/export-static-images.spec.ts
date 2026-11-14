@@ -56,7 +56,15 @@ for (const header of ['wide-wmf', 'tall-wmf', 'group-wmf'].includes(format) ? [f
   });
 }
 
-for (const format of ['unsupported-tiff', 'unsupported-wmf', 'tiny-wmf', 'hairline-wmf'] as const) test(`${format} remains explicit under warn and strict policies`, async ({ browser }) => {
+test('a zero-width WMF pen draws a one-pixel outline, as an EMF cosmetic pen does', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const result = await renderDocxArtifacts(staticImageDocx('hairline-wmf', false), { browser, outputs: ['html'],
+    reviewProfile: 'final', commentProfile: 'hidden', unsupportedContent: 'strict', timeoutMs: 120_000 });
+  const svg = Buffer.from(/data:image\/svg\+xml;base64,([^"]+)/.exec(result.html!)![1], 'base64').toString();
+  expect(svg).toContain('vector-effect="non-scaling-stroke"');
+});
+
+for (const format of ['unsupported-tiff', 'unsupported-wmf', 'tiny-wmf'] as const) test(`${format} remains explicit under warn and strict policies`, async ({ browser }) => {
   test.setTimeout(120_000);
   const input = staticImageDocx(format, false);
   const options = { browser, outputs: ['html', 'pdf'] as Array<'html' | 'pdf'>, reviewProfile: 'final' as const, commentProfile: 'hidden' as const, timeoutMs: 120_000 };
