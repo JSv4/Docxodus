@@ -2971,6 +2971,120 @@ paragraph mark in Docxodus output.
 `Docxodus.Tests/DocxDiffTextMoveTests.cs` (`TextBelowTheMinimumWordCount_IsNotAMove`,
 `TextBelowTheMinimum_IsAMove_WhenTheMinimumIsLowered`).
 
+## Compare: a paragraph is edited in place only while its diff keeps an eighth of its text (#1739)
+
+### The corner case
+
+Word's Compare draws an old and a new paragraph as one edited paragraph only while its word diff keeps
+about an eighth of the longer paragraph's characters. Below that it deletes the old paragraph and inserts
+the new one, even when the two share a clause label and a dozen articles and prepositions. Docxodus paired
+any two paragraphs that shared such words and diffed them word by word, so a document rewritten throughout
+came back as thousands of short insertions and deletions threaded around the shared words.
+
+### Minimal reproducer
+
+```xml
+<!-- original body -->
+<w:p><w:r><w:t>Clause 1</w:t></w:r></w:p>
+<w:p><w:r><w:t>(a) For courier by with for warehouse on supplier voucher for by ledger supplier manifest courier with.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Clause 2</w:t></w:r></w:p>
+<!-- revised body: the middle paragraph only -->
+<w:p><w:r><w:t>(a) Lease garden tenant of for utilities and utilities on fixtures notice repair fixtures by notice tenant.</w:t></w:r></w:p>
+```
+
+Word deletes the old clause and inserts the new one. Docxodus used to keep `(a) `, `for`, `on`, `by` and the
+period unmarked and interleave the rest.
+
+### Behavior table
+
+Word 2024, Compare Documents at word level; each case is one paragraph between unchanged ones. "Kept" is the
+share of the longer paragraph's characters that Word's diff leaves unmarked, spaces included (for a replaced
+pair, what the obvious in-order diff would keep). LibreOffice was not measured.
+
+| Pair | Kept | Word | Docxodus before | Docxodus after |
+|---|---|---|---|---|
+| 20 six-letter words, 3 kept in place | 0.18 | edited in place | edited in place | edited in place |
+| 20 six-letter words, 2 kept | 0.11 | deleted + inserted | edited in place | deleted + inserted |
+| 10 six-letter words, 1 kept | 0.13 | edited in place | edited in place | edited in place |
+| 12 six-letter words, 1 kept | 0.11 | deleted + inserted | edited in place | deleted + inserted |
+| one 12-letter word kept among 19 four-letter words | 0.14 | edited in place | edited in place | edited in place |
+| 5 three-letter words kept among 15 nine-letter words | 0.14 | edited in place | edited in place | edited in place |
+| 4 three-letter words kept among 16 nine-letter words | 0.11 | deleted + inserted | edited in place | deleted + inserted |
+| every noun replaced, articles and prepositions where they were | 0.44 | edited in place | edited in place | edited in place |
+| a rewritten clause sharing its label and scattered short words | — | deleted + inserted | edited in place | deleted + inserted |
+| the same twenty words in reverse order | 0.06 | deleted + inserted | edited in place | deleted + inserted |
+| 2 words, 8 appended | 0.20 | edited in place | edited in place | edited in place |
+| 2 words, 16 appended | 0.11 | deleted + inserted | edited in place | edited in place |
+| 30 words cut to their first 2 (the WC007 pair) | 0.07 | deleted + inserted | edited in place | deleted + inserted |
+| 30 words cut to their first 4 | 0.13 | deleted + inserted | edited in place | edited in place |
+| the issue's 400-clause rewrite: text-bearing `w:del` | | 428, median 239 characters | 2,233, median 28 | 462, median 235 |
+| the same: revisions as Word counts them | | 161 | 4,462 | 268 |
+| the 3,000-clause rewrite: text-bearing `w:del` | | 3,275, median 238 | 16,680, median 28 | 3,554, median 234 |
+
+The story's final paragraph follows the same rule; Word then draws the deletion and the insertion inside one
+paragraph, since the last paragraph mark stays.
+
+### Analysis
+
+Across 152 single-paragraph probes, Word's decision follows the kept share with a boundary between 0.118 and
+0.129 for edits that keep their words in order. Characters count, not words: one kept 12-letter word holds
+twenty short words in place, while five kept three-letter words are needed among long ones. Short words are
+not discounted as such: articles and prepositions left where they were hold a paragraph whose every noun
+changed, and so do four aligned "the" (a case Docxodus does not pair at all, before or after this change).
+
+What separates a heavy edit from a rewrite is which words a diff can keep. A longest common subsequence of two
+unrelated sentences threads together every chance match of a recurring short word, keeping 0.13–0.20 of the
+text, and Word's own diff keeps fewer of them and replaces the paragraph. Docxodus therefore measures the kept
+share with a longest-run-first match (Ratcliff/Obershelp): common prefix and suffix, then the longest common
+run of words and punctuation, then the same on either side of it, each kept token counting its characters
+plus one space. With a floor of one eighth it agrees with Word on 140 of the 152 probes (118 before) and
+replaces 388 of the issue fixture's 400 rewritten clauses (Word replaced all 400). The disagreements sit at
+the boundary, where Word's diff keeps sometimes more and sometimes less than the longest-run-first match:
+
+- six of ten one-sentence rewrites of about sixteen words, where Word kept two shared function words and
+  edited in place (share about 0.10 here);
+- twelve of the fixture's two-sentence clauses (share 0.125–0.152), which Word replaced. In isolation Word
+  kept one of the four highest of them in place and replaced the other three;
+- a paragraph cut from 30 words to its first four (0.13), and one grown from two words to eighteen (0.11 in
+  Word's count, 0.127 in this one), both replaced by Word.
+
+A released pair must also stay released when the redline is arranged. The cross-paragraph token stream
+would otherwise take released rewrites into the region of a neighbouring pair that stayed paired, or stream
+a gap of rewrites on their shared clause labels, matching labels, articles and stray parentheses across
+paragraph boundaries; on the fixture that interleaved 176 paragraphs. A region that still holds a pair
+therefore does not take in a released rewrite, and a lone letter such as the `b` of `(b)` no longer counts
+as the content word a pairless region needs to stream, any more than a number does. A pairless region whose
+paragraphs share real words still streams as before: Word, too, keeps a deleted paragraph's leading word
+when it reappears at the head of the next one. In regions of short one-sentence clauses Word sometimes
+streams a shared label and two or three articles across rewritten clauses; Docxodus keeps those clauses
+whole.
+
+The match decides only whether two paragraphs correspond; a pair kept in place is still rendered by the
+token diff. A rewrite is not matched as a moved paragraph either.
+
+Observed in the same runs and left unchanged: in a region of several replaced paragraphs Word 2024 writes all
+the deleted paragraphs before the inserted ones, where Docxodus's replace-gap arrangement writes the insertions
+first; and Word deletes and inserts a one-word paragraph replaced by another word (`Two` → `Two1`), which
+Docxodus keeps paired so that reviewer edits of such labels still compose in `Consolidate`.
+
+### Relevant code
+
+- `Docxodus/Ir/Diff/IrBlockSimilarity.cs` — `IsRewrite`, also consulted by `ResidueForcePair`.
+- `Docxodus/Ir/Diff/IrBlockAligner.cs` — `ReleaseRewrites` in the gap fill, and `DetectCrossGapMoves`.
+- `Docxodus/Ir/Diff/IrEditScriptBuilder.cs` (`TryBuildStoryFinalMixedRegionOp`, `TryCollectStoryFinalTail`) and
+  `Docxodus/Ir/Diff/IrCrossParagraphSegmenter.cs` — released rewrites in the token stream.
+
+### Tests
+
+`Docxodus.Tests/Ir/Diff/IrBlockAlignerTests.cs`
+(`Paragraph_stays_paired_only_while_its_diff_keeps_an_eighth_of_its_text`,
+`Clause_label_and_scattered_short_words_do_not_keep_a_rewrite_paired`,
+`Short_words_in_place_and_long_kept_words_keep_a_heavy_edit_paired`,
+`Reversed_paragraph_is_replaced_not_moved`), `Docxodus.Tests/DocxDiffGapArrangementTests.cs`
+(`InteriorRewrite_IsReplacedWhole_UnlessItKeepsAnEighthOfItsText`,
+`RewrittenClauses_StayWhole_BesideAnEditedClauseOrNone`) and
+`Docxodus.Tests/DocxDiffWordShapeTests.cs` (`InteriorWeakPair_IsReplacedWhole`).
+
 ## Compare: rejecting a moved and edited paragraph (#1716)
 
 ### The corner case
