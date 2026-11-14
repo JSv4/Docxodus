@@ -751,17 +751,23 @@ function eligibleSourceTextBox(box: HTMLElement, placement = false): boolean {
       const percent = anchor.getAttribute(`data-docx-anchor-${axis}-percent`);
       return percent === null || (percent.trim() !== '' && Number(percent) === 0);
     })
-    && (!placement || (anchor.dataset.docxDrawingAnchor === 'true'
-      && ((['page', 'margin'].includes(anchor.dataset.docxAnchorHRelative ?? '')
-        && ['page', 'margin'].includes(anchor.dataset.docxAnchorVRelative ?? ''))
-        || (['column', 'margin'].includes(anchor.dataset.docxAnchorHRelative ?? '') && anchor.dataset.docxAnchorVRelative === 'paragraph'))));
+    && (!placement || sourcePlacedDrawing(anchor));
+}
+
+/** A floating drawing placed from its source offsets against a page, margin, column or paragraph reference. */
+function sourcePlacedDrawing(anchor: HTMLElement): boolean {
+  const h = anchor.dataset.docxAnchorHRelative ?? '', v = anchor.dataset.docxAnchorVRelative ?? '';
+  return anchor.dataset.docxDrawingAnchor === 'true'
+    && ((['page', 'margin'].includes(h) && ['page', 'margin'].includes(v)) || (['column', 'margin'].includes(h) && v === 'paragraph'));
+}
+
+function outsidePaper(rect: DOMRect, paper: DOMRect): boolean {
+  return rect.right <= paper.left || rect.left >= paper.right || rect.bottom <= paper.top || rect.top >= paper.bottom;
 }
 
 function sourcePlacementBounds(box: DOMRect, rects: DOMRect[], paper: DOMRect,
   scaleX = 1, scaleY = 1): number[] | undefined {
-  const outside = (rect: DOMRect) => rect.right <= paper.left || rect.left >= paper.right
-    || rect.bottom <= paper.top || rect.top >= paper.bottom;
-  if (!(box.width > 0 && box.height > 0) || !rects.length || !rects.every(outside)) return;
+  if (!(box.width > 0 && box.height > 0) || !rects.length || !rects.every(rect => outsidePaper(rect, paper))) return;
   return textBounds(box, rects, paper, scaleX, scaleY);
 }
 
@@ -813,6 +819,14 @@ function clippedByTextBox(view: Window, element: HTMLElement, rects: DOMRect[], 
 function rendersOnlyItsLine(element: HTMLElement): boolean {
   return (element.textContent ?? '').replace(/[\s\u00a0]/g, '') === ''
     && element.querySelector('img, svg, canvas, [data-docx-drawing-anchor]') === null;
+}
+
+/** True when `element` holds non-whitespace text outside every source anchor nested in it. */
+function ownsText(element: HTMLElement): boolean {
+  const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode())
+    if (/\S/.test(node.textContent ?? '') && node.parentElement?.closest('[data-source-anchor-id]') === element) return true;
+  return false;
 }
 
 /** Self-contained closure for trusted host evaluation in the script-disabled print context. */
@@ -1801,9 +1815,9 @@ export class PaginationEngine {
           if (collapsedBlankLine || clippedAwayByExactRow(element, rect) || blankLineClippedByTextBox(this.view, element, rect, sourceFrame.paper))
             unpaintedAnchorIds.add(anchorId);
           else if (this.isInitiallyClippedText(element, sourceFrame, page.element, partialTextBoxInk)
-            || hiddenPastLinkedStoryEnd(element, rect)) {
+            || hiddenPastLinkedStoryEnd(element, rect) || this.hiddenByPaper(element, rect, sourceFrame)) {
             unpaintedAnchorIds.add(anchorId);
-            if (/\S/.test(element.textContent ?? '')) clippedTextAnchorIds.add(anchorId);
+            if (ownsText(element)) clippedTextAnchorIds.add(anchorId);
           }
           continue;
         }
@@ -1978,12 +1992,7 @@ export class PaginationEngine {
     const inspect = (element: HTMLElement, rect: DOMRect, anchorId: string) => {
       if (!(rect.width > 0 && rect.height > 0) || anchors.has(anchorId)) return;
       // Apply authored row/text-box clips before asking whether paper cuts this content.
-      const left = Math.min(paper.left, rect.left), right = Math.max(paper.right, rect.right);
-      const horizontalOverflow = new this.view.DOMRect(left, paper.top, right - left, paper.height);
-      // Export's promoted-drawing layer repeats the paper clip; it is not an authored box.
-      const layer = element.closest<HTMLElement>('.page-drawing-layer');
-      const { visible } = measureRenderedSource(this.view, element, page, horizontalOverflow, rect,
-        layer?.parentElement === page ? layer : undefined);
+      const visible = this.visibleWithoutPaper(element, rect, page, paper);
       if (visible.right > visible.left && visible.bottom > visible.top
         && (visible.left < paper.left || visible.right > paper.right)) anchors.add(anchorId);
     };
@@ -2018,6 +2027,34 @@ export class PaginationEngine {
         if (anchorId && isVisible(visual)) inspect(visual, visual.getBoundingClientRect(), anchorId);
       }
     }
+  }
+
+  /** Where `rect` of `element` shows under every clip except the paper (`page`, sized `paper`). */
+  private visibleWithoutPaper(element: HTMLElement, rect: DOMRect, page: HTMLElement, paper: DOMRect): VisibleBox {
+    const left = Math.min(paper.left, rect.left), top = Math.min(paper.top, rect.top);
+    const unbounded = new this.view.DOMRect(left, top,
+      Math.max(paper.right, rect.right) - left, Math.max(paper.bottom, rect.bottom) - top);
+    // Export's promoted-drawing layer repeats the paper clip; it is not an authored box.
+    const layer = element.closest<HTMLElement>('.page-drawing-layer');
+    return measureRenderedSource(this.view, element, page, unbounded, rect,
+      layer?.parentElement === page ? layer : undefined).visible;
+  }
+
+  /**
+   * Whether the paper alone hides `element`, as Word prints it (issues #1733, #1734): its layout
+   * box has area and lies wholly outside the paper, every other clip would show it, and an
+   * authored box carries it there — a fixed-width table, or a frame of a linked text-box story
+   * placed from its source offsets. Anything else off the paper may be content the layout lost,
+   * so it still fails completeness. An unlinked text box proves its own paragraphs off the paper
+   * ({@link isInitiallyClippedText}); a linked story is distributed over its frames after they
+   * are placed, so only the frames' placement comes from the source.
+   */
+  private hiddenByPaper(element: HTMLElement, rect: DOMRect, frame: SourcePageFrame): boolean {
+    if (!(rect.width > 0 && rect.height > 0) || !outsidePaper(rect, frame.paper)) return false;
+    const linkedFrame = element.closest<HTMLElement>('[data-docx-textbox="true"][data-docx-textbox-linked="true"]');
+    if (!element.closest('table[data-docx-fixed-width="true"]') && !(linkedFrame && sourcePlacedDrawing(linkedFrame))) return false;
+    const visible = this.visibleWithoutPaper(element, rect, frame.element, frame.paper);
+    return visible.right > visible.left && visible.bottom > visible.top;
   }
 
   private sourcePageFrame(page: HTMLElement, dimensions: PageDimensions): SourcePageFrame {
@@ -2135,8 +2172,7 @@ export class PaginationEngine {
         && (box.right <= paper.left || box.left >= paper.right);
       const outsideY = (style.overflowY === 'hidden' || style.overflowY === 'clip')
         && (box.bottom <= paper.top || box.top >= paper.bottom);
-      if (!outsideX && !outsideY && !rects.every(rect => rect.right <= paper.left || rect.left >= paper.right
-        || rect.bottom <= paper.top || rect.top >= paper.bottom)) return;
+      if (!outsideX && !outsideY && !rects.every(rect => outsidePaper(rect, paper))) return;
     }
     const clip = clippedByTextBox(this.view, element, rects, paper, true);
     if (clip?.dataset.docxSourceClipId === boxId)

@@ -8878,3 +8878,56 @@ cell marks where the row ends. The filler cell for an omitted `w:gridBefore` is 
 row, and an exact-height row's cell takes the content inside its clip box. Nothing is dropped: a
 row or table with no cell of its own keeps the content beside its cells or rows. The bracket marks
 stay, now inside the cell: Word offers no placement to follow. Tests: `TableRangeBoundaryTests`, `npm/tests/export-bookmarked-table.spec.ts`.
+
+## Content wholly off the paper: Word prints what the paper holds (#1733, #1734)
+
+Two layouts put source content entirely outside the paper. A fixed-layout table wider than its page
+(fixed `w:tblLayout`, DXA `w:tblW` and grid):
+
+```xml
+<!-- A4 (11906 twips) with 1418-twip margins; the grid is 14700 twips wide -->
+<w:tblGrid><w:gridCol w:w="1800"/><w:gridCol w:w="2200"/><w:gridCol w:w="1500"/><w:gridCol w:w="1500"/>
+  <w:gridCol w:w="1500"/><w:gridCol w:w="3000"/><w:gridCol w:w="3200"/></w:tblGrid>
+<!-- the last row fills all seven columns: the sixth cell crosses the paper edge, the seventh starts past it -->
+```
+
+and a linked text-box story whose frames are offset below the paper:
+
+```xml
+<wp:positionV relativeFrom="paragraph"><wp:posOffset>10058400</wp:posOffset></wp:positionV> <!-- 11 in on 11.69 in paper -->
+<wps:txbx id="1"><w:txbxContent><w:p>…</w:p><w:p>…</w:p></w:txbxContent></wps:txbx>   <!-- frame 1 -->
+<wps:linkedTxbx id="1" seq="1"/>                                                     <!-- frame 2, same offset -->
+```
+
+Measured in desktop Word 2024 (16.0 build 20326, Windows 11) by `SaveAs2` to PDF and reading the PDF
+text. LibreOffice was not measured.
+
+| Document | Word 2024 | Docxodus before | Docxodus after |
+|---|---|---|---|
+| The table above | One page; the sixth cell's "Checked by" printed at the paper edge, the seventh cell's text absent | `source anchor tc:… has no measurable fragment` | One page, same text; `source_text_clipped` for the seventh cell's paragraph |
+| Same table, last row five columns wide (control) | One page, all text | Exports | Unchanged |
+| A 780pt fixed grid on Letter paper (`wideBodyTableDocx`) | Two pages; columns A–D printed, E absent | `has no measurable fragment` | Two pages, A–D; 39 `source_text_clipped` |
+| A 540pt fixed header and footer grid on 360pt paper | Two pages; the third cell of each absent | `has no measurable fragment` | Same; one warning each for header and footer |
+| The linked story above | One page, no box text | `source anchor p:… has no measurable fragment` | One page, no box text; `source_text_clipped` for both paragraphs |
+| Same story offset 2 in (control) | Both paragraphs printed in frame 1 | Exports | Unchanged |
+| A single unlinked box at the 11 in offset | One page, no box text | Exports with `source_text_clipped` | Unchanged |
+
+Word applies one rule: the paper edge clips. Whatever of a table or a text-box frame lies past it is
+not printed, a cell crossing it is cut there, and nothing about the off-paper part makes Word refuse
+or move the content. Docxodus already clipped the same way and reported the partly cut table text
+(`source_table_content_clipped`, #1563), but its PageMap completeness check admitted a source anchor
+with no visible fragment only through named proofs, and none covered a table cell or a linked story.
+An unlinked box is covered by its own proof, which binds each paragraph's original geometry to its
+placement; a linked story cannot use it, because `flowLinkedTextBoxes` distributes the paragraphs
+over the frames after the frames are placed.
+
+**Fix.** `hiddenByPaper` (`npm/src/pagination.ts`) admits an element the paper alone hides: its
+layout box has area and lies wholly outside the paper, it is visible under every other clip (so a
+body band cutting content off still fails), and it is inside an authored box whose geometry comes
+from the source, a fixed-width table or a linked frame placed from its source offsets on a
+supported basis. Each such paragraph is reported as `source_text_clipped`, which strict content
+policy rejects. A table, a frame or other content the layout placed off the paper still fails
+completeness, as does an element with no box.
+
+**Tests.** `pagination-table-clipping.spec.ts`, `page-map-source-textbox-clip.spec.ts`,
+`export-wide-body-table.spec.ts`, `export-story-table-width.spec.ts`, `export-linked-textboxes.spec.ts`.

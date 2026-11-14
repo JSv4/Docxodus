@@ -72,3 +72,37 @@ test('a linked story longer than its frames hides the rest in its last frame', a
   expect(frames[0].overflow).toBeLessThanOrEqual(1);
   expect(frames[1].overflow).toBeGreaterThan(1);
 });
+
+// Word 2024 prints a linked story's frames only where the paper holds them (issue #1734): frames
+// placed below it print nothing, and the export reports that text instead of refusing the document.
+// A continuation frame below the paper costs the story only what flowed there.
+for (const belowPaper of ['story', 'continuation'] as const) {
+  test(`a linked story with its ${belowPaper === 'story' ? 'frames' : 'continuation frame'} below the paper prints what the paper holds`, async ({ browser, page }) => {
+    test.setTimeout(120_000);
+    const bytes = linkedTextBoxDocx('flow', belowPaper);
+    const options = { browser, outputs: ['html', 'pdf'] as ('html' | 'pdf')[], reviewProfile: 'markup' as const,
+      commentProfile: 'hidden' as const, timeoutMs: 120_000 };
+    const result = await renderDocxArtifacts(bytes, options);
+    const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
+    try {
+      const pdf = await task.promise;
+      expect(pdf.numPages).toBe(1);
+      const text = (await (await pdf.getPage(1)).getTextContent()).items.filter(item => 'str' in item).map(item => item.str).join(' ');
+      expect(text).toContain('inventory');
+      const words = text.match(/Alder\d+/g) ?? [];
+      // The continuation frame shows none of the story, so the first frame's words are all that print.
+      expect(words.length > 0 && words.length < 70).toBe(belowPaper === 'continuation');
+      expect(words).toEqual(Array.from({ length: words.length }, (_, i) => `Alder${String(i).padStart(3, '0')}`));
+    } finally { await task.destroy(); }
+    await page.setContent(result.html!);
+    const story = await page.locator('.page-box [data-docx-textbox] [data-source-anchor-id]').first().getAttribute('data-source-anchor-id');
+    const fragments = result.pageMap.fragments.filter(fragment => fragment.anchorId === story);
+    const clipped = result.renderReport.warnings.filter(warning => warning.code === 'source_text_clipped');
+    expect(fragments).toHaveLength(belowPaper === 'story' ? 0 : 1);
+    if (belowPaper === 'story') {
+      expect(clipped.map(warning => warning.anchorId)).toEqual([story]);
+      await expect(renderDocxArtifacts(bytes, { ...options, unsupportedContent: 'strict' }))
+        .rejects.toMatchObject({ code: 'resource_policy_failure', phase: 'output_verification' });
+    }
+  });
+}
