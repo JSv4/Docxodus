@@ -129,6 +129,10 @@ internal static class IrCrossParagraphSegmenter
         return true;
     }
 
+    /// <summary>A word that is a single cased letter, such as the "b" of a "(b)" clause label.</summary>
+    private static bool IsLoneLetter(string text) =>
+        text.Length == 1 && (char.IsUpper(text[0]) || char.IsLower(text[0]));
+
     /// <summary>One content-anchor unit: a word, or a compound (words joined by non-whitespace
     /// separators). <see cref="Start"/>/<see cref="Length"/> address the side's FLAT token stream;
     /// <see cref="Key"/> is the concatenated member MatchKey; <see cref="Chars"/> the visible text
@@ -395,9 +399,11 @@ internal static class IrCrossParagraphSegmenter
         if (bail)
             return null;
         // With no established paragraph pair, only real content can justify streaming across
-        // paragraph boundaries. A complete rewrite sharing just articles stays in coherent blocks.
+        // paragraph boundaries. A complete rewrite sharing just articles stays in coherent blocks, and
+        // so does one sharing just its clause labels: a lone letter like the "b" of "(b)" is an
+        // ordinal, as a number is (#1739). A Han or kana word is one uncased character and still counts.
         if (pairs.Count == 0 && !all.Exists(match => flatL[match.Lf].Kind == IrDiffTokenKind.Word &&
-                IrBlockSimilarity.ContainsLetter(flatL[match.Lf].Text) &&
+                IrBlockSimilarity.ContainsLetter(flatL[match.Lf].Text) && !IsLoneLetter(flatL[match.Lf].Text) &&
                 !IrBlockAligner.IsFunctionWordKey(flatL[match.Lf].MatchKey)))
             return null;
         // `all` is sorted by left AND right flat index: pass-1 anchors are monotone, and every pass-2

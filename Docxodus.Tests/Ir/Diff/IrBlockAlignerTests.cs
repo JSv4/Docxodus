@@ -134,6 +134,90 @@ public class IrBlockAlignerTests
         AssertInvariants(l, r, a);
     }
 
+    // ------------------------------------------------------------------ rewrites (issue #1739)
+    //
+    // A reference compare edits a paragraph pair in place only while its diff keeps about an eighth of the
+    // longer paragraph's text. Each case below was compared there; the comment on each says what it drew.
+
+    /// <summary>Twenty six-letter words; the revision replaces every word whose index is not in
+    /// <paramref name="kept"/>.</summary>
+    private static (string Old, string New) Substituted(params int[] kept)
+    {
+        string Words(char side) => string.Join(" ", Enumerable.Range(0, 20)
+            .Select(i => $"{(kept.Contains(i) ? 'k' : side)}{(char)('a' + i)}word")) + ".";
+        return (Words('o'), Words('n'));
+    }
+
+    [Theory]
+    [InlineData(new[] { 4, 13 }, false)]    // two words kept: deleted and inserted
+    [InlineData(new[] { 4, 9, 13 }, true)]  // three words kept: edited in place
+    public void Paragraph_stays_paired_only_while_its_diff_keeps_an_eighth_of_its_text(int[] kept, bool paired)
+    {
+        var (oldText, newText) = Substituted(kept);
+        var l = Doc("Clause 1", oldText, "Clause 2");
+        var r = Doc("Clause 1", newText, "Clause 2");
+        var a = Align(l, r);
+
+        Assert.Equal(paired ? 1 : 0, Count(a, IrAlignmentKind.Modified));
+        Assert.Equal(paired ? 0 : 1, Count(a, IrAlignmentKind.Deleted));
+        AssertInvariants(l, r, a);
+    }
+
+    [Theory]
+    // The issue's shape: a clause rewritten in other words keeps its label and a few articles and
+    // prepositions, in other places. The reference deletes and inserts each of these.
+    [InlineData( // the lone-residue pairing, which "(a)" reaches because "a" is an article
+        "(a) For courier by with for warehouse on supplier voucher for by ledger supplier manifest courier with.",
+        "(a) Lease garden tenant of for utilities and utilities on fixtures notice repair fixtures by notice tenant.")]
+    [InlineData( // the same-slot pairing on the shared label
+        "(c) For courier and voucher courier shipment by with a and by manifest a for and manifest.",
+        "(c) Inspection with keys landlord notice deposit rent notice keys utilities to by deposit on premises utilities.")]
+    public void Clause_label_and_scattered_short_words_do_not_keep_a_rewrite_paired(string oldText, string newText)
+    {
+        var l = Doc("Clause 1", oldText, "Clause 2");
+        var r = Doc("Clause 1", newText, "Clause 2");
+        var a = Align(l, r);
+
+        Assert.Equal(0, Count(a, IrAlignmentKind.Modified));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Inserted));
+        AssertInvariants(l, r, a);
+    }
+
+    [Theory]
+    // Every content word replaced, the articles and prepositions left where they were: edited in place.
+    [InlineData(
+        "(b) the oaword of obword to ocword and odword in oeword for ofword on ogword by ohword with oiword a ojword the okword of olword.",
+        "(b) the naword of nbword to ncword and ndword in neword for nfword on ngword by nhword with niword a njword the nkword of nlword.")]
+    // One twelve-letter word kept among nineteen four-letter ones: edited in place.
+    [InlineData("oaxy obxy ocxy odxy oexy ofxy ogxy ohxy oixy ojxy okxy olxy omxy onxy ooxy opxy oqxy orxy osxy indispensable.",
+        "naxy nbxy ncxy ndxy nexy nfxy ngxy nhxy nixy njxy nkxy nlxy nmxy nnxy noxy npxy nqxy nrxy nsxy indispensable.")]
+    public void Short_words_in_place_and_long_kept_words_keep_a_heavy_edit_paired(string oldText, string newText)
+    {
+        var l = Doc("Clause 1", oldText, "Clause 2");
+        var r = Doc("Clause 1", newText, "Clause 2");
+        var a = Align(l, r);
+
+        Assert.Equal(1, Count(a, IrAlignmentKind.Modified));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Reversed_paragraph_is_replaced_not_moved()
+    {
+        // The same twenty words in reverse order: the reference deletes and inserts it. Its words alone would
+        // pair it as a move to its own place.
+        var words = Enumerable.Range(0, 20).Select(i => $"o{(char)('a' + i)}word").ToArray();
+        var l = Doc("Clause 1", string.Join(" ", words) + ".", "Clause 2");
+        var r = Doc("Clause 1", string.Join(" ", words.Reverse()) + ".", "Clause 2");
+        var a = Align(l, r);
+
+        Assert.Equal(1, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Inserted));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Modified) + Count(a, IrAlignmentKind.MovedModified));
+        AssertInvariants(l, r, a);
+    }
+
     [Fact]
     public void Full_rewrite_1x1_residue_stays_delete_insert()
     {

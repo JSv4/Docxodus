@@ -60,11 +60,16 @@ internal enum IrAlignmentKind
 /// the two standalone entries of a 1×1 lexical rewrite, or a Modified pair assigned by position
 /// inside a short complete rewrite. It prevents the latter's sentences from streaming across
 /// paragraph boundaries. Nested scopes are deliberately never marked.</para>
+/// <para><see cref="Rewrite"/> marks a <see cref="IrAlignmentKind.Deleted"/> or
+/// <see cref="IrAlignmentKind.Inserted"/> half of a paragraph pair the aligner released because its diff
+/// would keep too little of it (issue #1739). A cross-paragraph token stream around another pair does not
+/// take it in, so the labels and articles it shares with its neighbours are not matched after all.</para>
 /// </summary>
 internal sealed record IrAlignedBlock(
     IrAlignmentKind Kind, IrBlock? Left, IrBlock? Right,
     IrNodeList<IrBlock>? MultiBlocks = null,
-    int? BodyFullRewriteGroupId = null);
+    int? BodyFullRewriteGroupId = null,
+    bool Rewrite = false);
 
 /// <summary>
 /// The result of aligning two documents' body block lists: a flat, document-ordered sequence of
