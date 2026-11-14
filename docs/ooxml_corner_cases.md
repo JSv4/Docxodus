@@ -2971,6 +2971,86 @@ paragraph mark in Docxodus output.
 `Docxodus.Tests/DocxDiffTextMoveTests.cs` (`TextBelowTheMinimumWordCount_IsNotAMove`,
 `TextBelowTheMinimum_IsAMove_WhenTheMinimumIsLowered`).
 
+## Compare: rejecting a moved and edited paragraph (#1716)
+
+### The corner case
+
+Word rejects a move by carrying the destination's moved text back to the source; it does not restore what
+`w:moveFrom` holds. A redline whose `w:moveFrom` holds the complete original paragraph and whose `w:moveTo`
+holds the complete revised one therefore rejects, in Word, to the revised paragraph in the original's place.
+Word pairs a name's move ranges in order, the k-th source range with the k-th destination range, and it
+replaces the whole content of a source range, so a deletion inside a source range is lost too.
+
+### Minimal XML reproducer
+
+Original: `Alpha` / `THIRD. Maintenance. The tenant keeps the premises in good condition.` / `Omega`.
+Revised: `Alpha` / `Omega` / `FIFTH. Maintenance. …`. What Docxodus wrote before the fix:
+
+```xml
+<w:p><w:moveFromRangeStart w:id="1" w:name="move1" .../>
+  <w:moveFrom ...><w:r><w:t>THIRD. Maintenance. …</w:t></w:r></w:moveFrom><w:moveFromRangeEnd w:id="1"/></w:p>
+<w:p><w:r><w:t>Omega</w:t></w:r></w:p>
+<w:p><w:moveToRangeStart w:id="4" w:name="move1" .../>
+  <w:moveTo ...><w:r><w:t>FIFTH. Maintenance. …</w:t></w:r></w:moveTo><w:moveToRangeEnd w:id="4"/></w:p>
+```
+
+What it writes now: only the shared text moves, and the edit sits outside every range.
+
+```xml
+<w:p><w:del ...><w:r><w:delText>THIRD</w:delText></w:r></w:del>
+  <w:moveFromRangeStart w:id="1" w:name="move1" .../>
+  <w:moveFrom ...><w:r><w:t>. Maintenance. …</w:t></w:r></w:moveFrom><w:moveFromRangeEnd w:id="1"/></w:p>
+<w:p><w:ins ...><w:r><w:t>FIFTH</w:t></w:r></w:ins>
+  <w:moveToRangeStart w:id="4" w:name="move1" .../>
+  <w:moveTo ...><w:r><w:t>. Maintenance. …</w:t></w:r></w:moveTo><w:moveToRangeEnd w:id="4"/></w:p>
+```
+
+### Behavior table
+
+Hand-written redlines of one moved paragraph, opened in Word 2024 (16.0.20326) and resolved with
+`Revisions.RejectAll` / `AcceptAll`. Accept All gave the revised document for every shape.
+
+| Shape | Word Reject All | Docxodus `RevisionProcessor` reject | LibreOffice |
+|---|---|---|---|
+| Complete old text in `w:moveFrom`, complete new text in `w:moveTo` | the revised wording at the source | the original | not adjudicated |
+| The same, the destination run bold (a format-only change) with no `w:rPrChange` | the moved text stays bold | the original | not adjudicated |
+| The destination run bold, with `w:rPrChange` recording the old formatting | the original | the original | not adjudicated |
+| Shared text moved; edit `w:del` at the source and `w:ins` at the destination, outside the ranges, one range per stretch | the original | the original | not adjudicated |
+| The same, but one range per side with the `w:del`/`w:ins` inside it | the deleted word is lost | the original | not adjudicated |
+| One range per stretch under one `w:name`, or a name per stretch; stretches adjacent on one side | the original | the original | not adjudicated |
+| A pure insertion: one source range, two destination ranges under one name | the first stretch is lost | the original | not adjudicated |
+| A pure deletion: two source ranges, one destination range | the text is duplicated | the original | not adjudicated |
+| An edit inside a hyperlink, the move ranges inside the link | the deleted word is lost | the original | not adjudicated |
+| An edit inside a hyperlink, ranges at paragraph level and the link split at them | the original | the original, but as three links | not adjudicated |
+| An edit inside a hyperlink, the whole link deleted at the source and inserted at the destination, ranges around the text outside it | the original; Word leaves an empty `w:hyperlink` shell where it removed a link | the original | not adjudicated |
+| The destination centred with or without `w:pPrChange` | the original (paragraph properties stay with the source) | the original | not adjudicated |
+
+Word's own Compare of the same pair writes this shape. For the #1714 fixture it moves
+` Upkeep. The lessee looks after the flat …` and inserts `FIFTH.` beside the destination range.
+
+### Analysis
+
+A move is one piece of content in two places, so Word keeps one copy of it, the destination's, and rejects
+by moving that copy back, range for range. The redline must therefore hold the same moved text in both
+halves, in the same number of ranges, and express the edit as ordinary revisions outside the ranges: a
+deletion at the source, an insertion at the destination. A deletion is never placed at the destination,
+where a consumer that rejects it on its own leaves the old text behind (#359).
+
+### Docxodus code
+
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs` — `EditedMoveContent` draws both halves from the pair's token diff;
+  `RenderState.IndexEditedMoves` lets either half find the other. Shared text is cut at hyperlink edges and a
+  hyperlink that holds an edit is all edit, so no range sits inside a link and the link stays whole on accept
+  and reject.
+
+### Tests
+
+`IrMarkupRendererTests.Render_moved_and_edited_paragraph_moves_the_same_text_in_each_range_pair`,
+`Render_moved_format_change_is_the_destination_rPrChange`,
+`Render_moved_and_edited_hyperlink_keeps_its_move_ranges_at_paragraph_level`,
+`Session_resolves_a_moved_and_edited_paragraph_as_one_move_beside_its_edit`, and
+`IrCompositeMoveTests.Single_reviewer_moved_and_edited_paragraph_moves_the_same_text_in_both_halves`.
+
 ## Tables: a negative `w:tblInd` pulls an over-wide table into the left margin
 
 Word indents a table wider than the text column by a negative amount so it spreads across both
@@ -8605,6 +8685,103 @@ text box, so references in text boxes of a modified paragraph are not tracked as
 **Code and tests.** `Docxodus/Ir/Diff/IrEditScriptBuilder.cs` (`KeptNoteReferences`,
 `AlignNoteReferences`), `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs`
 (`RenderCompositeNoteScopes`); `DocxDiffNoteReferenceTests`, `IrSdtDiffWalkerTests`.
+
+## An inline text box moves whole with its line (#1735)
+
+A legacy text box in the line flow (no absolute position) is an inline object: Word breaks the
+paragraph that holds it across pages like any other, and the box stays whole on its own line.
+
+```xml
+<w:p>
+  <w:r><w:t xml:space="preserve">Item 1 … Item 3 of the field log … </w:t></w:r>
+  <w:r><w:pict><v:shape type="#_x0000_t202" style="width:150pt;height:60pt" stroked="t">
+    <v:textbox><w:txbxContent><w:p><w:r><w:t>Readings in litres per minute.</w:t></w:r></w:p>
+    </w:txbxContent></v:textbox></v:shape></w:pict></w:r>
+  <w:r><w:t xml:space="preserve"> Item 4 … Item 120 of the field log …</w:t></w:r>
+</w:p>
+```
+
+Measured in desktop Word 2024 (Windows 11) by saving PDF through `SaveAs2`, on an A4 page with
+1 in margins. The same document with a styles part setting Times New Roman 12 pt, so that both
+renderers use metric-compatible faces:
+
+| Output | Pages | Page 2 starts | Page 3 starts | Box |
+| --- | --- | --- | --- | --- |
+| Word 2024 | 3 | "pump before the evening shift. Item 40" | "pump before the evening shift. Item 83" | Whole on page 1 |
+| Docxodus after the fix | 3 | same | same | Whole on page 1 |
+| Docxodus before | `pagination_failure`: page 2 body content clipped | — | — | — |
+| Same paragraph without the box (Word and Docxodus) | 3 | "Item 43" | "Item 86" | — |
+
+Without a styles part Word sets the text in Aptos 12 pt and Docxodus in Times New Roman 10 pt (see
+"A styles part without `w:pPrDefault`" above), so page counts differ (Word 4, Docxodus 3) while the
+split and the box placement agree.
+
+**Analysis.** The converter renders the box as `<span data-docx-textbox="true">` with
+`display: inline-block`, its story paragraphs as block spans inside it. The paginator splits a
+paragraph by cloning DOM ranges, and admitted only marked converter boxes (unrendered shapes, tab
+segments, math, ruby) as units that move whole, so any other inline block made the paragraph
+indivisible. An inline block lays out its content in its own formatting context, so no line, and
+therefore no page boundary, can fall inside it.
+
+**Fix.** `PaginationEngine.rangeAtomicInlineBoxes` admits every inline-block span, under the same
+checks the marked boxes had: no picture or line break inside, and no positioned, floating or
+transformed content. A rotated or vertical-text box still keeps its paragraph whole.
+
+**Not changed.** Word sits the box on the line's baseline, so it rises above the text it shares a
+line with: without a styles part, the box's story text prints 46 pt above that line's text. The
+converter writes `vertical-align: top`, so the box hangs from the line's top and its story text
+shares the line's baseline. The line is about as tall either way, so the page breaks agree.
+
+**Code and tests.** `npm/src/pagination.ts` (`rangeAtomicInlineBoxes`);
+`pagination-inline-layout-atoms.spec.ts` (`textbox`, `rotated-textbox`) and
+`export-inline-layout-atoms.spec.ts` (`textbox`, `no-textbox`).
+
+## A range boundary between the cells or rows of a table (#1737)
+
+A row and a table admit range markup among their cells and rows (`CT_Row` and `CT_Tbl` include
+`EG_RunLevelElements`), so a bookmark or a tracked custom XML range can sit there:
+
+```xml
+<w:tr>
+  <w:tc>…<w:t>Step 1</w:t>…</w:tc>
+  <w:customXmlInsRangeStart w:id="1" w:author="Reviewer" w:date="2026-01-05T09:00:00Z"/>
+  <w:customXmlInsRangeEnd w:id="1"/>
+  <w:tc>…<w:t>Load tray 1 and record the batch weight.</w:t>…</w:tc>
+  <w:tc>…<w:t>3 minutes</w:t>…</w:tc>
+</w:tr>
+```
+
+Measured with a 40-row, three-column table taller than an A4 page, one such pair in every row and
+no other revisions, beside the same table without the pairs. Word 2024 (16.0 build 20326) opened each
+read-only, set to All Markup, and saved it as PDF (`SaveAs2`, format 17):
+
+| | Word 2024, All Markup | Docxodus before #1737, markup | Docxodus after, markup | Docxodus, final |
+| --- | --- | --- | --- | --- |
+| a pair between cells 1 and 2 of every row | 4 pages (13, 11, 11, 5 rows), no mark at all; `Revisions.Count` is 0 | export fails: `pagination_failure`, page 2 body clipped | 4 pages (12, 12, 12, 4 rows), split between rows; the bracket marks open cell 2 on a line of their own | 3 pages (16, 16, 8 rows) |
+| no pairs (control) | 4 pages, the same rows per page | 3 pages (16, 16, 8 rows) | the same | the same |
+
+**Analysis.** Word strips custom XML markup and its range markers on open (see the #1189 entry
+above), so it draws nothing for these ranges and lays the table out as if they were absent.
+Docxodus draws each custom XML revision boundary as a bracket mark under markup (#538). The
+converter wrote whatever a row's or a table's non-cell children rendered straight into the `<tr>`
+or `<table>`. HTML allows only cells in a row and only rows in a table, so the browser's parser
+moved the marks out in front of the table, and the paginator, which splits a table only when its
+wrapper holds nothing but the table and empty bookmark targets (#1456), kept the 40 rows as one
+block taller than the page. A bookmark between rows went the same way: its `<a id>` landed at the
+top of the table instead of at its row.
+
+The page count that still differs is not about the ranges. The fixture has no styles part, which
+Word sets in 12 pt text and Docxodus in 10 pt (the missing `w:rPrDefault` note in the #1652 entry).
+
+**Fix.** `WmlToHtmlConverter.KeepContentInCells`, applied to a row's children (`ProcessTableRow`)
+and to a table's (`ProcessTable`), moves what renders among the cells or rows into the adjacent
+cell, where the same boundary inside that cell already rendered: at the start of the cell that
+follows it (between rows, the next row's first cell), or at the end of the last cell when none
+follows. A boundary between two cells marks where the next cell begins, and one after a row's last
+cell marks where the row ends. The filler cell for an omitted `w:gridBefore` is not a cell of the
+row, and an exact-height row's cell takes the content inside its clip box. Nothing is dropped: a
+row or table with no cell of its own keeps the content beside its cells or rows. The bracket marks
+stay, now inside the cell: Word offers no placement to follow. Tests: `TableRangeBoundaryTests`, `npm/tests/export-bookmarked-table.spec.ts`.
 
 ## Content wholly off the paper: Word prints what the paper holds (#1733, #1734)
 
