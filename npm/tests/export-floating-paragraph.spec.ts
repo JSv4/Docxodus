@@ -56,11 +56,12 @@ for (const [wrap, after, prefix] of [['none', 0, 0], ['none', 1, 0], ['none', 39
   });
 }
 
-// A picture placed by a column offset, 6pt short of the right edge, splits like the aligned control (#1736).
-for (const horizontal of [4_950_000, 'right'] as const) {
-  test(`a long paragraph splits around a late square picture placed by ${horizontal === 'right' ? 'right alignment' : 'a column offset'}`, async ({ browser, page }) => {
+// A picture placed by a column offset, 6pt short of the right edge, splits like the aligned control (#1736),
+// also 20pt below its paragraph's top, and then 20pt below the top of the page fragment that holds it.
+for (const [horizontal, lowered, after] of [[4_950_000, 0, 3], ['right', 0, 3], [4_950_000, 254_000, 3], [4_950_000, 254_000, 41]] as const) {
+  test(`a long paragraph splits around a square picture after ${after} lines placed by ${horizontal === 'right' ? 'right alignment' : 'a column offset'}${lowered ? ' and lowered' : ''}`, async ({ browser, page }) => {
     test.setTimeout(120_000);
-    const result = await renderDocxArtifacts(floatingParagraphDocx('square', 3, 82, 0, false, horizontal), {
+    const result = await renderDocxArtifacts(floatingParagraphDocx('square', after, 82, 0, false, horizontal, lowered), {
       browser, outputs: ['html', 'pdf'], reviewProfile: 'final', commentProfile: 'hidden', timeoutMs: 120_000,
     });
     const task = getDocument({ data: new Uint8Array(result.pdf!), verbosity: 0 });
@@ -74,15 +75,15 @@ for (const horizontal of [4_950_000, 'right'] as const) {
       }
       expect(pages.flat()).toEqual(Array.from({ length: 82 }, (_, i) => `Willow${String(i + 1).padStart(3, '0')}`));
       expect(pages.map(labels => labels.length)).toEqual([40, 40, 2]);
-      expect(imagePages).toEqual([1]);
+      expect(imagePages).toEqual([after < 40 ? 1 : 2]);
     } finally { await task.destroy(); }
     await page.setContent(result.html!);
     const image = await page.locator('.page-box img').evaluate(image => {
       const box = image.closest('.page-box')!.getBoundingClientRect(), rect = image.getBoundingClientRect();
       return { x: (rect.x - box.x) * 0.75, y: (rect.y - box.y) * 0.75 };
     });
-    // At the top of its paragraph, right of the text: the offset keeps its 9pt clearance from the edge.
-    expect(image.y).toBeCloseTo(72, 1);
+    // At (or 20pt below) the top of its fragment, right of the text: the offset keeps its 9pt clearance.
+    expect(image.y).toBeCloseTo(lowered ? 92 : 72, 1);
     expect(image.x).toBeCloseTo(horizontal === 'right' ? 468 : 459, 1);
   });
 }

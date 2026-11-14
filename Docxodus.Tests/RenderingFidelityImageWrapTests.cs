@@ -141,9 +141,24 @@ public class RenderingFidelityImageWrapTests
     }
 
     [Theory]
-    [InlineData("paragraph", 127000)]
+    [InlineData("<wp:wrapSquare wrapText=\"bothSides\"/>", "inset(10pt 0 0 0) margin-box")]
+    [InlineData("<wp:wrapTight wrapText=\"bothSides\"><wp:wrapPolygon edited=\"0\"><wp:start x=\"0\" y=\"0\"/><wp:lineTo x=\"21600\" y=\"0\"/><wp:lineTo x=\"0\" y=\"21600\"/><wp:lineTo x=\"0\" y=\"0\"/></wp:wrapPolygon></wp:wrapTight>",
+        "polygon(0% 0%, 100% 0%, 0% 100%, 0% 0%) border-box")]
+    public void PictureBelowItsParagraphTopCarriesItsOffsetAsAnEdgePicture(string wrap, string exclusion)
+    {
+        var html = Render(wrap, 127000, verticalOffset: 127000);
+        var wrapper = html.Descendants().Single(e => e.Name.LocalName == "img").Parent!;
+        var style = (string?)wrapper.Attribute("style");
+        // The offset lowers the picture; the text above it stays unwrapped.
+        Assert.Contains("margin-top: 10pt", style);
+        Assert.Contains("shape-outside: " + exclusion, style);
+        Assert.Equal("true", (string?)wrapper.Attribute("data-docx-edge-picture"));
+    }
+
+    [Theory]
+    [InlineData("paragraph", -127000)]
     [InlineData("page", 0)]
-    public void PictureAwayFromItsParagraphTopIsNotAnEdgePicture(string verticalFrom, long verticalOffset)
+    public void PictureAboveItsParagraphOrPlacedOnThePageIsNotAnEdgePicture(string verticalFrom, long verticalOffset)
     {
         var html = Render("<wp:wrapSquare wrapText=\"bothSides\"/>", 127000, verticalFrom: verticalFrom, verticalOffset: verticalOffset);
         Assert.Contains("float: left", (string?)html.Descendants().Single(e => e.Name.LocalName == "img").Parent!.Attribute("style"));

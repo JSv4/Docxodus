@@ -1616,9 +1616,11 @@ layout. One with positioned, floating or transformed content, a picture or a lin
 keeps its paragraph whole. Fixed-base `wrapNone` drawings stay whole with their source
 Range, including drawings after body text; their textbox text does not participate in body line
 or widow measurements. Existing anchor placement resolves coordinates after pagination. The
-converter marks as an edge picture every square, tight or through picture float anchored at its
-paragraph's top with a zero offset, whatever its horizontal position (#1736); an offset one keeps
-its float to the nearer edge behind its clearance margin. Leading
+converter marks as an edge picture every square, tight or through picture float placed from its
+paragraph's top (a vertical offset of zero or more), whatever its horizontal position (#1736); an
+offset one keeps its float to the nearer edge behind its clearance margin. A lowered picture carries
+its offset in the float's top margin, and a rectangle's `shape-outside` inset leaves the text above
+it unwrapped, so the picture paints that far below its fragment's top and its exclusion follows. Leading
 converter-owned edge pictures preserve their float and clearance on the head, using the existing
 float-height measurement and page-prefix exclusion paths. The shared layout gate receives the
 same admitted carriers as the structural gate; notes, cells and textbox stories retain the prior
