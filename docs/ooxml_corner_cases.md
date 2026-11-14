@@ -9217,3 +9217,67 @@ completeness, as does an element with no box.
 
 **Tests.** `pagination-table-clipping.spec.ts`, `page-map-source-textbox-clip.spec.ts`,
 `export-wide-body-table.spec.ts`, `export-story-table-width.spec.ts`, `export-linked-textboxes.spec.ts`.
+
+## Grid columns no row reaches (#1750)
+
+A fixed-layout table whose rows all leave the last grid columns unused. The issue's case is #1733's
+reproducer with `--fit`, on A4 with 1418-twip margins:
+
+```xml
+<w:tblPr><w:tblW w:w="14700" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr>
+<w:tblGrid><w:gridCol w:w="1800"/><w:gridCol w:w="2200"/><w:gridCol w:w="1500"/><w:gridCol w:w="1500"/>
+  <w:gridCol w:w="1500"/><w:gridCol w:w="3000"/><w:gridCol w:w="3200"/></w:tblGrid>
+<w:tr><w:trPr><w:gridAfter w:val="2"/></w:trPr>   <!-- every row: five of the seven columns -->
+  <w:tc><w:tcPr><w:tcW w:w="1800" w:type="dxa"/></w:tcPr>…</w:tc>
+  <w:tc><w:tcPr><w:tcW w:w="2200" w:type="dxa"/></w:tcPr>…</w:tc>
+  <w:tc><w:tcPr><w:tcW w:w="4500" w:type="dxa"/><w:gridSpan w:val="3"/></w:tcPr>…</w:tc></w:tr>
+```
+
+The other probes use a 1000/2500/1500/2000/2000-twip grid (9000 twips), `w:tblW` 9000 dxa and rows
+of 1000/2500/1500-twip cells with `w:gridAfter w:val="2"`, varied one property at a time. Desktop Word
+2024 (16.0 build 20326) opened each by COM; the table gives Word's cell widths (`Cell.Width`, in
+points) and the grid it holds after opening (`Document.WordOpenXML`), and its PDFs
+(`ExportAsFixedFormat`) confirm the positions: in the issue's table the second and third cells' text
+starts at 227.1pt and 417.3pt from the paper's left edge (the issue measured 226 and 417), and in the
+9000-twip table at 161.4pt and 386.5pt, the cumulative widths. Docxodus is the converter's HTML laid
+out in Chromium. LibreOffice was not measured.
+
+| Probe | Word 2024 cell widths | Grid Word holds | Docxodus 16.0.0 | Fixed |
+| --- | --- | --- | --- | --- |
+| the issue | 155.65, 190.25, 389.1 | 3113, 3805, 7782 | 90, 110, 225 | 155.5, 190.0, 388.8 |
+| 9000-twip grid | 90, 225, 135 | 1800, 4500, 2700 | 50, 125, 75 | 89.8, 224.6, 134.8 |
+| the same in mode 15; with `w:wAfter` 4000 or 1000; with no `w:gridAfter` (the cells stop) | 90, 225, 135 | 1800, 4500, 2700 | 50, 125, 75 | 89.8, 224.6, 134.8 |
+| `w:tblLayout` autofit, or absent | 90, 225, 135 | 1800, 4500, 2700 | 50.4, 124.9, 75.3 (autofit) | 90.4, 224.0, 134.9 (autofit) |
+| `w:tblW` 5000 pct | 90.9, 227.25, 136.35: 100% of the text width | 1818, 4545, 2727 | unused columns kept | widened in proportion |
+| `w:tblW` auto or absent | 50, 125, 75; the table 250pt wide | 1000, 2500, 1500 | 50, 125, 75 in a 450pt table | 50, 125, 75 in a 250pt table |
+| `w:tblW` 5000 dxa | 50, 125, 75 | 1000, 2500, 1500 | in a 450pt table | in a 250pt table |
+| rows reach 3, 4 and 3 columns | 64.3, 160.7, 96.45 (+128.55 in the second row) | 1286, 3214, 1929, 2571 | 50, 125, 75 (+100) | 64.2, 160.4, 96.3 (+128.4) |
+| one row fills the grid (control) | 50, 125, 75 (+100, 100) | unchanged | same | same |
+
+Word's rule, from the grids it holds: grid columns that no row's cells reach are not part of the
+table. Word removes them, with the `w:gridAfter` and `w:wAfter` that covered them, and lays the remaining
+columns out across the table's width in proportion to their widths. A `w:wAfter` does not keep the
+columns, and a column any one row reaches stays, at the same proportional width. With no table
+width (`auto` or absent) nothing widens, and the table ends where its rows do.
+
+Docxodus wrote every `w:gridCol` to the HTML `colgroup`. CSS gave the unreached columns their width,
+so the rows ended short of the table and every cell boundary sat at its grid offset. `CreateColGroup`
+(`WmlToHtmlConverter.cs`) already left out a `w:gridBefore` prefix every row omits; it now keeps
+only the columns from there to the furthest any row's cells reach (`TableRenderingGrid.ReachedColumns`).
+CSS then spreads a fixed table's width over the columns that remain in proportion, as Word does.
+
+**Not modelled**, found with the same probes:
+
+- Word sizes the columns by the cells' `w:tcW` where they disagree with `w:tblGrid`. Full rows of
+  2000, 2000, 1000, 2000 and 2000-twip cells on the 1000/2500/… grid lay out at 100, 100, 50, 100
+  and 100pt in Word; Docxodus keeps the grid's 50, 125, 75, 100 and 100.
+- A fixed table whose `w:tblW` (6000) is narrower than its grid (9000) shrinks in proportion in Word
+  (33.65, 83.05, 50.1, 66.6, 66.6); CSS keeps the grid's widths.
+- A prefix every row omits (`w:gridBefore w:val="2"` on every row of the 9000-twip grid, cells of
+  1500, 2000 and 2000 twips) is also widened to the table width (122.7, 163.65, 163.65), but Word keeps
+  the prefix's own 175pt before the cells: their text starts at 246.4pt. Docxodus already left that
+  prefix out of the `colgroup` and lays out the same widths, starting at the table's edge.
+
+**Tests.** `TableHorizontalPlacementTests` (`Columns_no_own_row_reaches_leave_the_grid`,
+`A_trailing_column_another_own_row_reaches_stays_in_the_grid`) and
+`npm/tests/export-table-unused-columns.spec.ts`.
