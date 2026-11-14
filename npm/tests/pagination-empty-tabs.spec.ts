@@ -21,7 +21,8 @@ for (const kind of ['tab', 'unmarked', 'text'] as const) {
     expect(result.text?.match(/Alder\d+/g)).toEqual(Array.from({ length: 29 }, (_, i) => `Alder${i}`));
     expect(result.boxes).toBe(29);
     expect(result.widths.every(width => Math.abs(width - 35 * 4 / 3) < 0.1)).toBe(true);
-    if (kind === 'tab') expect(result.paragraphs).toBeGreaterThan(1);
+    // An unmarked inline block moves whole like any other; a tab marker holding text keeps its guard.
+    if (kind !== 'text') expect(result.paragraphs).toBeGreaterThan(1);
     else expect(result.paragraphs).toBe(1);
   });
 }

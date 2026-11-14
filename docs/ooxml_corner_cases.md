@@ -8685,3 +8685,53 @@ text box, so references in text boxes of a modified paragraph are not tracked as
 **Code and tests.** `Docxodus/Ir/Diff/IrEditScriptBuilder.cs` (`KeptNoteReferences`,
 `AlignNoteReferences`), `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs`
 (`RenderCompositeNoteScopes`); `DocxDiffNoteReferenceTests`, `IrSdtDiffWalkerTests`.
+
+## An inline text box moves whole with its line (#1735)
+
+A legacy text box in the line flow (no absolute position) is an inline object: Word breaks the
+paragraph that holds it across pages like any other, and the box stays whole on its own line.
+
+```xml
+<w:p>
+  <w:r><w:t xml:space="preserve">Item 1 … Item 3 of the field log … </w:t></w:r>
+  <w:r><w:pict><v:shape type="#_x0000_t202" style="width:150pt;height:60pt" stroked="t">
+    <v:textbox><w:txbxContent><w:p><w:r><w:t>Readings in litres per minute.</w:t></w:r></w:p>
+    </w:txbxContent></v:textbox></v:shape></w:pict></w:r>
+  <w:r><w:t xml:space="preserve"> Item 4 … Item 120 of the field log …</w:t></w:r>
+</w:p>
+```
+
+Measured in desktop Word 2024 (Windows 11) by saving PDF through `SaveAs2`, on an A4 page with
+1 in margins. The same document with a styles part setting Times New Roman 12 pt, so that both
+renderers use metric-compatible faces:
+
+| Output | Pages | Page 2 starts | Page 3 starts | Box |
+| --- | --- | --- | --- | --- |
+| Word 2024 | 3 | "pump before the evening shift. Item 40" | "pump before the evening shift. Item 83" | Whole on page 1 |
+| Docxodus after the fix | 3 | same | same | Whole on page 1 |
+| Docxodus before | `pagination_failure`: page 2 body content clipped | — | — | — |
+| Same paragraph without the box (Word and Docxodus) | 3 | "Item 43" | "Item 86" | — |
+
+Without a styles part Word sets the text in Aptos 12 pt and Docxodus in Times New Roman 10 pt (see
+"A styles part without `w:pPrDefault`" above), so page counts differ (Word 4, Docxodus 3) while the
+split and the box placement agree.
+
+**Analysis.** The converter renders the box as `<span data-docx-textbox="true">` with
+`display: inline-block`, its story paragraphs as block spans inside it. The paginator splits a
+paragraph by cloning DOM ranges, and admitted only marked converter boxes (unrendered shapes, tab
+segments, math, ruby) as units that move whole, so any other inline block made the paragraph
+indivisible. An inline block lays out its content in its own formatting context, so no line, and
+therefore no page boundary, can fall inside it.
+
+**Fix.** `PaginationEngine.rangeAtomicInlineBoxes` admits every inline-block span, under the same
+checks the marked boxes had: no picture or line break inside, and no positioned, floating or
+transformed content. A rotated or vertical-text box still keeps its paragraph whole.
+
+**Not changed.** Word sits the box on the line's baseline, so it rises above the text it shares a
+line with: without a styles part, the box's story text prints 46 pt above that line's text. The
+converter writes `vertical-align: top`, so the box hangs from the line's top and its story text
+shares the line's baseline. The line is about as tall either way, so the page breaks agree.
+
+**Code and tests.** `npm/src/pagination.ts` (`rangeAtomicInlineBoxes`);
+`pagination-inline-layout-atoms.spec.ts` (`textbox`, `rotated-textbox`) and
+`export-inline-layout-atoms.spec.ts` (`textbox`, `no-textbox`).

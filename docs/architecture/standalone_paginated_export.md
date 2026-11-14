@@ -1610,7 +1610,10 @@ indivisible note content retains the typed clipped-content failure rather than s
 result with missing text.
 
 Body paragraph fragmentation retains unshifted revision change-bar hosts and their inline revision
-metadata on each continuation (#1521). Fixed-base `wrapNone` drawings stay whole with their source
+metadata on each continuation (#1521). Any inline block, such as an inline text box, moves whole
+with the line that holds it (#1735): no fragment boundary enters it, so its story keeps its own
+layout. One with positioned, floating or transformed content, a picture or a line break still
+keeps its paragraph whole. Fixed-base `wrapNone` drawings stay whole with their source
 Range, including drawings after body text; their textbox text does not participate in body line
 or widow measurements. Existing anchor placement resolves coordinates after pagination. Leading
 converter-owned edge pictures preserve their float and clearance on the head, using the existing
