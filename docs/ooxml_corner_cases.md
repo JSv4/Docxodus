@@ -7893,6 +7893,76 @@ unchanged and for re-wrapped lines, because the vector painter places baselines 
 box whatever the DOM offset is. The shared fit applies in export too: 24 lines at 15pt and 23 at
 13pt, pinned by `export-last-line-leading.spec.ts`.
 
+## A paragraph that cites a note keeps its leading beside the note band (#1738)
+
+The rule above holds at the page foot. Above a note band it depends on the paragraph and on the
+compatibility mode. The issue's fixture is five justified paragraphs at double spacing, each citing
+a one-line note about 70% of the way through, with no settings or styles part:
+
+```xml
+<w:p><w:pPr><w:spacing w:after="0" w:line="480" w:lineRule="auto"/><w:ind w:firstLine="720"/><w:jc w:val="both"/></w:pPr>
+  <w:r><w:t xml:space="preserve">In season 5 the orchard crew pruned row 1, … compared it with the estimate</w:t></w:r>
+  <w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="5"/></w:r>
+  <w:r><w:t xml:space="preserve"> kept in the shed. …</w:t></w:r></w:p>
+<!-- footnotes.xml: <w:footnote w:id="5"><w:p><w:pPr><w:spacing w:after="0"/></w:pPr>… one line …</w:p></w:footnote>,
+     separators at w:line="240" -->
+```
+
+Without a styles part Word sets it in Aptos 12pt (the missing-`w:rPrDefault` case of #1576), where
+the converter uses Times New Roman 10pt. The comparison fixtures therefore add a styles part stating
+Times New Roman 10pt and `w:line="278"` as document defaults, the converter's values. Word 2024
+(16.0.20326) saved each as PDF (`SaveAs2`). A body line is then a 23pt line box holding 11.5pt of
+text, and a note line is 13.3pt. Without `w:compat` Word opens the files in compatibility mode 12;
+mode 14 lays out every row below the same way. LibreOffice was not available on the test machine.
+
+| Fixture | Word 2024, mode 12 or 14 | Word 2024, mode 15 | Docxodus 16.0.0 | Fixed |
+| --- | --- | --- | --- | --- |
+| five paragraphs (the issue) | p1: 23 lines, notes 1–4; p2: the citing line, the last line, note 5 | same | export fails: "A footnote continuation is clipped" | as Word |
+| six paragraphs | p1: 23 lines, notes 1–4; p2: 7 lines, notes 5–6 | not run | fails | as Word |
+| paragraph 1 cites two notes, paragraph 5 none | 1 page: 25 lines, notes 1–5 | p1: 23 lines, notes 1–5; p2: 2 lines | fails | as mode 14 |
+| widow control off | 1 page: 25 lines, notes 1–5 | p1: 24 lines, notes 1–5; p2: 1 line | fails | as mode 14 |
+| widow control off, note 5 four lines long | p1: 24 lines, notes 1–4, two lines of note 5; p2: 1 line, the rest of note 5 | not run | fails | p1 holds three lines of note 5 |
+| widow control on, note 5 four lines long | p1: 23 lines, notes 1–4; p2: 2 lines, note 5 | not run | as Word | as Word |
+| four paragraphs (control) | 1 page | not run | 1 page | 1 page |
+| `w:line="360"`, eight paragraphs (control) | p1: 32 lines, notes 1–6; p2: 8 lines, notes 7–8 | not run | as Word | as Word |
+
+Threshold sweeps isolate the rule. Each case is a fresh page holding one exact-height spacer line,
+then the double-spaced test text. R is the room the spacer leaves above the band of every note on
+the page, stepped by 0.5pt:
+
+| Case | Mode 12: Word keeps the text from | Mode 15 |
+| --- | --- | --- |
+| one test line, no notes on the page | R = 11.5pt, its text height (#1571) | 11.5pt |
+| one test line, the spacer cites the note (exact 12pt separator and note) | R = 11.5pt | 23pt, its full line box |
+| one test line that cites the note (exact 12pt separator and note) | R = 23pt | 23pt |
+| three lines A, B, C under widow control, B or C cites, notes as in the issue | R = 67.5pt: 3 × 23pt less the note's own 1.8pt of leading; below that the paragraph moves whole with its note | not run |
+| the same without widow control, B cites | A and B from R = 44.5pt (B's full box less 1.8pt), C from R = 57.5pt (C's text height) | 46pt and 69pt, full boxes |
+
+In mode 15 the note band clears the full line box of the body above it: only at the page foot does
+a line's leading run past. Before mode 15 a line that brings no note may end the page at its text
+height above the band, as at the page foot. The exception is a paragraph under widow control that
+brings notes: Word lays its lines on the page out together beside those notes, leading included.
+When they do not fit, the paragraph breaks before the citing line if widow control allows, and that
+line moves to the next page with its note. Without widow control the test is per line: a citing
+line keeps its full box, and a later last line needs only its text. The band's own last line also
+ends at its text height before mode 15 (the 1.8pt), but not in mode 15.
+
+Docxodus measured a whole paragraph by its text height even when it brought notes, but measured a
+paragraph head beside its notes by its full height (`tryFragmentParagraph`). The note band's cap,
+which keeps the band off body already placed (`noteBandLimit`), also counted the full height. In the
+issue the fit test gave five notes a 78.1pt band beside the fifth paragraph, counting its last
+11.5pt of leading as free; the cap then allowed only 73.2pt, so note 5 was clipped. `PaginationEngine`
+now measures a paragraph under widow control by its full height beside the notes it brings, so the
+issue's citing line moves to page 2 through the existing note-aware split. When a block's clone ends
+at its text height (`droppedLeadingPt`), the cap gives that leading to the band. A block the band
+expands beside is cloned after its notes are packed, so it too ends at its text height when they
+take its leading.
+
+Not modelled: the mode 15 rule, in which the last line above a band keeps its leading whether or
+not it cites (Docxodus lays such pages out as mode 14 does, one line more than Word); the band's own
+last-line leading before mode 15; and a paragraph without widow control whose last line on the page
+is its citing line (the four-line note above). Test: `export-footnote-page-bottom.spec.ts`.
+
 ## Fractional whole-number measures truncate in Word (#1622)
 
 The schema types are whole numbers (`w:sz` is ST_EighthPointMeasure; `w:gridCol/@w:w`,

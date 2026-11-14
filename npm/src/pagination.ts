@@ -3231,6 +3231,11 @@ export class PaginationEngine {
     return Math.max(0, block.heightPt - (block.trailingLeadingPt ?? 0));
   }
 
+  /** The leading a block placed in `availablePt` lets run past: its last line fits only by its text height. */
+  private droppedLeadingPt(block: MeasuredBlock, availablePt: number): number {
+    return block.heightPt > availablePt ? block.heightPt - this.fitHeightPt(block) : 0;
+  }
+
   private shouldSuppressPageTopSpacing(
     block: MeasuredBlock,
     isFirstOnPage: boolean,
@@ -3268,7 +3273,7 @@ export class PaginationEngine {
   ): HTMLElement {
     const clone = block.element.cloneNode(true) as HTMLElement;
     // A last line that fits only by its text height ends the block there; its leading runs past.
-    if (block.heightPt > availablePt) {
+    if (this.droppedLeadingPt(block, availablePt) > 0) {
       clone.style.setProperty("--docx-word-text-height", `${this.fitHeightPt(block)}pt`);
       clone.style.height = "var(--docx-word-text-height)";
     }
@@ -6731,6 +6736,9 @@ export class PaginationEngine {
 
     // Track the previous block's bottom margin for margin collapsing
     let prevMarginBottomPt = 0;
+    // The leading the previous block's clone lets run under the note band (cloneBlockForPage):
+    // body flow still counts it, but it is not body text the band must stay clear of.
+    let prevDroppedLeadingPt = 0;
     // Track footnote IDs for the current page
     let currentFootnoteIds: string[] = [];
     let currentPageHasFootnoteReference = false;
@@ -6761,7 +6769,7 @@ export class PaginationEngine {
     // The note band a page offers: up to the cap, never over the body already placed on it.
     // An indivisible note part taller than that is clipped in the band, leaving the body visible.
     const noteBandLimit = (bodyHeight: number) => Math.max(0, Math.min(bodyHeight * MAX_FOOTNOTE_AREA_RATIO,
-      bodyHeight - (effectiveContentHeight - remainingHeight - prevMarginBottomPt)));
+      bodyHeight - (effectiveContentHeight - remainingHeight - prevMarginBottomPt - prevDroppedLeadingPt)));
 
     const adoptEmptyPageOwner = (owner: number) => {
       pageSectionIndex = owner;
@@ -6966,6 +6974,7 @@ export class PaginationEngine {
       remainingHeight = effectiveContentHeight;
 
       prevMarginBottomPt = 0; // Reset margin tracking for new page
+      prevDroppedLeadingPt = 0;
       currentFootnoteIds = []; // Reset footnotes for new page
       currentPageHasFootnoteReference = false;
       currentPartialFootnotes = []; // Reset partial footnotes for new page
@@ -7343,7 +7352,14 @@ export class PaginationEngine {
       // Note: bottom margin is NOT included in the fit check because the last block's
       // bottom margin extends beyond the content area and is clipped by overflow:hidden.
       // It is still tracked in remainingHeight for correct margin collapsing with the next block.
-      const requiredHeight = Math.max(this.fitHeightPt(block), block.frameExtentPt ?? 0);
+      // A page's last line needs only its text height: its leading may run past the page foot
+      // (issue #1571) and, as Word lays pages out before compatibility mode 15, under the note band.
+      // Under widow control Word lays a paragraph out whole beside the notes it brings, leading
+      // included, as a citing head is measured (tryFragmentParagraph), so a paragraph whose notes do
+      // not fit beside it breaks before the citing line (#1738).
+      const ownHeight = newFootnoteIds.length > 0 && block.element.dataset.widowControl !== "false"
+        ? block.heightPt : this.fitHeightPt(block);
+      const requiredHeight = Math.max(ownHeight, block.frameExtentPt ?? 0);
       const blockSpace = effectiveMarginTop + requiredHeight + additionalFootnoteHeight;
 
       // Effective remaining height (content area minus footnotes already on page)
@@ -7377,7 +7393,7 @@ export class PaginationEngine {
       // oversized fallback so the cloned head participates in the same margin
       // and footnote accounting as every other block. Only the paragraph's own lines decide
       // this: notes too tall for the page are split or moved by the note placement below.
-      if (effectiveMarginTop + this.fitHeightPt(block) > effectiveRemainingHeight) {
+      if (effectiveMarginTop + ownHeight > effectiveRemainingHeight) {
         const fragments = this.tryFragmentParagraph(
           block,
           blockDimensions,
@@ -7420,14 +7436,16 @@ export class PaginationEngine {
       ) {
         // Block fits with current footnote allocation
         markSectionPlaced(block.sectionIndex);
+        const availablePt = effectiveRemainingHeight - effectiveMarginTop - additionalFootnoteHeight;
         currentContent.push(this.cloneBlockForPage(
           block,
           isFirstOnPage,
           pageInSection(block.sectionIndex),
-          effectiveRemainingHeight - effectiveMarginTop - additionalFootnoteHeight,
+          availablePt,
         ));
         remainingHeight -= (effectiveMarginTop + block.heightPt + block.marginBottomPt);
         prevMarginBottomPt = block.marginBottomPt;
+        prevDroppedLeadingPt = this.droppedLeadingPt(block, availablePt);
         // Add new footnotes to current page
         if (newFootnoteIds.length > 0) {
           currentFootnoteIds.push(...newFootnoteIds);
@@ -7477,14 +7495,6 @@ export class PaginationEngine {
           }
           // Block itself fits, but footnotes don't - expand footnote area
           markSectionPlaced(block.sectionIndex);
-          currentContent.push(this.cloneBlockForPage(
-            block,
-            isFirstOnPage,
-            pageInSection(block.sectionIndex),
-            effectiveRemainingHeight - effectiveMarginTop,
-          ));
-          remainingHeight -= (effectiveMarginTop + block.heightPt + block.marginBottomPt);
-          prevMarginBottomPt = block.marginBottomPt;
 
           // Calculate EXPANDED space available for footnotes
           // Footnotes can take up to maxFootnoteArea or all remaining space, whichever is less
@@ -7596,6 +7606,17 @@ export class PaginationEngine {
               }
             }
           }
+          // Clone the block beside the notes now packed with it, which may take its last line's leading.
+          const availablePt = remainingHeight - currentFootnoteHeight - effectiveMarginTop;
+          currentContent.push(this.cloneBlockForPage(
+            block,
+            isFirstOnPage,
+            pageInSection(block.sectionIndex),
+            availablePt,
+          ));
+          remainingHeight -= (effectiveMarginTop + block.heightPt + block.marginBottomPt);
+          prevMarginBottomPt = block.marginBottomPt;
+          prevDroppedLeadingPt = this.droppedLeadingPt(block, availablePt);
           currentPageHasFootnoteReference ||= allBlockFootnoteIds.length > 0;
         } else {
           // Block itself doesn't fit. Retry after the page turn so carried
