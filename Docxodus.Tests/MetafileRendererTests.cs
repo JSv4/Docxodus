@@ -176,11 +176,44 @@ public class MetafileRendererTests
         Assert.Equal("2", (string?)Assert.Single(wmf.Descendants(Svg + "pattern")).Attribute("width"));
     }
 
-    [Theory]
-    [InlineData(94u, 1)] // CREATEDIBPATTERNBRUSHPT in palette colours (DIB_PAL_COLORS)
-    [InlineData(93u, 0)] // CREATEMONOBRUSH, drawn in the text and background colours
-    public void FillingWithAPatternBrushThatIsNotInRgbColoursRejectsThePicture(uint record, int usage)
-        => Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(R(record, 1, usage, 0, 0, 0, 0), R(37, 1), R(43, 0, 0, 10, 10))));
+    [Fact]
+    public void MonochromePatternBrushesPaintTheTextAndBackgroundColoursOfTheFill()
+    {
+        // GDI paints a monochrome brush's 0 bits in the text colour and its 1 bits in the background colour current
+        // at the fill. GDI writes CREATEMONOBRUSH without a colour table, and a WMF BS_PATTERN brush with one it ignores.
+        var bits = OneBit(0x40, 0x80); // top row: 0 then 1; bottom row: 1 then 0
+        var svg = EmfImage.Read(Emf(R(24, 0x0000ff), R(25, 0x00ff00), Raw(93, Le(1, 2, 32, 40, 72, 8).Concat(bits).ToArray()),
+            R(37, 1), R(43, 0, 0, 10, 10), R(24, 0xff0000), R(43, 20, 0, 30, 10), R(43, 40, 0, 50, 10))).Drawing;
+        var tiles = svg.Descendants(Svg + "pattern").Select(p => p.Element(Svg + "image")!).ToList();
+        Assert.Equal(new[] { SKColors.Red, SKColors.Lime }, new[] { Png(tiles[0]).GetPixel(0, 0), Png(tiles[0]).GetPixel(1, 0) });
+        Assert.Equal(SKColors.Blue, Png(tiles[1]).GetPixel(0, 0)); // the next fill's text colour
+        Assert.Same((string?)tiles[1].Attribute("href"), (string?)tiles[2].Attribute("href")); // encoded once per colour pair
+        var wmf = Play(Wmf(W(0x0209, 0x00ff, 0), W(0x0201, 0xff00, 0),
+            W(0x0142, Words(new[] { 3, 0 }, OneBit(0x40, 0x80, 0x0000ff, 0xff0000))), W(0x012d, 0), W(0x041b, 20, 20, 0, 0)));
+        var tile = Png(wmf.Descendants(Svg + "pattern").Single().Element(Svg + "image")!);
+        Assert.Equal(new[] { SKColors.Red, SKColors.Lime }, new[] { tile.GetPixel(0, 0), tile.GetPixel(1, 0) });
+    }
+
+    [Fact]
+    public void PaletteIndexPatternBrushesTakeTheDefaultPalette()
+    {
+        // DIB_PAL_COLORS: the colour table holds indexes into the palette, the default one unless the metafile
+        // selects its own. GDI writes them packed in an EMF and in four-byte slots in a WMF.
+        byte[] Indexed(int tableBytes) => OneBit(0x40, 0x80).Take(40).Concat(new byte[] { 1, 0, 4, 0 }).Concat(new byte[tableBytes - 4])
+            .Concat(OneBit(0x40, 0x80).Skip(40)).ToArray();
+        byte[] Brush(byte[]? palette = null) => Raw(94, Le(1, 1, 32, 44, 76, 8).Concat(palette ?? Indexed(4)).ToArray());
+        var tile = Png(EmfImage.Read(Emf(Brush(), R(37, 1), R(43, 0, 0, 10, 10))).Drawing.Descendants(Svg + "image").Single());
+        Assert.Equal(new[] { new SKColor(0x80, 0, 0), new SKColor(0, 0, 0x80) }, new[] { tile.GetPixel(0, 0), tile.GetPixel(1, 0) });
+        var wmf = Png(Play(Wmf(W(0x0142, Words(new[] { 5, 1 }, Indexed(8))), W(0x012d, 0), W(0x041b, 20, 20, 0, 0))).Descendants(Svg + "image").Single());
+        Assert.Equal(new SKColor(0, 0, 0x80), wmf.GetPixel(1, 0));
+        EmfImage.Read(Emf(R(48, unchecked((int)0x8000000F)), Brush(), R(37, 1), R(43, 0, 0, 10, 10))); // the stock default palette
+        // Controls: the metafile's own palette, an index past the default palette, and DIB_PAL_INDICES.
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(R(49, 2, 0x300 | 1 << 16, 0), R(48, 2), Brush(), R(37, 1), R(43, 0, 0, 10, 10))));
+        var past = Indexed(4); past[40] = 20;
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(Brush(past), R(37, 1), R(43, 0, 0, 10, 10))));
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(Raw(94, Le(1, 2, 32, 40, 72, 8).Concat(OneBit(0x40, 0x80)).ToArray()),
+            R(37, 1), R(43, 0, 0, 10, 10))));
+    }
 
     [Fact]
     public void AZeroWidthWmfPenDrawsOneCssPixelLikeAnEmfCosmeticPen()
@@ -200,6 +233,62 @@ public class MetafileRendererTests
             W(0x061d, 0x0021, 0x00f0, 4, 4, 0, 0), W(0x0104, 13), W(0x041b, 30, 30, 20, 20)));
         Assert.Empty(svg.Descendants(Svg + "path"));
         Assert.Equal(2, svg.Descendants(Svg + "rect").Count());
+    }
+
+    // ---- Inversions ----------------------------------------------------------------------------
+
+    /// <summary>Office's semi-transparent fill: PATINVERT a solid brush, fill the shape with a black and white
+    /// pattern under R2_MASKPEN, PATINVERT again. <paramref name="between"/> replaces the shape's fill.</summary>
+    private static byte[] Inversion(byte[]? between = null, int repeatColor = 0x00d8d2cc) => Emf(
+        R(39, 1, 0, 0x00d8d2cc, 0), R(37, 1), PatBlt(0, 0, 20, 10, 0x005A0049), R(20, 9),
+        Raw(94, Le(2, 0, 32, 48, 80, 8).Concat(Mono(0x00, 0x40)).ToArray()), R(37, 2), R(37, unchecked((int)0x80000008)),
+        between ?? R(86, 0, 0, 0, 0, 3, Pack16(0, 0, 10, 0, 10, 10)),
+        R(20, 13), R(39, 3, 0, repeatColor, 0), R(37, 3), PatBlt(0, 0, 20, 10, 0x005A0049));
+
+    [Fact]
+    public void AnInversionDrawsItsContentThroughTheBlackOfItsMask()
+    {
+        // Three of the pattern's four pixels are black: where the shape masks, the brush shows at 75%, and the two
+        // PATINVERTs cancel everywhere else, whatever lay beneath.
+        var svg = EmfImage.Read(Inversion()).Drawing;
+        var mask = Assert.Single(svg.Descendants(Svg + "mask"));
+        var shape = Assert.Single(mask.Elements(Svg + "path"));
+        Assert.Equal(("M0 0L10 0L10 10Z", "#ffffff", "0.75"),
+            ((string?)shape.Attribute("d"), (string?)shape.Attribute("fill"), (string?)shape.Attribute("fill-opacity")));
+        var content = Assert.Single(svg.Descendants(Svg + "g"), g => g.Attribute("mask") != null);
+        Assert.Equal($"url(#{(string?)mask.Attribute("id")})", (string?)content.Attribute("mask"));
+        var rect = Assert.Single(content.Elements());
+        Assert.Equal(("rect", "#ccd2d8", "20"), (rect.Name.LocalName, (string?)rect.Attribute("fill"), (string?)rect.Attribute("width")));
+        Assert.Single(svg.Descendants(Svg + "rect")); // drawn once, not once per pass
+    }
+
+    [Fact]
+    public void XorPenPassesAroundABlackShapeClipTheirStripsToIt()
+    {
+        // PowerPoint's WMF clips a gradient to an area this way: the strips XORed, the area filled black, the
+        // strips XORed again.
+        byte[][] Strips() => new[] { W(0x0104, 7), W(0x012d, 1), W(0x041b, 10, 40, 0, 0), W(0x012d, 2), W(0x041b, 20, 40, 10, 0) };
+        var svg = Play(Wmf(new[] { W(0x02fa, 5, 0, 0, 0, 0), W(0x012d, 0), W(0x02fc, 0, 0x00ff, 0, 0), W(0x02fc, 0, 0, 0x00ff, 0),
+            W(0x02fc, 0, 0, 0, 0) }.Concat(Strips()).Concat(new[] { W(0x0104, 13), W(0x012d, 3), W(0x0324, 3, 0, 0, 40, 0, 0, 20) })
+            .Concat(Strips()).Append(W(0x0104, 13)).ToArray()));
+        var shape = Assert.Single(Assert.Single(svg.Descendants(Svg + "mask")).Elements());
+        Assert.Equal(("#ffffff", null), ((string?)shape.Attribute("fill"), (string?)shape.Attribute("fill-opacity")));
+        var strips = Assert.Single(svg.Descendants(Svg + "g"), g => g.Attribute("mask") != null).Elements(Svg + "rect").ToList();
+        Assert.Equal(new[] { "#ff0000", "#0000ff" }, strips.Select(e => (string?)e.Attribute("fill")));
+    }
+
+    [Fact]
+    public void InversionsThatWouldReadTheDestinationRejectThePicture()
+    {
+        EmfImage.Read(Inversion()); // the control draws
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Inversion(repeatColor: 0x00ff0000)));            // the second pass differs
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Inversion(new[] { R(39, 4, 2, 0, 0), R(37, 4),
+            R(43, 0, 0, 5, 5) }.SelectMany(r => r).ToArray())));                                                    // a hatched brush paints the mask
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Inversion(new[] { R(20, 13), R(39, 4, 0, 0x0000ff, 0), R(37, 4),
+            R(43, 0, 0, 5, 5) }.SelectMany(r => r).ToArray())));                                                    // the mask is painted red
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Inversion(TextW(0, 0, "a", null))));             // text between the passes
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(R(20, 9), R(43, 0, 0, 5, 5))));              // R2_MASKPEN outside one
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(PatBlt(0, 0, 9, 9, 0x005A0049))));           // never repeated
     }
 
     // ---- Clipping ------------------------------------------------------------------------------
@@ -533,7 +622,7 @@ public class MetafileRendererTests
     [Fact]
     public void DrawingModesAndSpacingThatChangeTheInkRejectThePicture()
     {
-        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(R(20, 7), R(43, 0, 0, 5, 5))));            // SETROP2 R2_XORPEN
+        Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(R(20, 7), R(43, 0, 0, 5, 5))));            // an XOR pass never repeated
         Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(R(120, 3, 1), TextW(0, 0, "a b", null)))); // SETTEXTJUSTIFICATION
         Assert.Throws<NotSupportedException>(() => WmfImage.ToSvg(Wmf(W(0x0104, 6))));                           // SETROP2 R2_NOT
         Assert.Throws<NotSupportedException>(() => WmfImage.ToSvg(Wmf(W(0x0108, 2))));                           // SETTEXTCHAREXTRA
@@ -598,6 +687,8 @@ public class MetafileRendererTests
     [InlineData("office-pattern-star.wmf", null, "pattern")]
     [InlineData("office-pie-chart.wmf", "1st Qtr", "clipPath")]                  // SELECTCLIPREGION 0 between clip rectangles
     [InlineData("office-dashed-arrow.wmf", null, "path")]                        // a zero-width pen outlines the arrowhead
+    [InlineData("office-smartart-transparent.emf", null, "mask")]                // semi-transparent fills by PATINVERT and R2_MASKPEN
+    [InlineData("office-area-gradient.wmf", "Sales area-gradient", "mask")]      // a gradient clipped by XOR passes
     public void OfficeMetafilesRenderThroughThePublicConverter(string name, string? text, string element)
     {
         // TestFiles/Metafiles/README.md records how Office wrote each one.
@@ -622,6 +713,8 @@ public class MetafileRendererTests
     [InlineData("office-pattern-star.wmf")]
     [InlineData("office-pie-chart.wmf")]
     [InlineData("office-dashed-arrow.wmf")]
+    [InlineData("office-smartart-transparent.emf")]
+    [InlineData("office-area-gradient.wmf")]
     public void CorruptedMetafilesFailOnlyWithTheExceptionsTheConverterCatches(string name)
     {
         // The converter turns InvalidData/NotSupported/Overflow into the placeholder; anything else would
@@ -770,6 +863,15 @@ public class MetafileRendererTests
     /// <summary>A 2×2 one-bit DIB, black for 0 and white for 1; each row's bits start at the left pixel.</summary>
     private static byte[] Mono(byte top, byte bottom)
         => Le(40, 2, 2, 1 | 1 << 16, 0, 8, 0, 0, 0, 0, 0, 0xffffff).Concat(new byte[] { bottom, 0, 0, 0, top, 0, 0, 0 }).ToArray();
+
+    /// <summary>A 2×2 bottom-up one-bit DIB with the given colour table (none by default); each row's bits start at
+    /// the left pixel.</summary>
+    private static byte[] OneBit(byte top, byte bottom, params int[] table)
+        => Le(40, 2, 2, 1 | 1 << 16, 0, 8, 0, 0, 0, 0).Concat(Le(table)).Concat(new byte[] { bottom, 0, 0, 0, top, 0, 0, 0 }).ToArray();
+
+    /// <summary>EMF BITBLT without a source bitmap: a pattern blit.</summary>
+    private static byte[] PatBlt(int x, int y, int cx, int cy, uint rop)
+        => R(76, 0, 0, 0, 0, x, y, cx, cy, unchecked((int)rop), 0, 0, F(1), 0, 0, F(1), 0, 0, 0, 0, 0, 0, 0, 0);
 
     /// <summary>A 2×2 bottom-up 24-bit DIB of RGB colours.</summary>
     private static byte[] Rgb24(int topLeft, int topRight, int bottomLeft, int bottomRight)

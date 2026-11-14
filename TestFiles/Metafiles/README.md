@@ -22,6 +22,8 @@ the text listed below, with no user, machine or path names. They are the bytes O
 | `office-pattern-star.emf`, `office-pattern-star.wmf` | PowerPoint's `Shape.Export` (EMF and WMF) of a five-point star filled with a red-on-white diagonal pattern: an 8×8 one-bit DIB pattern brush in RGB colours. |
 | `office-pie-chart.wmf` | PowerPoint's `Shape.Export` (WMF) of a pie chart with data labels titled "Sales pie-labels". It resets the clip with SELECTCLIPREGION 0 before each INTERSECTCLIPRECT. |
 | `office-dashed-arrow.wmf` | PowerPoint's `Shape.Export` (WMF) of a green dashed line ending in an arrowhead, whose outline is drawn with a zero-width pen. |
+| `office-smartart-transparent.emf` | PowerPoint's `Shape.Export` (EMF) of the twentieth layout in PowerPoint's SmartArt list, inserted with its default style and no text; its background shape's fill is 90% opaque. Dual EMF+; its GDI records draw each semi-transparent fill as PATINVERT with a solid brush, the shape filled under `R2_MASKPEN` with an 8×8 black and white DIB pattern (58 of 64 pixels black), then PATINVERT again. It carries no text. |
+| `office-area-gradient.wmf` | PowerPoint's `Shape.Export` (WMF) of the area chart in `office-area-gradient.emf`. It clips the gradient to the series' area by drawing the gradient strips under `R2_XORPEN`, filling the area black, and drawing the strips again under `R2_XORPEN`. |
 
 The files are covered by the repository's licence like the rest of `TestFiles/`. Both LibreOffice exports end at their
 end-of-file record with no trailing bytes.

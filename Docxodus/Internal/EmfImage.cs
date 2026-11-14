@@ -171,12 +171,16 @@ internal sealed record EmfImage(XElement Drawing)
                     Need(24);
                     Store(objects, U(8), CreateBrush(U(12), U(12) == 1 ? "none" : Color(U(16)), U(20)));
                     break;
-                case 93: Need(12); Store(objects, U(8), new Brush("none", Pattern: true)); break; // CREATEMONOBRUSH
-                case 94: // CREATEDIBPATTERNBRUSHPT: only RGB colours (DIB_RGB_COLORS) can be drawn
+                case 93 or 94: // CREATEMONOBRUSH; CREATEDIBPATTERNBRUSHPT in RGB colours or palette indexes
+                {
                     Need(32);
-                    Store(objects, U(8), U(12) != 0 ? new Brush("none", Pattern: true)
-                        : canvas.PatternBrush(Part(bytes, at, length, U(16), U(20)), Part(bytes, at, length, U(24), U(28))));
+                    DibImage.Colours? colours = kind == 93 ? DibImage.Colours.Monochrome
+                        : U(12) switch { 0 => DibImage.Colours.Rgb, 1 => DibImage.Colours.PaletteIndexes, _ => null };
+                    Store(objects, U(8), colours is not { } source ? new Brush("none", Pattern: true)
+                        : canvas.PatternBrush(Part(bytes, at, length, U(16), U(20)), Part(bytes, at, length, U(24), U(28)), source));
                     break;
+                }
+                case 48: Need(12); canvas.SelectPalette(stock: U(8) == 0x8000000F); break; // SELECTPALETTE
                 case 49 or 99 or 122: Need(12); Store(objects, U(8), new OtherObject()); break; // CREATEPALETTE, CREATECOLORSPACE(W)
                 case 101: // DELETECOLORSPACE
                     Need(12);
@@ -294,7 +298,7 @@ internal sealed record EmfImage(XElement Drawing)
                     Need(16);
                     if (I(8) != 0) throw new NotSupportedException("EMF text spacing adjustments are not supported.");
                     break;
-                case 13 or 16 or 21 or 23 or 28 or 48 or 50 or 51 or 52 or 58 or 65 or 98 or 100 or 112 or 113 or 121:
+                case 13 or 16 or 21 or 23 or 28 or 50 or 51 or 52 or 58 or 65 or 98 or 100 or 112 or 113 or 121:
                     // Brush origin, mapper flags, stretch mode, colour adjustment, meta region, palettes,
                     // miter limit, FLATTENPATH and ICM do not change the SVG we draw.
                     break;
@@ -352,9 +356,7 @@ internal sealed record EmfImage(XElement Drawing)
     {
         if (infoSize == 0)
         {
-            string? color = rop switch { 0x00F00021 => null, 0x00000042 => "#000000", 0x00FF0062 => "#ffffff",
-                0x00AA0029 => "", _ => throw new NotSupportedException("Unsupported EMF raster operation.") };
-            if (color != "") canvas.FillRectangle(x, y, (double)x + cx, (double)y + cy, color);
+            canvas.PatternBlit(rop.GetValueOrDefault(), x, y, (double)x + cx, (double)y + cy);
             return;
         }
         if (usage != 0) throw new NotSupportedException("EMF bitmaps with palette colours are not supported.");

@@ -34,10 +34,12 @@ internal sealed class MetafileCanvas
     internal abstract record GdiObject;
     /// <summary>A pen; <c>Color</c> is "none" for PS_NULL. Cosmetic pens draw one device pixel.</summary>
     internal sealed record Pen(string Color, double Width, bool Cosmetic, string? Dashes, string Cap, string Join) : GdiObject;
-    /// <summary>A brush; <c>Color</c> is "none" for BS_NULL. A DIB pattern brush tiles <c>Tile</c>. Other
-    /// pattern brushes (<c>Pattern</c>) are kept so that object slots stay aligned, but filling with one is
-    /// unsupported.</summary>
-    internal sealed record Brush(string Color, int Hatch = -1, bool Pattern = false, DibImage.Bitmap? Tile = null) : GdiObject;
+    /// <summary>A brush; <c>Color</c> is "none" for BS_NULL. A DIB pattern brush tiles <c>Tile</c>, whose colours
+    /// <c>Colours</c> says where it took: a monochrome tile's black and white paint the text and background colours
+    /// current at the fill. Other pattern brushes (<c>Pattern</c>) are kept so that object slots stay aligned, but
+    /// filling with one is unsupported.</summary>
+    internal sealed record Brush(string Color, int Hatch = -1, bool Pattern = false, DibImage.Bitmap? Tile = null,
+        DibImage.Colours Colours = DibImage.Colours.Rgb) : GdiObject;
     internal sealed record Font(string Family, double Height, double Escapement, int Weight, bool Italic, bool Underline, bool Strike, int Charset = 0) : GdiObject;
     /// <summary>A palette, region or colour space: occupies a slot, draws nothing.</summary>
     internal sealed record OtherObject : GdiObject;
@@ -64,6 +66,10 @@ internal sealed class MetafileCanvas
         }
     }
 
+    /// <summary>The SETROP2 mixes the canvas draws: the pen and brush as they are (R2_COPYPEN), nothing (R2_NOP),
+    /// and the two an inverted fill is made of (R2_XORPEN, R2_MASKPEN; see <see cref="Inversion"/>).</summary>
+    private enum Mix { Copy = 13, Nop = 11, Xor = 7, Mask = 9 }
+
     private sealed class State
     {
         internal int MapMode = 1;
@@ -73,7 +79,8 @@ internal sealed class MetafileCanvas
         internal Brush Brush = WhiteBrush;
         internal Font Font = DefaultFont;
         internal string TextColor = "#000000", BkColor = "#ffffff";
-        internal bool OpaqueBackground = true, EvenOdd = true, Clockwise, Ink = true;
+        internal bool OpaqueBackground = true, EvenOdd = true, Clockwise;
+        internal Mix Mix = Mix.Copy;
         internal int TextAlign;
         internal string? Clip;
         internal int ClipDepth;
@@ -81,7 +88,22 @@ internal sealed class MetafileCanvas
         internal State Clone() => (State)MemberwiseClone();
     }
 
+    /// <summary>GDI's way to paint content through a mask without reading the destination, which Office's fallback
+    /// records use for semi-transparent fills (their dither pattern standing for the alpha) and to clip gradients to
+    /// a shape. The content is XORed onto the destination (R2_XORPEN, or a PATINVERT blit), the mask is painted black
+    /// (R2_MASKPEN with a black and white brush, or black itself), and the same content is XORed again. Where the
+    /// mask is black the content shows; elsewhere the two passes cancel, whatever lay beneath.</summary>
+    private sealed class Inversion
+    {
+        internal readonly XElement Content = new(Svg + "g"), Mask = new(Svg + "mask"), Repeat = new(Svg + "g");
+    }
+
     private readonly XElement root;
+    /// <summary>Where drawing goes: the root, or the part of an inversion being drawn.</summary>
+    private XElement target;
+    private Inversion? inversion;
+    private bool ownPalette;
+    private readonly Dictionary<(DibImage.Bitmap, string, string), DibImage.Bitmap> monochrome = new();
     private readonly string idPrefix;
     private readonly double fixedDeviceWidth, fixedDeviceHeight, pixelsPerMmX, pixelsPerMmY, cssPixelX, cssPixelY;
     private readonly string defaultJoin;
@@ -108,7 +130,7 @@ internal sealed class MetafileCanvas
     internal MetafileCanvas(XElement root, byte[] seed, (double Width, double Height)? fixedDevice = null,
         (double X, double Y)? pixelsPerMm = null, string defaultJoin = "round")
     {
-        this.root = root;
+        this.root = target = root;
         idPrefix = "mf" + Crc32.Compute(seed).ToString("x8", CultureInfo.InvariantCulture) + "-";
         (fixedDeviceWidth, fixedDeviceHeight) = fixedDevice ?? (0, 0);
         (pixelsPerMmX, pixelsPerMmY) = pixelsPerMm ?? (1, 1);
@@ -160,14 +182,18 @@ internal sealed class MetafileCanvas
         3 or 4 or 5 or 6 => new Brush("none", Pattern: true),
         _ => throw new NotSupportedException("Unsupported metafile brush style.") };
 
-    /// <summary>A DIB pattern brush in RGB colours: the bitmap tiles the fill from the device origin.</summary>
-    internal Brush PatternBrush(ReadOnlySpan<byte> info, ReadOnlySpan<byte> bits)
+    /// <summary>A DIB pattern brush: the bitmap tiles the fill from the device origin.</summary>
+    internal Brush PatternBrush(ReadOnlySpan<byte> info, ReadOnlySpan<byte> bits, DibImage.Colours colours)
     {
         var (width, height) = DibImage.Size(info);
         ReserveBitmap((long)width * height);
         bitmapPixels += (long)width * height;
-        return new Brush("none", Tile: DibImage.Decode(info, bits));
+        return new Brush("none", Tile: DibImage.Decode(info, bits, colours), Colours: colours);
     }
+
+    /// <summary>SELECTPALETTE. Palette-index brushes resolve through the default palette, so a metafile that selects
+    /// its own palette can no longer fill with them.</summary>
+    internal void SelectPalette(bool stock) => ownPalette |= !stock;
 
     internal static Font CreateFont(string face, int height, int escapement, int weight, bool italic, bool underline, bool strike)
     {
@@ -225,10 +251,51 @@ internal sealed class MetafileCanvas
     internal void SetTextAlign(int align) => state.TextAlign = align;
     internal void SetPolyFillMode(int mode) => state.EvenOdd = mode != 2;
     internal void SetArcDirection(int direction) => state.Clockwise = direction == 2;
-    /// <summary>SETROP2: R2_COPYPEN (13) draws the pen and brush as they are and R2_NOP (11) leaves the
-    /// destination unchanged; every other mix reads the destination.</summary>
-    internal void SetBinaryRasterOperation(uint mode) => state.Ink = mode switch {
-        13 => true, 11 => false, _ => throw new NotSupportedException("Unsupported metafile binary raster operation.") };
+    /// <summary>SETROP2. Every mix other than <see cref="Mix"/>'s reads the destination.</summary>
+    internal void SetBinaryRasterOperation(uint mode) => SetMix(mode is 7 or 9 or 11 or 13 ? (Mix)mode
+        : throw new NotSupportedException("Unsupported metafile binary raster operation."));
+
+    /// <summary>Drawing with R2_XORPEN is one pass of an inversion.</summary>
+    private void SetMix(Mix mix)
+    {
+        bool was = state.Mix == Mix.Xor;
+        state.Mix = mix;
+        if (was != (mix == Mix.Xor)) Pass(begin: !was);
+    }
+
+    /// <summary>Begins or ends a pass of XOR drawing: the content, then after the mask its repeat, which completes
+    /// the inversion.</summary>
+    private void Pass(bool begin)
+    {
+        Flush();
+        if (begin && inversion == null) target = (inversion = new()).Content;
+        else if (begin) target = target == inversion!.Mask ? inversion.Repeat
+            : throw new NotSupportedException("A metafile inversion draws a third pass.");
+        else if (target == inversion!.Content) target = inversion.Mask;
+        else Invert();
+    }
+
+    /// <summary>Draws a completed inversion: its content through its mask.</summary>
+    private void Invert()
+    {
+        var run = inversion!;
+        inversion = null;
+        target = root;
+        if (!XNode.DeepEquals(run.Content, run.Repeat))
+            throw new NotSupportedException("A metafile inversion does not repeat its content.");
+        if (!run.Content.HasElements || !run.Mask.HasElements || Bounds is not { } box) return;
+        // The mask covers everything drawn so far, the content's strokes included; browsers refuse a mask whose
+        // region is far larger than that.
+        string id = NextId();
+        double padX = 2 * cssPixelX, padY = 2 * cssPixelY;
+        run.Mask.Add(new XAttribute("id", id), new XAttribute("maskUnits", "userSpaceOnUse"),
+            new XAttribute("x", N(box.MinX - padX)), new XAttribute("y", N(box.MinY - padY)),
+            new XAttribute("width", N(box.MaxX - box.MinX + 2 * padX)), new XAttribute("height", N(box.MaxY - box.MinY + 2 * padY)));
+        run.Content.Add(new XAttribute("mask", $"url(#{id})"));
+        Spend(160);
+        Defs().Add(run.Mask);
+        root.Add(run.Content);
+    }
 
     internal void Save()
     {
@@ -242,7 +309,10 @@ internal sealed class MetafileCanvas
         int pops = which < 0 ? -which : saved.Count - which + 1;
         if (pops < 1 || pops > saved.Count) throw new InvalidDataException("Invalid metafile RESTOREDC.");
         for (int i = 1; i < pops; i++) saved.Pop();
+        var mix = state.Mix;
         state = saved.Pop();
+        (state.Mix, mix) = (mix, state.Mix);
+        SetMix(mix);
     }
 
     /// <summary>The logical-to-device transform now in effect: the world transform, then the page mapping.</summary>
@@ -600,6 +670,7 @@ internal sealed class MetafileCanvas
     internal void Text(double x, double y, string text, IReadOnlyList<double>? advances, (double L, double T, double R, double B)? opaque)
     {
         if (inBracket) throw new NotSupportedException("Text in a metafile path bracket is not supported.");
+        NotInverting();
         if (opaque is { } box) FillRectangle(box.L, box.T, box.R, box.B, state.BkColor);
         var font = state.Font;
         // A symbol font's characters are its own codes (Symbol's "a" is an alpha): map them to Unicode, as
@@ -696,6 +767,7 @@ internal sealed class MetafileCanvas
     internal void Bitmap(double x, double y, double width, double height, DibImage.Bitmap source, uint? rop)
     {
         if (inBracket) throw new NotSupportedException("Bitmaps in a metafile path bracket are not supported.");
+        NotInverting();
         if ((bitmapPixels += (long)source.Width * source.Height) > MaxBitmapPixels) throw new NotSupportedException("Metafile bitmaps exceed the pixel limit.");
         if (width == 0 || height == 0) return;
         var m = new Matrix(width, 0, 0, height, x, y).Then(Transform);
@@ -759,19 +831,41 @@ internal sealed class MetafileCanvas
         if (bitmapPixels + pixels > MaxBitmapPixels) throw new NotSupportedException("Metafile bitmaps exceed the pixel limit.");
     }
 
-    /// <summary>PATBLT-style fill of a logical rectangle with the current brush or a fixed colour. It is a
-    /// raster operation of its own, so the binary raster operation does not apply.</summary>
-    internal void FillRectangle(double left, double top, double right, double bottom, string? color)
+    /// <summary>A blit without a source bitmap (PATBLT): PATCOPY, BLACKNESS, WHITENESS, the no-op D, and PATINVERT,
+    /// which XORs the brush onto the destination as an inversion's pass, or as part of the XOR pass under way.</summary>
+    internal void PatternBlit(uint rop, double left, double top, double right, double bottom)
     {
-        var saveBrush = state.Brush; var savePen = state.Pen; bool saveInk = state.Ink;
+        if (rop == 0x00AA0029) return;
+        string? color = rop switch { 0x00F00021 or 0x005A0049 => null, 0x00000042 => "#000000", 0x00FF0062 => "#ffffff",
+            _ => throw new NotSupportedException("Unsupported metafile raster operation.") };
+        bool invert = rop == 0x005A0049, pass = invert && state.Mix != Mix.Xor;
+        if (pass) Pass(begin: true);
+        FillRectangle(left, top, right, bottom, color, invert ? Mix.Xor : Mix.Copy);
+        if (pass) Pass(begin: false);
+    }
+
+    /// <summary>Fills a logical rectangle with the current brush or a fixed colour. A blit is a raster operation of
+    /// its own, so the binary raster operation does not apply.</summary>
+    private void FillRectangle(double left, double top, double right, double bottom, string? color, Mix mix = Mix.Copy)
+    {
+        var saveBrush = state.Brush; var savePen = state.Pen; var saveMix = state.Mix;
         if (color != null) state.Brush = new Brush(color);
-        state.Pen = NullPen; state.Ink = true;
+        state.Pen = NullPen; state.Mix = mix;
         try { Rectangle(left, top, right, bottom); }
-        finally { state.Brush = saveBrush; state.Pen = savePen; state.Ink = saveInk; }
+        finally { state.Brush = saveBrush; state.Pen = savePen; state.Mix = saveMix; }
     }
 
     /// <summary>Completes pending output; call once after the final record.</summary>
-    internal void Finish() { Flush(); CloseExclusion(); }
+    internal void Finish()
+    {
+        if (inversion != null) throw new NotSupportedException("A metafile inversion is left unfinished.");
+        Flush(); CloseExclusion();
+    }
+
+    private void NotInverting()
+    {
+        if (inversion != null) throw new NotSupportedException("Metafile text and bitmaps inside an inversion are not supported.");
+    }
 
     // ---- Emission ------------------------------------------------------------------------------
 
@@ -790,7 +884,7 @@ internal sealed class MetafileCanvas
     {
         if (inBracket) { Into(build); return; }
         var pen = state.Pen;
-        if (pen.Color == "none" || !state.Ink) { var scratch = new Path(); build(scratch); return; }
+        if (pen.Color == "none" || state.Mix == Mix.Nop) { var scratch = new Path(); build(scratch); return; }
         var m = Transform;
         var container = Container();
         var key = (pen, m, container);
@@ -825,16 +919,21 @@ internal sealed class MetafileCanvas
     private void Shape(XElement element, bool fill, bool outline, IReadOnlyList<(double X, double Y)> logical,
         Matrix? transform = null, bool path = false, bool flush = true)
     {
-        if (!state.Ink) return;
+        if (state.Mix == Mix.Nop) return;
+        // Between an inversion's passes the pen and brush paint its mask, in white for the black they paint.
+        bool mask = target == inversion?.Mask;
+        if (state.Mix == Mix.Mask && !mask) throw new NotSupportedException("Unsupported metafile binary raster operation.");
         if (flush) Flush();
         var m = transform ?? Transform;
         var s = state;
-        element.Add(new XAttribute("fill", fill ? Fill(s.Brush, m) : "none"));
+        double cover = fill && mask ? Coverage(s.Brush) : 1;
+        element.Add(new XAttribute("fill", !fill || cover == 0 ? "none" : mask ? "#ffffff" : Fill(s.Brush, m)));
+        if (cover is > 0 and < 1) element.Add(new XAttribute("fill-opacity", N(cover)));
         if (path && fill) element.Add(new XAttribute("fill-rule", s.EvenOdd ? "evenodd" : "nonzero"));
         var pen = s.Pen;
-        if (outline && pen.Color != "none")
+        if (outline && pen.Color != "none" && (!mask || Masks(pen.Color)))
         {
-            element.Add(new XAttribute("stroke", pen.Color), new XAttribute("stroke-width", N(pen.Width)),
+            element.Add(new XAttribute("stroke", mask ? "#ffffff" : pen.Color), new XAttribute("stroke-width", N(pen.Width)),
                 new XAttribute("stroke-linejoin", pen.Join));
             if (!pen.Cosmetic && pen.Cap != "butt") element.Add(new XAttribute("stroke-linecap", pen.Cap));
             if (pen.Dashes != null) element.Add(new XAttribute("stroke-dasharray", pen.Dashes));
@@ -849,15 +948,15 @@ internal sealed class MetafileCanvas
 
     private string Fill(Brush brush, Matrix m)
     {
-        if (brush.Pattern) throw new NotSupportedException("Metafile pattern brushes are not supported.");
-        if (brush.Tile == null && (brush.Hatch < 0 || brush.Color == "none")) return brush.Color;
+        var tile = Tile(brush);
+        if (tile == null && (brush.Hatch < 0 || brush.Color == "none")) return brush.Color;
         // GDI realises a brush in the pixels of the device it plays onto: hatches are eight of them and
         // pattern tiles their own size, both anchored at the device origin. Here that device is CSS pixels.
-        string id = NextId(), width = N(brush.Tile?.Width ?? 8), height = N(brush.Tile?.Height ?? 8);
+        string id = NextId(), width = N(tile?.Width ?? 8), height = N(tile?.Height ?? 8);
         var pattern = new XElement(Svg + "pattern", new XAttribute("id", id), new XAttribute("patternUnits", "userSpaceOnUse"),
             new XAttribute("width", width), new XAttribute("height", height));
         SetTransformAttribute(pattern, new Matrix(cssPixelX, 0, 0, cssPixelY, 0, 0).Then(m.Invert()), "patternTransform");
-        if (brush.Tile is { } tile)
+        if (tile != null)
             pattern.Add(new XElement(Svg + "image", new XAttribute("width", width), new XAttribute("height", height),
                 new XAttribute("preserveAspectRatio", "none"), new XAttribute("image-rendering", "optimizeSpeed"), new XAttribute("href", tile.Href)));
         else
@@ -872,6 +971,44 @@ internal sealed class MetafileCanvas
         Count(pattern);
         return $"url(#{id})";
     }
+
+    /// <summary>The tile a pattern brush fills with now: a monochrome one in the current text (for black) and
+    /// background (for white) colours, encoded once for each pair.</summary>
+    private DibImage.Bitmap? Tile(Brush brush)
+    {
+        if (brush.Pattern) throw new NotSupportedException("Metafile pattern brushes are not supported.");
+        if (brush.Tile is not { } tile || brush.Colours == DibImage.Colours.Rgb) return brush.Tile;
+        if (brush.Colours == DibImage.Colours.PaletteIndexes)
+            return ownPalette ? throw new NotSupportedException("Metafile palette-index brushes need the metafile's own palette.") : tile;
+        var key = (tile, state.TextColor, state.BkColor);
+        if (monochrome.TryGetValue(key, out var painted)) return painted;
+        ReserveBitmap((long)tile.Width * tile.Height);
+        bitmapPixels += (long)tile.Width * tile.Height;
+        var rgba = (byte[])tile.Rgba.Clone();
+        for (int i = 0; i < rgba.Length; i += 4)
+        {
+            int color = Convert.ToInt32((rgba[i] == 0 ? state.TextColor : state.BkColor)[1..], 16);
+            (rgba[i], rgba[i + 1], rgba[i + 2]) = ((byte)(color >> 16), (byte)(color >> 8), (byte)color);
+        }
+        return monochrome[key] = new DibImage.Bitmap(tile.Width, tile.Height, rgba);
+    }
+
+    /// <summary>How much of an inversion's content a brush lets through where it paints the mask: its share of black.</summary>
+    private double Coverage(Brush brush)
+    {
+        if (brush.Hatch >= 0) throw new NotSupportedException("A metafile inversion paints its mask with a hatch.");
+        if (Tile(brush) is not { } tile) return Masks(brush.Color) ? 1 : 0;
+        var (black, white) = tile.Shades;
+        int area = tile.Width * tile.Height;
+        if (black + (state.Mix == Mix.Mask ? white : 0) != area)
+            throw new NotSupportedException("A metafile inversion paints its mask in a colour other than black.");
+        return (double)black / area;
+    }
+
+    /// <summary>Whether a colour paints an inversion's mask: black does; no colour, and white under R2_MASKPEN, leave
+    /// it as it is. Any other colour would tint the content, which a mask cannot express.</summary>
+    private bool Masks(string color) => color == "#000000" || (color == "none" || (color == "#ffffff" && state.Mix == Mix.Mask) ? false
+        : throw new NotSupportedException("A metafile inversion paints its mask in a colour other than black."));
 
     private double PenPad(Matrix m)
         => state.Pen.Color == "none" ? 0 : state.Pen.Cosmetic ? 0.5
@@ -904,13 +1041,13 @@ internal sealed class MetafileCanvas
 
     private XElement Container()
     {
-        if (state.Clip is not { } clip) return root;
+        if (state.Clip is not { } clip) return target;
         if (exclusion?.Id == clip) CloseExclusion();
-        if (clipGroup != null && root.LastNode == clipGroup && (string?)clipGroup.Attribute("clip-path") == $"url(#{clip})") return clipGroup;
+        if (clipGroup != null && target.LastNode == clipGroup && (string?)clipGroup.Attribute("clip-path") == $"url(#{clip})") return clipGroup;
         Flush();
         clipGroup = new XElement(Svg + "g", new XAttribute("clip-path", $"url(#{clip})"));
         Count(clipGroup);
-        root.Add(clipGroup);
+        target.Add(clipGroup);
         return clipGroup;
     }
 

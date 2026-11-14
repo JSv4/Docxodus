@@ -13,10 +13,36 @@ internal static class DibImage
     internal sealed record Bitmap(int Width, int Height, byte[] Rgba)
     {
         private string? href;
+        private (int, int)? shades;
 
         /// <summary>The PNG data URI, encoded once: a pattern brush's tile is written for every fill.</summary>
         internal string Href => href ??= "data:image/png;base64," + Convert.ToBase64String(TiffImage.Png(Width, Height, Rgba));
+
+        /// <summary>How many pixels are black and how many white, counted once.</summary>
+        internal (int Black, int White) Shades => shades ??= Count();
+
+        private (int, int) Count()
+        {
+            int black = 0, white = 0;
+            for (int i = 0; i < Rgba.Length; i += 4)
+            {
+                int sum = Rgba[i] + Rgba[i + 1] + Rgba[i + 2];
+                if (sum == 0) black++;
+                else if (sum == 3 * 255) white++;
+            }
+            return (black, white);
+        }
     }
+
+    /// <summary>Where a DIB's pixel indexes take their colours: its RGB colour table (DIB_RGB_COLORS), 16-bit indexes
+    /// into the palette (DIB_PAL_COLORS), or, for a monochrome pattern brush, black for 0 and white for 1 whatever
+    /// the table says (the brush paints them in the text and background colours).</summary>
+    internal enum Colours { Rgb, PaletteIndexes, Monochrome }
+
+    /// <summary>GDI's default palette (0xRRGGBB), the one a metafile's palette indexes refer to unless it selects its own.</summary>
+    private static readonly uint[] DefaultPalette = {
+        0x000000, 0x800000, 0x008000, 0x808000, 0x000080, 0x800080, 0x008080, 0xc0c0c0, 0xc0dcc0, 0xa6caf0,
+        0xfffbf0, 0xa0a0a4, 0x808080, 0xff0000, 0x00ff00, 0xffff00, 0x0000ff, 0xff00ff, 0x00ffff, 0xffffff };
 
     /// <summary>Bytes taken by the header, colour masks and colour table of a packed DIB.</summary>
     internal static int InfoSize(ReadOnlySpan<byte> packed)
@@ -29,10 +55,12 @@ internal static class DibImage
     /// rectangle misses the bitmap. <paramref name="constantAlpha"/> and <paramref name="sourceAlpha"/>
     /// (premultiplied 32-bit alpha) are ALPHABLEND's blend function, baked into the PNG.</summary>
     internal static Bitmap? Decode(ReadOnlySpan<byte> info, ReadOnlySpan<byte> bits, int srcX, int srcY, int srcWidth, int srcHeight,
-        bool srcYFromBottom, byte constantAlpha = 255, bool sourceAlpha = false)
+        bool srcYFromBottom, byte constantAlpha = 255, bool sourceAlpha = false, Colours colours = Colours.Rgb)
     {
         var h = Header(info);
-        if (info.Length < h.HeaderSize + h.MaskBytes + h.PaletteEntries * h.EntrySize)
+        if (colours == Colours.Monochrome && h.BitCount != 1) throw new NotSupportedException("A metafile monochrome brush is not one bit deep.");
+        int entrySize = colours switch { Colours.PaletteIndexes => 2, Colours.Monochrome => 0, _ => h.EntrySize };
+        if (info.Length < h.HeaderSize + h.MaskBytes + h.PaletteEntries * entrySize)
             throw new InvalidDataException("Truncated metafile bitmap colour table.");
         long stride = ((long)h.Width * h.BitCount + 31) / 32 * 4;
         if (stride * h.Height > bits.Length) throw new InvalidDataException("Truncated metafile bitmap.");
@@ -51,6 +79,14 @@ internal static class DibImage
         int paletteStart = h.HeaderSize + h.MaskBytes;
         for (int i = 0; i < palette.Length; i++)
         {
+            if (colours == Colours.Monochrome) { palette[i] = i == 0 ? 0u : 0xffffff; continue; }
+            if (colours == Colours.PaletteIndexes)
+            {
+                int index = BinaryPrimitives.ReadUInt16LittleEndian(info.Slice(paletteStart + i * 2, 2));
+                palette[i] = index < DefaultPalette.Length ? DefaultPalette[index]
+                    : throw new NotSupportedException("Metafile palette index is not in the default palette.");
+                continue;
+            }
             var entry = info.Slice(paletteStart + i * h.EntrySize, 3);
             palette[i] = entry[0] | (uint)entry[1] << 8 | (uint)entry[2] << 16;
         }
@@ -102,10 +138,10 @@ internal static class DibImage
     }
 
     /// <summary>Decodes a whole DIB, as a pattern brush carries it.</summary>
-    internal static Bitmap Decode(ReadOnlySpan<byte> info, ReadOnlySpan<byte> bits)
+    internal static Bitmap Decode(ReadOnlySpan<byte> info, ReadOnlySpan<byte> bits, Colours colours)
     {
         var (width, height) = Size(info);
-        return Decode(info, bits, 0, 0, width, height, false)!;
+        return Decode(info, bits, 0, 0, width, height, false, colours: colours)!;
     }
 
     private static uint Channel(uint value, uint mask)
