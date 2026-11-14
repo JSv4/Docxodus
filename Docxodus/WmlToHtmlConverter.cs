@@ -13689,9 +13689,15 @@ namespace Docxodus
                 return imageHtml;
 
             // The anchor's dist* attributes are text clearance around the object, which is
-            // exactly what CSS margins are on a float.
+            // exactly what CSS margins are on a float. A picture placed below its paragraph's
+            // top also carries that offset in its top margin (see the inset below).
             var style = new Dictionary<string, string> { { "float", side } };
-            AddEmuPadding(style, "margin-top", DrawingWrapDistance((long?)drawingContainer.Attribute(NoNamespace.distT)));
+            var positionV = drawingContainer.Element(WP.positionV);
+            var paragraphOffset = (string?)positionV?.Attribute(NoNamespace.relativeFrom) == "paragraph"
+                ? (long?)positionV?.Element(WP.posOffset) : null;
+            var lowered = paragraphOffset is > 0 ? paragraphOffset.Value : 0L;
+            var topDistance = DrawingWrapDistance((long?)drawingContainer.Attribute(NoNamespace.distT));
+            AddEmuPadding(style, "margin-top", lowered > 0 ? (topDistance ?? 0) + lowered : topDistance);
             var rightDistance = DrawingWrapDistance((long?)wrap.Attribute(NoNamespace.distR)
                 ?? (long?)drawingContainer.Attribute(NoNamespace.distR));
             var leftDistance = DrawingWrapDistance((long?)wrap.Attribute(NoNamespace.distL)
@@ -13738,11 +13744,10 @@ namespace Docxodus
             }
 
             var wrapper = new XElement(Xhtml.span, imageHtml);
-            var positionV = drawingContainer.Element(WP.positionV);
-            if (relativeFrom == "column" &&
-                ((side == "left" && (alignment == "left" || offset == 0)) || (side == "right" && alignment == "right")) &&
-                (string?)positionV?.Attribute(NoNamespace.relativeFrom) == "paragraph" &&
-                (long?)positionV?.Element(WP.posOffset) == 0)
+            // Every wrapping float rests against a column edge, an offset one behind its clearance
+            // margin. One placed from its paragraph's top keeps that place below the top of whichever
+            // page fragment holds it, so pagination can split the paragraph around it (#1736).
+            if (paragraphOffset >= 0)
                 wrapper.SetAttributeValue("data-docx-edge-picture", "true");
             if (style.ContainsKey("shape-outside"))
             {
@@ -13750,6 +13755,10 @@ namespace Docxodus
                 style["--docx-wrap-distance-left"] = ((leftDistance ?? 0) / 12700m).ToString("0.####", NumberFormatInfo.InvariantInfo) + "pt";
                 style["--docx-wrap-distance-right"] = ((rightDistance ?? 0) / 12700m).ToString("0.####", NumberFormatInfo.InvariantInfo) + "pt";
             }
+            // Text above a lowered picture is not wrapped: its rectangle excludes text only from the
+            // picture's own clearance down. A contour is drawn from the picture's border box already.
+            else if (lowered > 0)
+                style["shape-outside"] = "inset(" + (lowered / 12700m).ToString("0.####", NumberFormatInfo.InvariantInfo) + "pt 0 0 0) margin-box";
             wrapper.AddAnnotation(style);
             return wrapper;
         }

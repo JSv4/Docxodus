@@ -11,7 +11,8 @@ namespace Docxodus.Tests;
 
 public class RenderingFidelityImageWrapTests
 {
-    private static XElement Render(string wrap, long offset = 0, bool behind = false, int paginationMode = 1)
+    private static XElement Render(string wrap, long offset = 0, bool behind = false, int paginationMode = 1,
+        string verticalFrom = "paragraph", long verticalOffset = 0)
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
@@ -26,7 +27,7 @@ public class RenderingFidelityImageWrapTests
                   <w:body><w:p><w:r><w:drawing>
                     <wp:anchor distT="0" distB="0" distL="68580" distR="68580" simplePos="0" relativeHeight="0" behindDoc="{(behind ? 1 : 0)}" locked="0" layoutInCell="1" allowOverlap="1">
                       <wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>{offset}</wp:posOffset></wp:positionH>
-                      <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+                      <wp:positionV relativeFrom="{verticalFrom}"><wp:posOffset>{verticalOffset}</wp:posOffset></wp:positionV>
                       <wp:extent cx="914400" cy="457200"/>{wrap}<wp:docPr id="1" name="Authored triangle"/>
                       <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
                         <pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="black.png"/><pic:cNvPicPr/></pic:nvPicPr>
@@ -129,10 +130,38 @@ public class RenderingFidelityImageWrapTests
     }
 
     [Fact]
-    public void OffsetPictureKeepsItsExistingFloatFallback()
+    public void OffsetPictureAtItsParagraphTopKeepsItsFloatFallbackAsAnEdgePicture()
     {
         var html = Render("<wp:wrapSquare wrapText=\"bothSides\"/>", 127000);
-        Assert.DoesNotContain("data-docx-edge-picture", html.ToString());
+        var style = (string?)html.Descendants().Single(e => e.Name.LocalName == "img").Parent!.Attribute("style");
+        Assert.Contains("float: left", style);
+        Assert.Contains("margin-left: 5.4pt", style);
+        Assert.Equal("true", (string?)html.Descendants().Single(e => e.Name.LocalName == "img").Parent!.Attribute("data-docx-edge-picture"));
         Assert.Contains("Authored wrapping test text.", html.Value);
+    }
+
+    [Theory]
+    [InlineData("<wp:wrapSquare wrapText=\"bothSides\"/>", "inset(10pt 0 0 0) margin-box")]
+    [InlineData("<wp:wrapTight wrapText=\"bothSides\"><wp:wrapPolygon edited=\"0\"><wp:start x=\"0\" y=\"0\"/><wp:lineTo x=\"21600\" y=\"0\"/><wp:lineTo x=\"0\" y=\"21600\"/><wp:lineTo x=\"0\" y=\"0\"/></wp:wrapPolygon></wp:wrapTight>",
+        "polygon(0% 0%, 100% 0%, 0% 100%, 0% 0%) border-box")]
+    public void PictureBelowItsParagraphTopCarriesItsOffsetAsAnEdgePicture(string wrap, string exclusion)
+    {
+        var html = Render(wrap, 127000, verticalOffset: 127000);
+        var wrapper = html.Descendants().Single(e => e.Name.LocalName == "img").Parent!;
+        var style = (string?)wrapper.Attribute("style");
+        // The offset lowers the picture; the text above it stays unwrapped.
+        Assert.Contains("margin-top: 10pt", style);
+        Assert.Contains("shape-outside: " + exclusion, style);
+        Assert.Equal("true", (string?)wrapper.Attribute("data-docx-edge-picture"));
+    }
+
+    [Theory]
+    [InlineData("paragraph", -127000)]
+    [InlineData("page", 0)]
+    public void PictureAboveItsParagraphOrPlacedOnThePageIsNotAnEdgePicture(string verticalFrom, long verticalOffset)
+    {
+        var html = Render("<wp:wrapSquare wrapText=\"bothSides\"/>", 127000, verticalFrom: verticalFrom, verticalOffset: verticalOffset);
+        Assert.Contains("float: left", (string?)html.Descendants().Single(e => e.Name.LocalName == "img").Parent!.Attribute("style"));
+        Assert.DoesNotContain("data-docx-edge-picture", html.ToString());
     }
 }
