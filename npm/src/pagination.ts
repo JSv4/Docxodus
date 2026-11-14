@@ -451,7 +451,7 @@ const MIN_FOOTNOTE_START_PT = 20;
 /** Internal provenance retained only while a note element waits between pages. */
 const FOOTNOTE_SOURCE_POSITION_ATTR = "data-pagination-footnote-source-position";
 /** The MathML vocabulary `WmlToHtmlConverter.Math.cs` emits; such an inline equation moves as one box. */
-const CONVERTER_MATHML_ELEMENTS = /^m(ath|row|[ino]|space|frac|sqrt|root|sub|sup|subsup|multiscripts|prescripts|under|over|underover|table|tr|td)$/;
+const CONVERTER_MATHML_ELEMENTS = /^m(ath|row|[ino]|text|space|frac|sqrt|root|sub|sup|subsup|multiscripts|prescripts|under|over|underover|table|tr|td|phantom|padded)$/;
 
 /**
  * Pagination engine that converts HTML with pagination metadata

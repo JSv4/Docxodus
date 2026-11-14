@@ -25,10 +25,18 @@ public static partial class WmlToHtmlConverter
 
         /// <summary>Where other n-ary limits go when an <c>m:nary</c> omits <c>m:limLoc</c> (§22.1.2.71).</summary>
         public string NaryLimits { get; init; } = "undOvr";
+
+        /// <summary>Whether <c>m:defJc</c> centres each line of a display equation on its own rather than
+        /// the lines as a group.</summary>
+        public bool CenteredLines { get; init; }
     }
 
     /// <summary>One equation's projection state: the document context plus whether it is display math.</summary>
-    private readonly record struct MathScope(MathRenderingContext Context, bool Display);
+    private readonly record struct MathScope(MathRenderingContext Context, bool Display)
+    {
+        /// <summary>The CSS colour the enclosing structure paints, which its operands inherit; "" for none.</summary>
+        public string Color { get; init; } = "";
+    }
 
     private static bool HasUnknownMathAttributes(XElement element, XName? allowed = null) => element.Attributes()
         .Any(a => !a.IsNamespaceDeclaration && a.Name != PtOpenXml.Unid && a.Name != allowed);
@@ -50,8 +58,8 @@ public static partial class WmlToHtmlConverter
         [M.dispDef] = setting => MathOnOff(setting, absent: true) == true,
         [M.lMargin] = setting => MathSettingIs(setting, "0"),
         [M.rMargin] = setting => MathSettingIs(setting, "0"),
-        // Centred. A display paragraph is projected only when it holds one equation, and a group of one
-        // centred as a group is that equation centred.
+        // Centred: the lines of a display equation as a group (their common left edge), or each line on
+        // its own. One line is drawn the same either way.
         [M.defJc] = setting => MathSettingIs(setting, "centerGroup", "center"),
         // How Word breaks an equation too long for its line, and where it sets the lines after the first.
         // The projection never breaks an equation, with these settings or without them, so none of their
@@ -85,6 +93,7 @@ public static partial class WmlToHtmlConverter
             FontName = font,
             IntegralLimits = (string?)properties?.Element(M.intLim)?.Attribute(M.val) ?? "subSup",
             NaryLimits = (string?)properties?.Element(M.naryLim)?.Attribute(M.val) ?? "undOvr",
+            CenteredLines = (string?)properties?.Element(M.defJc)?.Attribute(M.val) == "center",
         };
         part.AddAnnotation(context);
         return context;
@@ -118,7 +127,9 @@ public static partial class WmlToHtmlConverter
     {
         if (!context.Supported || HasUnknownMathAttributes(source)) return null;
         var display = source.Name == M.oMathPara;
-        if (display && (source.Elements().Count() != 1 || source.Element(M.oMath) == null)) return null;
+        // A display paragraph's equations run on as one line until a line break (m:oMathParaPr and
+        // anything else between them keep the diagnostic).
+        if (display && (!source.HasElements || source.Elements().Any(e => e.Name != M.oMath))) return null;
         // OMML display fractions retain full-size nested operands by default; MathML shrinks
         // them, and so do MathML table cells. Keep that unmodeled display rule explicit rather
         // than silently changing the size of a nested fraction or large operator.
@@ -126,7 +137,7 @@ public static partial class WmlToHtmlConverter
             && e.Ancestors().Any(a => a.Name == M.f || a.Name == M._m))) return null;
         var size = MathFontSize(source, context);
         if (size == null) return null;
-        var expression = MathExpression(display ? source.Element(M.oMath)! : source, new MathScope(context, display));
+        var expression = MathLines(display ? source.Elements() : new[] { source }, new MathScope(context, display));
         if (expression == null || expression.Value.Length == 0) return null;
         var math = new XElement(MathMl + "math",
             new XAttribute("display", display ? "block" : "inline"),
@@ -140,13 +151,15 @@ public static partial class WmlToHtmlConverter
     private static XElement MathOperator(string text, params (string Name, string Value)[] attributes) =>
         Mml("mo", attributes.Select(a => new XAttribute(a.Name, a.Value)), text);
 
-    /// <summary>An OMML on/off property (ST_OnOff): absent takes <paramref name="absent"/>, a bare
-    /// element is on, and anything other than the six spellings is unprojectable (null).</summary>
+    /// <summary>An on/off property (ST_OnOff, in <c>m:val</c> or, for a run's <c>w:rPr</c>, <c>w:val</c>):
+    /// absent takes <paramref name="absent"/>, a bare element is on, and anything other than the six
+    /// spellings is unprojectable (null).</summary>
     private static bool? MathOnOff(XElement? property, bool absent)
     {
         if (property == null) return absent;
-        if (property.HasElements || HasUnknownMathAttributes(property, M.val)) return null;
-        return (string?)property.Attribute(M.val) switch
+        var value = property.Name.Namespace == W.w ? W.val : M.val;
+        if (property.HasElements || HasUnknownMathAttributes(property, value)) return null;
+        return (string?)property.Attribute(value) switch
         {
             null or "1" or "true" or "on" => true,
             "0" or "false" or "off" => false,
@@ -183,18 +196,20 @@ public static partial class WmlToHtmlConverter
             {
                 if (HasUnknownMathAttributes(property) || property.Elements().Any(e => e.Name != W.rPr)
                     || property.Elements().Count() > 1
-                    || (property.Element(W.rPr) is { } format && MathRunColor(format, scope, controlCharacter: true) == null)) return false;
+                    || (property.Element(W.rPr) is { } format && MathRunColor(format, scope) == null)) return false;
             }
-            else if (property.Name != M.mcs && (property.HasElements || HasUnknownMathAttributes(property, M.val))) return false;
+            // A manual break carries the operator its next line aligns at; it draws nothing on one line.
+            else if (property.Name != M.mcs && (property.HasElements
+                || HasUnknownMathAttributes(property, property.Name == M.brk ? M.alnAt : M.val))) return false;
         }
         return true;
     }
 
-    /// <summary>The CSS color a math run's <c>w:rPr</c> paints, "" for none, or null when it carries
-    /// formatting the projection does not draw. Fonts must name the document's math font, which the
-    /// equation already uses. A control character's properties may also carry <c>w:i</c>, which Word
-    /// writes on them by default; OMML takes math italics from <c>m:sty</c>, not from it.</summary>
-    private static string? MathRunColor(XElement properties, MathScope scope, bool controlCharacter)
+    /// <summary>The CSS color a math run's or a structure's control <c>w:rPr</c> paints, "" for none, or null
+    /// when it carries formatting the projection does not draw. Fonts must name the document's math font,
+    /// which the equation already uses. <c>w:b</c> and <c>w:i</c>, which Word writes on control characters
+    /// by default, change no math text: OMML takes math bold and italics from <c>m:sty</c>.</summary>
+    private static string? MathRunColor(XElement properties, MathScope scope)
     {
         if (HasUnknownMathAttributes(properties)) return null;
         var color = "";
@@ -208,11 +223,13 @@ public static partial class WmlToHtmlConverter
                     && !((a.Name == W.ascii || a.Name == W.hAnsi || a.Name == W.eastAsia || a.Name == W.cs) && a.Value == scope.Context.FontName)))
                     return null;
             }
-            else if (property.Name == W.i && controlCharacter)
+            else if (property.Name == W.b || property.Name == W.i)
             {
-                if (property.HasElements || HasUnknownMathAttributes(property, W.val)) return null;
+                // Word draws math text bold or italic only through m:sty, and ignores both here; an
+                // m:nor run's text is the exception, and MathRunTokens draws its weight and slope.
+                if (MathOnOff(property, true) == null) return null;
             }
-            else if (property.Name == W.color && !controlCharacter)
+            else if (property.Name == W.color)
             {
                 var value = (string?)property.Attribute(W.val);
                 if (property.HasElements || HasUnknownMathAttributes(property, W.val) || value == null) return null;
@@ -233,22 +250,40 @@ public static partial class WmlToHtmlConverter
 
     private static readonly XName[] MathControlOnly = { M.ctrlPr };
 
+    private static readonly XName[] MathArguments = { M.oMath, M.num, M.den, M.e, M.deg, M.sub, M.sup, M.lim, M.fName };
+
     // Project only complete expressions. Dropping an unknown operator or property would change
     // the formula, so an unsupported descendant keeps the whole equation on the diagnostic path.
     private static XElement? MathExpression(XElement source, MathScope scope)
     {
         if (HasUnknownMathAttributes(source)) return null;
+        if (source.Name == M.r || MathArguments.Contains(source.Name)) return MathStructure(source, scope);
+        // A structure's control properties colour its own glyphs (a fraction bar, radical, fence, large
+        // operator, accent or border), and its operands inherit that colour in MathML. An operand drawn in
+        // the default colour inside a coloured structure therefore keeps the diagnostic.
+        var control = source.Element(source.Name.Namespace + (source.Name.LocalName + "Pr"))?.Element(M.ctrlPr)?.Element(W.rPr);
+        var color = control == null ? "" : MathRunColor(control, scope);
+        if (color == null || (color.Length == 0 && scope.Color.Length > 0)) return null;
+        if (color == scope.Color) return MathStructure(source, scope);
+        var drawn = MathStructure(source, scope with { Color = color });
+        drawn?.SetAttributeValue("style", "color: " + color + ";" + (string?)drawn.Attribute("style"));
+        return drawn;
+    }
+
+    private static XElement? MathStructure(XElement source, MathScope scope)
+    {
         var name = source.Name;
         if (name == M.r)
         {
+            // Line breaks and alignment points only separate and line up a display equation's lines.
             var tokens = MathRunTokens(source, scope, alignment: false);
-            return tokens == null ? null : Mml("mrow", tokens);
+            return tokens == null || tokens.Any(t => t.Name.Namespace != MathMl) ? null : Mml("mrow", tokens);
         }
-        if (name == M.oMath || name == M.num || name == M.den || name == M.e || name == M.deg
-            || name == M.sub || name == M.sup || name == M.lim || name == M.fName)
+        if (MathArguments.Contains(name))
         {
-            var children = MathArgumentChildren(source, scope)?.Select(child => MathExpression(child, scope)).ToArray();
-            return children == null || children.Any(e => e == null) ? null : Mml("mrow", children);
+            var row = new List<List<List<XElement>>> { new() { new() } };
+            return MathArgumentChildren(source, scope) is { } children && MathAddRows(children, scope, MathLinePoint, 1, breaks: false, row)
+                ? Mml("mrow", row[0][0]) : null;
         }
         XElement? Arg(XName argument) => MathExpression(source.Element(argument)!, scope);
         if (name == M.f)
@@ -259,7 +294,6 @@ public static partial class WmlToHtmlConverter
             var numerator = Arg(M.num);
             var denominator = Arg(M.den);
             if (numerator == null || denominator == null) return null;
-            // A skewed fraction has no MathML Core form; it keeps the diagnostic.
             return MathValue(properties, M.type, "bar") switch
             {
                 "bar" => Mml("mfrac", numerator, denominator),
@@ -267,6 +301,12 @@ public static partial class WmlToHtmlConverter
                 // Word sets a linear fraction's slash tight against both operands.
                 "lin" => Mml("mrow", numerator, MathOperator("/", ("stretchy", "false"), ("largeop", "false"),
                     ("lspace", "0"), ("rspace", "0")), denominator),
+                // MathML Core has no bevelled fraction. Word sets both operands full size beside a fraction
+                // slash, the numerator raised and the denominator lowered; these offsets are its drawing of
+                // a⁄b and 1⁄2 at 12pt.
+                "skw" => Mml("mrow", Mml("mpadded", new XAttribute("voffset", "0.33em"), numerator),
+                    MathOperator("⁄", ("stretchy", "false"), ("largeop", "false"), ("lspace", "0"), ("rspace", "0")),
+                    Mml("mpadded", new XAttribute("voffset", "-0.42em"), denominator)),
                 _ => null,
             };
         }
@@ -378,20 +418,59 @@ public static partial class WmlToHtmlConverter
             if (!MathShape(source, M.borderBoxPr, M.e)) return null;
             var properties = source.Element(M.borderBoxPr);
             var sides = new[] { M.hideTop, M.hideRight, M.hideBot, M.hideLeft };
-            var strikes = new[] { M.strikeH, M.strikeV, M.strikeBLTR, M.strikeTLBR };
-            if (!MathPropertiesValid(properties, scope, sides.Concat(strikes).Append(M.ctrlPr).ToArray())) return null;
-            // MathML Core has no menclose, so strike-through lines keep the diagnostic.
-            if (strikes.Any(s => MathOnOff(properties?.Element(s), false) != false)) return null;
+            if (!MathPropertiesValid(properties, scope, sides.Concat(MathStrikes.Select(s => s.Strike)).Append(M.ctrlPr).ToArray())) return null;
             var hidden = sides.Select(s => MathOnOff(properties?.Element(s), false)).ToArray();
-            if (hidden.Any(h => h == null)) return null;
+            var struck = MathStrikes.Select(s => MathOnOff(properties?.Element(s.Strike), false)).ToArray();
+            if (hidden.Any(h => h == null) || struck.Any(s => s == null)) return null;
             var operand = Arg(M.e);
             if (operand == null) return null;
+            var lines = MathStrikes.Where((_, i) => struck[i] == true).Select(s => s.Line).ToArray();
             var style = "padding: 0.1em;border: 0.06em solid currentColor;" + string.Concat(
-                new[] { "top", "right", "bottom", "left" }.Where((_, i) => hidden[i] == true).Select(side => "border-" + side + "-style: none;"));
+                new[] { "top", "right", "bottom", "left" }.Where((_, i) => hidden[i] == true).Select(side => "border-" + side + "-style: none;"))
+                + (lines.Length == 0 ? "" : "background: " + string.Join(", ", lines)
+                    + ";background-origin: border-box;-webkit-print-color-adjust: exact;print-color-adjust: exact;");
             return Mml("mrow", new XAttribute("style", style), operand);
+        }
+        if (name == M.phant)
+        {
+            if (!MathShape(source, M.phantPr, M.e)) return null;
+            var properties = source.Element(M.phantPr);
+            var dimensions = new (XName Property, string Attribute)[] { (M.zeroWid, "width"), (M.zeroAsc, "height"), (M.zeroDesc, "depth") };
+            if (!MathPropertiesValid(properties, scope, M.show, M.zeroWid, M.zeroAsc, M.zeroDesc, M.transp, M.ctrlPr)) return null;
+            // Shown unless m:show is off. Word draws a transparent phantom exactly as an opaque one.
+            var show = MathOnOff(properties?.Element(M.show), true);
+            var zero = dimensions.Select(d => MathOnOff(properties?.Element(d.Property), false)).ToArray();
+            var operand = Arg(M.e);
+            if (show == null || zero.Any(z => z == null) || MathOnOff(properties?.Element(M.transp), false) == null || operand == null) return null;
+            // Word spaces a phantom as an ordinary atom. MathML would give a phantom of one operator (a run
+            // of one token) that operator's spacing, so the operator's own spacing is removed.
+            if (operand.Elements().Take(2).ToArray() is { Length: 1 } run && run[0].Elements().Take(2).ToArray() is { Length: 1 } token
+                && token[0].Name == MathMl + "mo")
+            {
+                token[0].SetAttributeValue("lspace", "0");
+                token[0].SetAttributeValue("rspace", "0");
+            }
+            // A zeroed width leaves the operand drawn from its start, over what follows, as Word draws it.
+            var padded = zero.Any(z => z == true)
+                ? Mml("mpadded", dimensions.Where((_, i) => zero[i] == true).Select(d => new XAttribute(d.Attribute, "0")), operand) : operand;
+            return show.Value ? padded : Mml("mphantom", padded);
         }
         return null;
     }
+
+    /// <summary>A border box's strike-through lines (§22.1.2.12), each a CSS background layer across the box,
+    /// since MathML Core has no <c>menclose</c>. A diagonal is where a gradient toward one corner changes
+    /// colour, which is the line through the other two corners.</summary>
+    private static readonly (XName Strike, string Line)[] MathStrikes =
+    {
+        (M.strikeH, "linear-gradient(currentColor, currentColor) center / 100% 0.06em no-repeat"),
+        (M.strikeV, "linear-gradient(currentColor, currentColor) center / 0.06em 100% no-repeat"),
+        (M.strikeBLTR, MathDiagonal("to top left")),
+        (M.strikeTLBR, MathDiagonal("to top right")),
+    };
+
+    private static string MathDiagonal(string direction) => "linear-gradient(" + direction
+        + ", transparent calc(50% - 0.03em), currentColor calc(50% - 0.03em), currentColor calc(50% + 0.03em), transparent calc(50% + 0.03em))";
 
     /// <summary>The content of an OMML argument (CT_OMathArg). Its trailing <c>m:ctrlPr</c> formats
     /// only an empty argument's placeholder; <c>m:argPr</c> changes the argument's size and is not drawn.</summary>
@@ -520,7 +599,11 @@ public static partial class WmlToHtmlConverter
     /// keyword drops the second declaration and keeps the standard one.</summary>
     private static string MathCellAlignment(string side) => "text-align: " + side + ";text-align: -webkit-" + side + ";";
 
+    // Markers a run's tokens carry for what the run positions rather than draws: an ampersand in an
+    // equation array, the point m:aln aligns a line at, and a line break.
     private static readonly XName MathAlignmentPoint = "alignment-point";
+    private static readonly XName MathLinePoint = "line-point";
+    private static readonly XName MathLineBreak = "line-break";
 
     /// <summary>The most columns a matrix column group or an equation-array row may span. Both tables
     /// repeat a per-column cost on every row, so an unbounded count would square a small input.</summary>
@@ -534,90 +617,196 @@ public static partial class WmlToHtmlConverter
         var rows = new List<List<List<XElement>>>();
         foreach (var row in source.Elements(M.e))
         {
-            if (HasUnknownMathAttributes(row)) return null;
-            var children = MathArgumentChildren(row, scope);
-            if (children == null) return null;
             // An ampersand in a row's own runs marks an alignment point rather than drawing a glyph.
-            var cells = new List<List<XElement>> { new() };
-            foreach (var child in children)
-            {
-                var parts = child.Name == M.r ? MathRunTokens(child, scope, alignment: true)
-                    : MathExpression(child, scope) is { } projected ? new List<XElement> { projected } : null;
-                if (parts == null) return null;
-                foreach (var part in parts)
-                {
-                    if (part.Name != MathAlignmentPoint) cells[^1].Add(part);
-                    else if (cells.Count == MaxMathColumns) return null;
-                    else cells.Add(new List<XElement>());
-                }
-            }
-            rows.Add(cells);
+            rows.Add(new() { new() });
+            if (HasUnknownMathAttributes(row) || MathArgumentChildren(row, scope) is not { } children
+                || !MathAddRows(children, scope, MathAlignmentPoint, MaxMathColumns, breaks: false, rows)) return null;
         }
+        // Without an alignment point, each row is centred.
+        return MathAlignedTable(rows, scope, null);
+    }
+
+    /// <summary>An equation's lines. A display equation's line ends at a line break, which Word writes in
+    /// a run when Shift+Enter splits the equation, and its equations run on as one line between breaks.
+    /// Word centres the lines as a group, each at their common left edge (<c>m:defJc</c>
+    /// <c>centerGroup</c>), or each on its own (<c>center</c>). In a group, a run's <c>m:aln</c> is the
+    /// point its line aligns at: the points line up when every line has one and change nothing when at
+    /// most one does. Other groups keep the diagnostic, since lining up only some lines would need
+    /// their widths.</summary>
+    private static XElement? MathLines(IEnumerable<XElement> equations, MathScope scope)
+    {
+        var rows = new List<List<List<XElement>>> { new() { new() } };
+        foreach (var equation in equations)
+        {
+            if (HasUnknownMathAttributes(equation) || MathArgumentChildren(equation, scope) is not { } children
+                || !MathAddRows(children, scope, MathLinePoint, 2, breaks: scope.Display, rows)) return null;
+        }
+        if (rows.Count == 1) return Mml("mrow", rows[0].SelectMany(c => c));
+        if (rows.Any(r => r.All(c => c.Count == 0))) return null;
+        List<List<List<XElement>>> Joined() => rows.Select(r => new List<List<XElement>> { r.SelectMany(c => c).ToList() }).ToList();
+        var points = rows.Count(r => r.Count == 2);
+        if (scope.Context.CenteredLines) return MathAlignedTable(Joined(), scope, null);
+        if (points <= 1) return MathAlignedTable(Joined(), scope, "left");
+        return points == rows.Count ? MathAlignedTable(rows, scope, null) : null;
+    }
+
+    /// <summary>Projects the children of an argument, a line or an equation-array row into the last of
+    /// <paramref name="rows"/>, starting a cell at each <paramref name="point"/> marker (a row holds at most
+    /// <paramref name="maxCells"/>) and, with <paramref name="breaks"/>, a row at each line break. A run's
+    /// tokens stay grouped as its own <c>mrow</c>. False when a child cannot be projected or carries a
+    /// marker the table does not take.</summary>
+    private static bool MathAddRows(IEnumerable<XElement> children, MathScope scope, XName point, int maxCells, bool breaks,
+        List<List<List<XElement>>> rows)
+    {
+        var run = new List<XElement>();
+        // Whether the cell so far ends in an operand. Word reads an operator that starts a run after one
+        // as binary. MathML infers an operator's form from its place in its mrow, and would read it as a
+        // prefix first in the run's own; such a run's tokens join the cell's row instead (joined).
+        var operand = false;
+        var joined = false;
+        void EndRun()
+        {
+            if (joined) rows[^1][^1].AddRange(run);
+            else if (run.Count > 0) rows[^1][^1].Add(Mml("mrow", run));
+            run = new List<XElement>();
+        }
+        foreach (var child in children)
+        {
+            if (child.Name != M.r)
+            {
+                if (MathExpression(child, scope) is not { } projected) return false;
+                rows[^1][^1].Add(projected);
+                operand = true;
+                continue;
+            }
+            var tokens = MathRunTokens(child, scope, alignment: point == MathAlignmentPoint);
+            if (tokens == null) return false;
+            foreach (var token in tokens)
+            {
+                if (token.Name.Namespace == MathMl)
+                {
+                    if (run.Count == 0) joined = operand && token.Name == MathMl + "mo";
+                    run.Add(token);
+                    if (!string.IsNullOrWhiteSpace(token.Value)) operand = token.Name != MathMl + "mo";
+                    continue;
+                }
+                EndRun();
+                operand = false;
+                if (token.Name == point && rows[^1].Count < maxCells) rows[^1].Add(new List<XElement>());
+                else if (token.Name == MathLineBreak && breaks) rows.Add(new() { new() });
+                else return false;
+            }
+            EndRun();
+        }
+        return true;
+    }
+
+    /// <summary>Rows of cells as an <c>mtable</c> whose alignment points line up: cells pair up as right- then
+    /// left-aligned columns. One column's cells are set to <paramref name="single"/>, or centred when null.</summary>
+    private static XElement MathAlignedTable(List<List<List<XElement>>> rows, MathScope scope, string? single)
+    {
         var width = rows.Max(r => r.Count);
-        // Alignment points pair up as right- then left-aligned columns, so the rows' points line up.
-        // Without one, each row is centered.
         var table = Mml("mtable", scope.Display ? new XAttribute("displaystyle", "true") : null);
         foreach (var row in rows)
         {
             table.Add(Mml("mtr", Enumerable.Range(0, width).Select(i => Mml("mtd",
-                width == 1 ? null : new XAttribute("style", MathCellAlignment(i % 2 == 0 ? "right" : "left")
-                    + "padding-left: 0;padding-right: 0;"),
+                width > 1 ? new XAttribute("style", MathCellAlignment(i % 2 == 0 ? "right" : "left") + "padding-left: 0;padding-right: 0;")
+                    : single == null ? null : new XAttribute("style", MathCellAlignment(single)),
                 Mml("mrow", i < row.Count ? row[i] : null)))));
         }
         return table;
     }
 
-    /// <summary>A math run's text as MathML tokens, styled by its <c>m:rPr</c> and <c>w:rPr</c>. With
-    /// <paramref name="alignment"/>, an ampersand becomes an alignment-point marker.</summary>
+    /// <summary>A math run's text as MathML tokens, styled by its <c>m:rPr</c> and <c>w:rPr</c>, with markers
+    /// outside the MathML namespace for what the run positions rather than draws: its line breaks, the
+    /// alignment point <c>m:aln</c> puts at its start and, with <paramref name="alignment"/>, each ampersand.</summary>
     private static List<XElement>? MathRunTokens(XElement source, MathScope scope, bool alignment)
     {
-        if (!source.Elements(M.t).Any() || source.Elements().Any(e => e.Name != M.t && e.Name != M.rPr && e.Name != W.rPr)
+        if (!source.Elements().Any(e => e.Name == M.t || e.Name == W.br)
+            || source.Elements().Any(e => e.Name != M.t && e.Name != W.br && e.Name != M.rPr && e.Name != W.rPr)
             || source.Elements(M.rPr).Count() > 1 || source.Elements(W.rPr).Count() > 1) return null;
         var mathProperties = source.Element(M.rPr);
-        // m:nor (ordinary text), m:brk and m:aln are not drawn and keep the diagnostic.
-        if (!MathPropertiesValid(mathProperties, scope, M.sty, M.scr, M.lit)) return null;
-        var color = source.Element(W.rPr) is { } format ? MathRunColor(format, scope, controlCharacter: false) : "";
+        // A manual break (m:brk) moves nothing Word draws while the equation fits its line, and the
+        // projection never breaks one.
+        if (!MathPropertiesValid(mathProperties, scope, M.lit, M.nor, M.scr, M.sty, M.brk, M.aln)) return null;
+        var color = source.Element(W.rPr) is { } format ? MathRunColor(format, scope) : "";
         var literal = MathOnOff(mathProperties?.Element(M.lit), false);
+        var point = MathOnOff(mathProperties?.Element(M.aln), false);
+        // Ordinary text (m:nor) is text in the run's own font, without math styles or spacing. Word writes
+        // its fonts on the run; without them it would take the paragraph's text font, not the math font.
+        var normal = MathOnOff(mathProperties?.Element(M.nor), false);
         var variant = MathVariant(MathValue(mathProperties, M.scr, "roman"), MathValue(mathProperties, M.sty, ""));
-        if (color == null || literal == null || variant == null) return null;
+        // A run without a colour of its own would inherit its structure's (see MathExpression).
+        if (color == null || literal == null || point == null || normal == null || variant == null
+            || (color.Length == 0 && scope.Color.Length > 0)
+            || (normal.Value && (mathProperties!.Element(M.scr) != null || mathProperties.Element(M.sty) != null
+                || source.Element(W.rPr)?.Element(W.rFonts) == null))) return null;
         var tokens = new List<XElement>();
-        StringBuilder? upright = null;
-        void EndIdentifier()
+        if (point.Value) tokens.Add(new XElement(MathLinePoint));
+        // Adjacent characters that form one token: upright letters (mi), and spaces or ordinary text (mtext).
+        string? pendingName = null;
+        StringBuilder? pending = null;
+        void Flush()
         {
-            if (upright != null) tokens.Add(Mml("mi", upright.ToString()));
-            upright = null;
+            if (pending != null) tokens.Add(Mml(pendingName!, pending.ToString()));
+            pending = null;
         }
-        foreach (var text in source.Elements(M.t))
+        void Append(string name, string text)
         {
-            if (text.HasElements || HasUnknownMathAttributes(text, XNamespace.Xml + "space")) return null;
-            foreach (Match part in Regex.Matches(text.Value, @"[0-9]+(?:\.[0-9]+)?|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\s\S]", RegexOptions.CultureInvariant))
+            if (pendingName != name) Flush();
+            pendingName = name;
+            (pending ??= new StringBuilder()).Append(text);
+        }
+        foreach (var piece in source.Elements().Where(e => e.Name == M.t || e.Name == W.br))
+        {
+            if (piece.HasElements || HasUnknownMathAttributes(piece, piece.Name == M.t ? XNamespace.Xml + "space" : null)) return null;
+            if (piece.Name == W.br)
+            {
+                // A plain break, as Shift+Enter writes; a page or column break is no line of an equation.
+                Flush();
+                tokens.Add(new XElement(MathLineBreak));
+                continue;
+            }
+            foreach (Match part in Regex.Matches(piece.Value, @"[0-9]+(?:\.[0-9]+)?|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\s\S]", RegexOptions.CultureInvariant))
             {
                 if (part.Length > 1 && char.IsDigit(part.Value[0]))
                 {
-                    EndIdentifier();
-                    tokens.Add(Mml("mn", MathStyledDigits(part.Value, variant)));
+                    if (normal.Value) Append("mtext", part.Value);
+                    else
+                    {
+                        Flush();
+                        tokens.Add(Mml("mn", MathStyledDigits(part.Value, variant)));
+                    }
                     continue;
                 }
                 if (!Rune.TryGetRuneAt(part.Value, 0, out var rune)) return null;
+                // Word draws each space at its own width, between tokens and inside ordinary text alike.
+                if (Rune.GetUnicodeCategory(rune) == UnicodeCategory.SpaceSeparator)
+                {
+                    Append("mtext", part.Value);
+                    continue;
+                }
                 if (Rune.IsWhiteSpace(rune) || Rune.GetUnicodeCategory(rune) is UnicodeCategory.NonSpacingMark
                     or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark or UnicodeCategory.Format
-                    or UnicodeCategory.Control or UnicodeCategory.Surrogate || rune.Value == '.') return null;
+                    or UnicodeCategory.Control or UnicodeCategory.Surrogate || (rune.Value == '.' && !normal.Value)) return null;
                 if (alignment && rune.Value == '&')
                 {
-                    // A literal run's ampersand has no settled meaning in an equation array.
-                    if (literal.Value) return null;
-                    EndIdentifier();
+                    // A literal run's or ordinary text's ampersand has no settled meaning in an equation array.
+                    if (literal.Value || normal.Value) return null;
+                    Flush();
                     tokens.Add(new XElement(MathAlignmentPoint));
                     continue;
                 }
-                if (Rune.IsLetter(rune) && variant == "upright")
+                var letter = Rune.IsLetter(rune) || (rune.IsBmp && MathGreek.Contains((char)rune.Value, System.StringComparison.Ordinal));
+                if (normal.Value || (letter && variant == "upright"))
                 {
-                    // A run's adjacent upright letters read as one identifier, like a function name.
-                    (upright ??= new StringBuilder()).Append(rune.ToString());
+                    // Ordinary text is one text token, and a run's adjacent upright letters read as one
+                    // identifier, like a function name.
+                    Append(normal.Value ? "mtext" : "mi", part.Value);
                     continue;
                 }
-                EndIdentifier();
-                if (Rune.IsLetter(rune))
+                Flush();
+                if (letter)
                 {
                     var styled = variant == "italic" ? rune.ToString() : MathStyledLetter(rune, variant);
                     if (styled == null) return null;
@@ -630,21 +819,30 @@ public static partial class WmlToHtmlConverter
                     if (digit == null) return null;
                     tokens.Add(Mml("mn", digit));
                 }
-                // OMML's bold styles have no drawable projection for operators and punctuation here.
-                else if (variant.Contains("bold", System.StringComparison.Ordinal)) return null;
+                // Word's math styles change letters and digits only: a bold run's operators are drawn plain.
                 else tokens.Add(MathOperator(rune.ToString(), ("stretchy", "false"), ("largeop", "false")));
             }
         }
-        EndIdentifier();
+        Flush();
+        var textStyle = (normal.Value && MathOnOff(source.Element(W.rPr)?.Element(W.b), false) == true ? "font-weight: bold;" : "")
+            + (normal.Value && MathOnOff(source.Element(W.rPr)?.Element(W.i), false) == true ? "font-style: italic;" : "")
+            + (color.Length > 0 ? "color: " + color + ";" : "");
         foreach (var token in tokens.Where(t => t.Name.Namespace == MathMl))
         {
             // A one-letter identifier is italic by default in MathML; longer ones are already upright.
             if (variant == "upright" && token.Name == MathMl + "mi" && token.Value.EnumerateRunes().Count() == 1)
                 token.Add(new XAttribute("mathvariant", "normal"));
-            if (color.Length > 0) token.Add(new XAttribute("style", "color: " + color + ";"));
+            // A token collapses its spaces unless told to keep them as written.
+            var style = (token.Name == MathMl + "mtext" && token.Value.Contains(' ', System.StringComparison.Ordinal) ? "white-space: pre;" : "")
+                + textStyle;
+            if (style.Length > 0) token.Add(new XAttribute("style", style));
         }
         return tokens;
     }
+
+    /// <summary>The Greek run of each Unicode mathematical alphabet that has one: capitals with ϴ in the
+    /// gap at U+03A2, ∇, small letters, then ∂ϵϑϰϕϱϖ. Word styles all of them as letters.</summary>
+    private const string MathGreek = "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡϴΣΤΥΦΧΨΩ∇αβγδεζηθικλμνξοπρςστυφχψω∂ϵϑϰϕϱϖ";
 
     /// <summary>The Unicode mathematical alphabet that an OMML script (<c>m:scr</c>) and style
     /// (<c>m:sty</c>) select for letters. "italic" is MathML's own default for a single letter;
@@ -703,13 +901,12 @@ public static partial class WmlToHtmlConverter
     {
         var alphabet = MathAlphabets[variant];
         var value = letter.Value;
+        var greek = letter.IsBmp ? MathGreek.IndexOf((char)value, System.StringComparison.Ordinal) : -1;
         int? point = value switch
         {
             (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') => MathAlphabetHoles.TryGetValue((variant, (char)value), out var hole) ? hole
                 : alphabet.Latin + (value <= 'Z' ? value - 'A' : 26 + value - 'a'),
-            // Each Greek alphabet runs Α–Ω (ϴ fills the gap at U+03A2), ∇, then α–ω.
-            >= 0x391 and <= 0x3A9 and not 0x3A2 when alphabet.Greek != 0 => alphabet.Greek + value - 0x391,
-            >= 0x3B1 and <= 0x3C9 when alphabet.Greek != 0 => alphabet.Greek + 26 + value - 0x3B1,
+            _ when greek >= 0 && alphabet.Greek != 0 => alphabet.Greek + greek,
             _ => null,
         };
         return point == null ? null : char.ConvertFromUtf32(point.Value);

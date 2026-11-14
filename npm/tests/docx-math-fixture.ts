@@ -10,8 +10,14 @@ export const MATH_FORMULAS = {
   indexed: `<m:rad><m:deg>${term('3')}</m:deg><m:e>${term('x')}</m:e></m:rad>`,
   structured: `<m:nary><m:naryPr><m:chr m:val="∑"/></m:naryPr><m:sub>${term('k=1')}</m:sub><m:sup>${term('n')}</m:sup>`
     + `<m:e><m:d><m:e><m:sSup><m:e>${term('x')}</m:e><m:sup>${term('k')}</m:sup></m:sSup></m:e></m:d></m:e></m:nary>`,
-  phantom: `<m:phant><m:e>${term('x')}</m:e></m:phant>`,
+  // Aligned scripts stack the sub- and superscript flush, which MathML does not draw; still a placeholder.
+  alignedScripts: `<m:sSubSup><m:sSubSupPr><m:alnScr/></m:sSubSupPr><m:e>${term('x')}</m:e><m:sub>${term('i')}</m:sub><m:sup>${term('2')}</m:sup></m:sSubSup>`,
   normalText: `<m:r><m:rPr><m:nor/></m:rPr><m:t>x</m:t></m:r>`,
+  // Phantom, skewed fraction, a run of spaces, a struck border box and a bold run (#1705).
+  remaining: `<m:phant><m:phantPr><m:show m:val="0"/></m:phantPr><m:e>${term('w')}</m:e></m:phant>`
+    + `<m:f><m:fPr><m:type m:val="skw"/></m:fPr><m:num>${term('1')}</m:num><m:den>${term('2')}</m:den></m:f>`
+    + `<m:r><m:t xml:space="preserve">  </m:t></m:r><m:borderBox><m:borderBoxPr><m:strikeBLTR/></m:borderBoxPr><m:e>${term('x')}</m:e></m:borderBox>`
+    + `<m:r><m:rPr><m:sty m:val="b"/></m:rPr><m:t>+y</m:t></m:r>`,
 };
 export type MathLayout = 'inline' | 'display' | 'mixed' | 'edge' | 'long';
 
