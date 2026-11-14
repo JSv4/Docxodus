@@ -211,6 +211,7 @@ public class MetafileRendererTests
         Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(R(49, 2, 0x300 | 1 << 16, 0), R(48, 2), Brush(), R(37, 1), R(43, 0, 0, 10, 10))));
         var past = Indexed(4); past[40] = 20;
         Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(Brush(past), R(37, 1), R(43, 0, 0, 10, 10))));
+        EmfImage.Read(Emf(Brush(past), R(43, 0, 0, 10, 10))); // a brush that is never filled with does not matter
         Assert.Throws<NotSupportedException>(() => EmfImage.Read(Emf(Raw(94, Le(1, 2, 32, 40, 72, 8).Concat(OneBit(0x40, 0x80)).ToArray()),
             R(37, 1), R(43, 0, 0, 10, 10))));
     }

@@ -184,13 +184,15 @@ internal sealed class MetafileCanvas
         3 or 4 or 5 or 6 => new Brush("none", Pattern: true),
         _ => throw new NotSupportedException("Unsupported metafile brush style.") };
 
-    /// <summary>A DIB pattern brush: the bitmap tiles the fill from the device origin.</summary>
+    /// <summary>A DIB pattern brush: the bitmap tiles the fill from the device origin. A monochrome or palette-index
+    /// brush whose colours cannot be resolved still takes its slot; filling with it rejects the picture.</summary>
     internal Brush PatternBrush(ReadOnlySpan<byte> info, ReadOnlySpan<byte> bits, DibImage.Colours colours)
     {
         var (width, height) = DibImage.Size(info);
         ReserveBitmap((long)width * height);
         bitmapPixels += (long)width * height;
-        return new Brush("none", Tile: DibImage.Decode(info, bits, colours), Colours: colours);
+        try { return new Brush("none", Tile: DibImage.Decode(info, bits, colours), Colours: colours); }
+        catch (NotSupportedException) when (colours != DibImage.Colours.Rgb) { return new Brush("none", Pattern: true); }
     }
 
     /// <summary>SELECTPALETTE. Palette-index brushes resolve through the default palette, so a metafile that selects
