@@ -1576,10 +1576,34 @@ internal static partial class IrMarkupRenderer
     {
         if (sink.Count != start + 1)
             return;
-        CarryMissingComments(sink[start], SourceElement(op.LeftAnchor, state.Left));
+        var left = SourceElement(op.LeftAnchor, state.Left);
+        CarryMissingComments(sink[start], left);
+        ReconcileSectionBreaks(sink[start], left, state);
         if (sink[start].Name != W.p)
-            ReconcileEqualContainerMarkers(sink[start],
-                SourceElement(op.LeftAnchor, state.Left), SourceElement(op.RightAnchor, state.RightSource), state);
+            ReconcileEqualContainerMarkers(sink[start], left, SourceElement(op.RightAnchor, state.RightSource), state);
+    }
+
+    /// <summary>
+    /// A paired block is emitted as the revised document's copy, so each section break inside it carries the
+    /// revision's section properties. Its header/footer references go back to the original's: the header/footer
+    /// planner binds every section whose story differs from the one the original references there, and the
+    /// revision's relationship ids name parts of the other package. Properties that differ in any way are
+    /// archived in <c>w:sectPrChange</c> under either format-comparison policy, as on the trailing section.
+    /// </summary>
+    private static void ReconcileSectionBreaks(XElement output, XElement? original, RenderState state)
+    {
+        var outputBreaks = BlockMetadataOps.SectionBreaks(output).ToList();
+        var originalBreaks = outputBreaks.Count == 0 || original is null ? null : BlockMetadataOps.SectionBreaks(original).ToList();
+        if (originalBreaks?.Count != outputBreaks.Count)
+            return;
+        foreach (var (sectPr, left) in outputBreaks.Zip(originalBreaks))
+        {
+            sectPr.Elements().Where(IsStoryReference).Remove();
+            sectPr.AddFirst(left.Elements().Where(IsStoryReference).Select(e => StripUnids(new XElement(e))));
+            if (state.Settings.TrackSectionFormatChanges && sectPr.Element(W.sectPrChange) is null &&
+                SectPrPropsDiffer(left, sectPr))
+                ApplySectPrChange(sectPr, left, sectPr, state);
+        }
     }
 
     /// <summary>Whether either side of an operation resolves to an atomic block wrapper (a block-level content
@@ -7818,16 +7842,16 @@ internal static partial class IrMarkupRenderer
     /// </summary>
     private static void ApplyBlockFormatChanges(XElement newPara, XElement leftPara, XElement rightPara, RenderState state)
     {
-        // Two independent slices: pPr (+ mark rPr) gated on the PARAGRAPH flag, the inline sectPr gated on
-        // the block flag (so the composite can stamp pPrChange but not sectPrChange — B1 vs B2).
-        bool trackPPr = state.Settings.TrackParagraphFormatChanges;
-        bool trackSect = state.Settings.TrackSectionFormatChanges;
-        if (!trackPPr && !trackSect)
+        // Two independent slices: the inline sectPr gated on the section flag, then pPr (+ mark rPr) gated on
+        // the PARAGRAPH flag (so the composite can stamp pPrChange but not sectPrChange — B1 vs B2). A
+        // one-sided inline sectPr (added/removed) is handled by the structural whole-paragraph replacement.
+        ReconcileSectionBreaks(newPara, leftPara, state);
+        if (!state.Settings.TrackParagraphFormatChanges)
             return;
 
         var leftPPr = leftPara.Element(W.pPr);
         var rightPPr = rightPara.Element(W.pPr);
-        if (trackPPr && state.ChangedDefaultParagraphStyleId is not null)
+        if (state.ChangedDefaultParagraphStyleId is not null)
         {
             // An implicit RIGHT default must become an explicit reference under the retained LEFT
             // default. Archive the original LEFT pPr, so Reject restores its own default selection.
@@ -7842,24 +7866,14 @@ internal static partial class IrMarkupRenderer
         // Policy-gated pPr delta: ModeledOnly compares the modeled ParaKey (the delta a consumer-grade
         // report can describe; unmodeled-only deltas stay untracked — the documented rPr-parallel blind
         // spot); Full compares canonically (unid/rsid-stripped, rPr/sectPr/pPrChange excluded).
-        bool pPrDiffers = trackPPr && PPrChangeDiffers(leftPPr, rightPPr, state);
+        bool pPrDiffers = PPrChangeDiffers(leftPPr, rightPPr, state);
 
         // The paragraph-MARK rPr is outside pPrChange by schema; Word tracks it as w:pPr/w:rPr/w:rPrChange.
         // Compared canonically under both policies (the mark has no token to carry a run-level rPrChange).
-        bool markDiffers = trackPPr && !IrHasher.CanonicalHash(MarkRPrForCompare(leftPPr))
+        bool markDiffers = !IrHasher.CanonicalHash(MarkRPrForCompare(leftPPr))
             .Equals(IrHasher.CanonicalHash(MarkRPrForCompare(rightPPr)));
 
-        // Mid-document section-property change (A3): the emitted right pPr already carries the right inline
-        // w:sectPr (cloned above); when the left pPr also had one and their PROPERTIES differ, it is tracked
-        // as w:sectPrChange INSIDE that sectPr (NOT in the pPrChange inner — CT_PPrBase excludes sectPr). A
-        // one-sided inline sectPr (added/removed) is handled by the structural whole-paragraph replacement.
-        var leftInlineSect = leftPPr?.Element(W.sectPr);
-        var newPPrForSect = newPara.Element(W.pPr);
-        var rightInlineSect = newPPrForSect?.Element(W.sectPr);
-        bool sectDiffers = trackSect && leftInlineSect != null && rightInlineSect != null
-            && SectPrPropsDiffer(leftInlineSect, rightInlineSect);
-
-        if (!pPrDiffers && !markDiffers && !sectDiffers)
+        if (!pPrDiffers && !markDiffers)
             return;
 
         var pPr = newPara.Element(W.pPr);
@@ -7898,10 +7912,6 @@ internal static partial class IrMarkupRenderer
             pPr.Elements(W.pPrChange).Remove();
             pPr.Add(new XElement(W.pPrChange, state.RevisionAttributes(), inner));   // last child of pPr
         }
-
-        if (sectDiffers)
-            // output (rightInlineSect) currently holds the RIGHT props; old = leftInlineSect.
-            ApplySectPrChange(rightInlineSect!, leftInlineSect!, rightInlineSect!, state);
     }
 
     /// <summary>
@@ -8173,7 +8183,10 @@ internal static partial class IrMarkupRenderer
     /// <summary>A sectPr child that belongs to the tracked PROPERTY set: everything except the header/footer
     /// references (owned by the header/footer machinery) and the change marker itself (CT_SectPrBase).</summary>
     private static bool IsSectPrProp(XElement e)
-        => e.Name != W.headerReference && e.Name != W.footerReference && e.Name != W.sectPrChange;
+        => !IsStoryReference(e) && e.Name != W.sectPrChange;
+
+    private static bool IsStoryReference(XElement e)
+        => e.Name == W.headerReference || e.Name == W.footerReference;
 
     /// <summary>
     /// The DEFAULT section standing in for a side that has no trailing sectPr, as Word materializes it

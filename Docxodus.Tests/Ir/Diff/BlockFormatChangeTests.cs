@@ -540,6 +540,27 @@ public class BlockFormatChangeTests
         (string?)BodyOf(doc).Elements(W + "p").First().Element(W + "pPr")?.Element(W + "sectPr")?.Element(W + "pgSz")?.Attribute(W + "w");
 
     [Fact]
+    public void MidDoc_inline_sectPr_change_outside_the_modeled_fields_is_tracked_under_either_policy()
+    {
+        // Issue #1771: a w:titlePg-only change leaves the paragraph unchanged under ModeledOnly, so the
+        // revision's section break is copied as is. It is still archived, as on the trailing section.
+        var left = IrTestDocuments.FromBodyXml(InlineSectBody.Replace("{S}", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>"));
+        var right = IrTestDocuments.FromBodyXml(InlineSectBody.Replace("{S}", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>"));
+        bool TitlePg(WmlDocument doc) => WordprocessingMLUtil.GetBoolProp(
+            BodyOf(doc).Elements(W + "p").First().Element(W + "pPr")!.Element(W + "sectPr")!, W + "titlePg") == true;
+
+        foreach (var settings in new[] { ModeledOnly, Full })
+        {
+            var result = DocxDiff.Compare(left, right, settings);
+            Assert.NotNull(BodyOf(result).Elements(W + "p").First().Descendants(W + "sectPrChange").Single()
+                .Element(W + "sectPr")!.Element(W + "titlePg"));
+            Assert.False(TitlePg(RevisionProcessor.AcceptRevisions(result)));
+            Assert.True(TitlePg(RevisionProcessor.RejectRevisions(result)));
+            AssertNoSchemaErrors(result);
+        }
+    }
+
+    [Fact]
     public void Paragraph_with_both_pPr_and_inline_sectPr_change_is_schema_valid_and_round_trips()
     {
         // Review Note C: exercise the BOTH-fire path (a modeled pPr change AND an inline sectPr change on the
