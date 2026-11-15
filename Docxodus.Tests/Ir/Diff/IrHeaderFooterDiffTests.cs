@@ -338,6 +338,23 @@ public class IrHeaderFooterDiffTests
     }
 
     [Fact]
+    public void Builder_binds_a_deleted_shared_story_at_its_first_section()
+    {
+        // Issue #1763. Sections 0 and 2 share A and the revision has no headers. The review's unchanged
+        // section breaks carry the revision's (absent) references, so A is bound where it starts as well as
+        // where it rejoins. Left unchanged, A keeps relying on the revision's reference where it starts.
+        WmlDocument Document(bool headers) => HeaderFooterFixtures.Build(
+            new[] { "A", "B", "A" }.Select((id, i) => new HeaderFooterFixtures.Section(
+                new[] { $"section {i}" }, Headers: headers ? new[] { ("default", "rId" + id) } : null)).ToArray(),
+            headerParts: headers ? new Dictionary<string, string[]> { ["rIdA"] = new[] { "Header A" }, ["rIdB"] = new[] { "Header B" } } : null);
+        int[] BindingsOfA(WmlDocument revised) => Assert.Single(Build(Document(headers: true), revised).HeaderFooterOps!,
+            diff => diff.SectionIndex == 0).ReferenceBindings!.Select(binding => binding.SectionIndex).ToArray();
+
+        Assert.Equal(new[] { 0, 2 }, BindingsOfA(Document(headers: false)));
+        Assert.Equal(new[] { 2 }, BindingsOfA(Document(headers: true)));
+    }
+
+    [Fact]
     public void Builder_pairs_mixed_boundary_sections_with_the_sections_their_content_came_from()
     {
         // Issue #1757. No paragraph is shared, so the review body is the right's two sections (one inserted

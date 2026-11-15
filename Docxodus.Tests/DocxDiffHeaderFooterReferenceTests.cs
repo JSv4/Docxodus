@@ -484,6 +484,36 @@ public class DocxDiffHeaderFooterReferenceTests
         AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), false, "default");
     }
 
+    /// <summary>
+    /// Issue #1763: the revision drops every section's story while the original's first and third
+    /// sections share one part. The unchanged section breaks take the revision's references, so the
+    /// first section must be bound back to its part explicitly; the control gives the third section a
+    /// part of its own.
+    /// </summary>
+    [Theory]
+    [InlineData(true, true, "default")]
+    [InlineData(false, true, "default")]
+    [InlineData(true, false, "default")]
+    [InlineData(true, true, "first")]
+    [InlineData(true, false, "even")]
+    [InlineData(false, false, "even")]
+    public void RevisionDroppingEveryStory_RejectRestoresSharedStory(bool shared, bool header, string kind)
+    {
+        string[] bodies = { "Harbor pilots log the tide charts before noon.",
+            "Pilot boats return to the inner mooring after dusk.", "The tide tables are posted on the quay every Monday." };
+        var parts = new Dictionary<string, string[]> { ["a"] = new[] { "North quay" }, ["b"] = new[] { "South quay" } };
+        if (!shared) parts["c"] = new[] { "East quay" };
+        string[] referenced = { "a", "b", shared ? "a" : "c" };
+        var stories = referenced.Select(id => new[] { (kind, id) }).ToArray();
+        var original = HeaderFooterFixtures.Build(
+            bodies.Select((text, i) => new Section(new[] { text },
+                Headers: header ? stories[i] : null, Footers: header ? null : stories[i])).ToArray(),
+            header ? parts : null, header ? null : parts, titlePg: kind == "first", evenAndOddHeaders: kind == "even");
+        var revised = HeaderFooterFixtures.Build(bodies.Select(text => new Section(new[] { text })).ToArray(),
+            titlePg: kind == "first", evenAndOddHeaders: kind == "even");
+        AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), header, kind);
+    }
+
     [Theory]
     [InlineData("whole-paragraph-replace")]
     [InlineData("body-delete-paragraph")]
