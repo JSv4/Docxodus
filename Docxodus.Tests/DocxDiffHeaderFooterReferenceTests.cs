@@ -269,7 +269,7 @@ public class DocxDiffHeaderFooterReferenceTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void MixedBoundaryFallback_DoesNotInferVisibilityFromReviewOrdinals(bool legacyJson)
+    public void MixedBoundaries_DoNotInferVisibilityFromReviewOrdinals(bool legacyJson)
     {
         const string tail = "The permanent inventory continues in the final section after the revised boundary.";
         var original = HeaderFooterFixtures.Build(new[] { new Section(new[] { BoundaryText }), new Section(new[] { KeptText, tail }) });
@@ -298,6 +298,47 @@ public class DocxDiffHeaderFooterReferenceTests
             result = IrMarkupRenderer.Render(IrEditScriptJson.Read(json), original, revised, new IrDiffSettings());
         }
         AssertStoryEndpoints(original, revised, result, true, "default");
+    }
+
+    /// <summary>
+    /// Issue #1757: a comparison that both deletes original section breaks and inserts revised ones
+    /// pairs each review section's stories with the source sections its content came from, so reject
+    /// restores every original section's own story and accept every revised one's. <c>swap</c>
+    /// replaces a four-section body with an unrelated two-section one; <c>replace</c> swaps one
+    /// boundary between retained sections, with a story-less (linked) section after it.
+    /// </summary>
+    [Theory]
+    [InlineData("swap", true, "default", false)]
+    [InlineData("swap", true, "default", true)]
+    [InlineData("swap", false, "default", false)]
+    [InlineData("swap", true, "first", false)]
+    [InlineData("swap", false, "even", true)]
+    [InlineData("replace", true, "default", false)]
+    [InlineData("replace", false, "default", true)]
+    [InlineData("replace", true, "first", true)]
+    public void MixedInsertedAndDeletedBoundaries_KeepEachSectionsOwnStory(string scenario, bool header, string kind, bool reverse)
+    {
+        WmlDocument Document(params (string[] Paras, string? Story)[] sections)
+        {
+            var stories = sections.Where(s => s.Story is not null).ToDictionary(s => "s" + s.Story!.Replace(' ', '_'), s => new[] { s.Story! });
+            var refs = sections.Select(s => s.Story is null ? null : new[] { (kind, "s" + s.Story.Replace(' ', '_')) }).ToArray();
+            return HeaderFooterFixtures.Build(
+                sections.Select((s, i) => new Section(s.Paras, Headers: header ? refs[i] : null, Footers: header ? null : refs[i])).ToArray(),
+                header ? stories : null, header ? null : stories, titlePg: kind == "first", evenAndOddHeaders: kind == "even");
+        }
+        string[] Cellar(int n) => new[] { $"Cooper {n} seals every oak barrel in the cellar before the vintner arrives." };
+        string[] Glacier(int n) => new[] { $"Survey team {n} measured crevasse depth near the icefall at dawn." };
+        string[] Harbor = { "Harbor pilots log the tide charts before noon." };
+        string[] Pilot = { "Pilot boats return to the inner mooring after dusk." };
+        string[] Tide = { "The tide tables are posted on the quay every Monday." };
+        var (original, revised) = scenario == "swap"
+            ? (Document(Enumerable.Range(1, 4).Select(n => (Cellar(n), (string?)$"Ledger part {n}")).ToArray()),
+               Document(Enumerable.Range(1, 2).Select(n => (Glacier(n), (string?)$"Survey {n}")).ToArray()))
+            : (Document((Harbor, "Harbor"), (new[] { "Lighthouse keepers trim the lamp wicks at dusk." }, "Keeper"), (Pilot, null), (Tide, "Tide")),
+               Document((Harbor, "Harbor"), (new[] { "Orchard crews graft new rootstock each spring." }, "Orchard"), (Pilot, null), (Tide, "Tide")));
+        if (reverse)
+            (original, revised) = (revised, original);
+        AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), header, kind);
     }
 
     [Theory]
