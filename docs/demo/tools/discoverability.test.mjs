@@ -79,6 +79,16 @@ test('the sitemap lists the site URLs and nothing off-site', () => {
   for (const loc of locs) assert.ok(loc.startsWith(SITE), `${loc} is not on the Pages site`);
 });
 
+test('the Search Console ownership file is published as Google issued it', () => {
+  // Google re-fetches docs/google<token>.html to keep the site verified; deleting or
+  // editing it silently drops the site's ownership in Search Console.
+  const files = readdirSync(join(repoRoot, 'docs')).filter((name) => /^google[0-9a-f]+\.html$/.test(name));
+  assert.ok(files.length > 0, 'docs/ has no google<token>.html verification file');
+  for (const name of files) {
+    assert.equal(read(`docs/${name}`).trimEnd(), `google-site-verification: ${name}`, `docs/${name} was edited`);
+  }
+});
+
 test('every API llms.txt names exists on the surface it names it for', () => {
   const corpus = {
     '.NET': sources('Docxodus', '.cs'),
