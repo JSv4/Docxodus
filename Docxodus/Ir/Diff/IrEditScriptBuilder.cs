@@ -2263,11 +2263,11 @@ internal static class IrEditScriptBuilder
         return null;
     }
 
-    /// <summary>Both paragraphs are plain, sliceable direct-text-run content — the precondition for the
-    /// lone-punctuation anchor rule (dropping an anchor inside a transparent field/hyperlink region
-    /// re-tiles it into del+ins and double-emits the container's zero-width plumbing).</summary>
+    /// <summary>Both paragraphs are plain text (<see cref="IrCrossParagraphSegmenter.IsPlainText"/>) — the
+    /// precondition for the lone-punctuation anchor rule (dropping an anchor inside a transparent field/hyperlink
+    /// region re-tiles it into del+ins and double-emits the container's zero-width plumbing).</summary>
     private static bool PlainTextPair(IrParagraph lp, IrParagraph rp) =>
-        IrCrossParagraphSegmenter.IsStreamable(lp) && IrCrossParagraphSegmenter.IsStreamable(rp);
+        IrCrossParagraphSegmenter.IsPlainText(lp) && IrCrossParagraphSegmenter.IsPlainText(rp);
 
     /// <summary>Decoded corpus boundary for the lone-word flush: every flushing reference instance
     /// retains a single word of at most 5 characters ("Red" 3, "font"/"text"/"bold" 4, "Green"/"Title" 5);
