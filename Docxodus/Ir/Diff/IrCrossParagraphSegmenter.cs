@@ -121,10 +121,28 @@ internal static class IrCrossParagraphSegmenter
     /// </summary>
     public static bool IsStreamable(IrParagraph p)
     {
-        if (p.InlineSectionBreakAnchor is not null || p.InlineSectionFormat is not null)
+        if (!IsPlainText(p))
             return false;
         foreach (var inline in p.Inlines)
             if (inline is not IrTextRun)
+                return false;
+        return true;
+    }
+
+    /// <summary>
+    /// A paragraph is plain text iff every inline is an <see cref="IrTextRun"/>, an <see cref="IrTab"/> or an
+    /// <see cref="IrBreak"/> and it carries no inline section transition: nothing in it is a region transparent to
+    /// the token stream (a field or hyperlink) or an object. The precondition for the token differ's
+    /// lone-punctuation rule, since dropping an anchor inside a transparent region re-tiles it into del+ins and
+    /// double-emits its container's plumbing; a tab or break is a leaf of its run, so a paragraph holding one
+    /// keeps the rule its text would get without it (issue #1759).
+    /// </summary>
+    public static bool IsPlainText(IrParagraph p)
+    {
+        if (p.InlineSectionBreakAnchor is not null || p.InlineSectionFormat is not null)
+            return false;
+        foreach (var inline in p.Inlines)
+            if (inline is not (IrTextRun or IrTab or IrBreak))
                 return false;
         return true;
     }
@@ -857,13 +875,10 @@ internal static class IrCrossParagraphSegmenter
             claimedR[rf] = true;
         }
 
-        static bool Connective(IrDiffToken t) =>
-            t.Kind == IrDiffTokenKind.Separator && string.IsNullOrWhiteSpace(t.Text);
-
         bool Pairable(int l, int r, int lAnchor, int rAnchor) =>
             l >= 0 && r >= 0 && l < flatL.Length && r < flatR.Length &&
             !claimedL[l] && !claimedR[r] &&
-            Connective(flatL[l]) && Connective(flatR[r]) &&
+            flatL[l].IsConnective && flatR[r].IsConnective &&
             flatL[l].MatchKey == flatR[r].MatchKey &&
             ParaOf(offL, kl, l) == ParaOf(offL, kl, lAnchor) &&
             ParaOf(offR, kr, r) == ParaOf(offR, kr, rAnchor);

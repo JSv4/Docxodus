@@ -61,4 +61,18 @@ internal sealed record IrDiffToken(
     string MatchKey,
     int StartChar,
     int EndChar,
-    IrRunFormat? Format);
+    IrRunFormat? Format)
+{
+    /// <summary>True for a token that stands for an object rather than for text: a note reference, image, opaque
+    /// inline or text box. Every other kind (a word, separator, tab or break) is a character of the paragraph's
+    /// text. An object's key is coarse (every footnote reference keys alike), so it is paired in full context,
+    /// and one that splits a word without a separator makes a different word.</summary>
+    public bool IsObject => Kind is IrDiffTokenKind.NoteRef or IrDiffTokenKind.Image
+        or IrDiffTokenKind.Opaque or IrDiffTokenKind.Textbox;
+
+    /// <summary>True for whitespace between words: a whitespace separator, a tab or a break of any kind. A
+    /// comparison never anchors on one, and keeps one that both sides share at the edge of a changed span; the
+    /// reference compare treats a tab or break exactly as it treats a space (issue #1759).</summary>
+    public bool IsConnective => Kind is IrDiffTokenKind.Tab or IrDiffTokenKind.Break
+        || (Kind == IrDiffTokenKind.Separator && string.IsNullOrWhiteSpace(Text));
+}
