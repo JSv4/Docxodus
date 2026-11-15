@@ -1413,11 +1413,32 @@ function inBorderWrapper(el: HTMLElement): boolean {
 }
 
 /** Whether the current selection's start already carries `key`, read from computed style. */
+/**
+ * Where a selection's format is read: the first character it covers. A range that starts at the
+ * end of a text node (as the selection the editor restores after formatting part of a paragraph
+ * does: "Hello from |" .. "world|"), or between elements, begins in the next text node, not the
+ * one before. A collapsed caret stays where it is: it takes the format of the text before it.
+ */
+function selectionFormatNode(range: Range): Node {
+  if (range.collapsed) return range.startContainer;
+  const root = range.commonAncestorContainer;
+  const scope = root.nodeType === 3 ? root.parentNode : root;
+  if (!scope) return range.startContainer;
+  const walker = (scope.ownerDocument ?? document).createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+  for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+    if (!range.intersectsNode(t)) continue;
+    const from = t === range.startContainer ? range.startOffset : 0;
+    const to = t === range.endContainer ? range.endOffset : (t.textContent ?? "").length;
+    if (to > from) return t;
+  }
+  return range.startContainer;
+}
+
 function selectionHasFormat(key: FormatKey, fallback: HTMLElement): boolean {
   const sel = typeof window !== "undefined" ? window.getSelection() : null;
   let el: HTMLElement | null = fallback;
   if (sel && sel.rangeCount > 0) {
-    const n = sel.getRangeAt(0).startContainer;
+    const n = selectionFormatNode(sel.getRangeAt(0));
     el = n.nodeType === 3 ? n.parentElement : (n as HTMLElement);
   }
   if (!el || typeof getComputedStyle !== "function") return false;
