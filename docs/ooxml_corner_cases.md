@@ -9502,7 +9502,7 @@ Tests: `StrictOoxmlNormalizerValueTests`.
 ECMA-376's twips types (`ST_TwipsMeasure`, `ST_SignedTwipsMeasure`, and the measure form of
 `ST_MeasurementOrPercent`) admit a universal measure (a number and one of `cm`, `mm`, `in`, `pt`,
 `pc`, `pi`) in Transitional as well as Strict, and a Strict save writes every twips measure that way.
-Word 2024 (16.0.20326, Windows) saved one document as Strict (`SaveAs2` format 24):
+A desktop word processor (build 16.0.20326, Windows) saved one document as Strict:
 
 ```xml
 <w:pgSz w:w="595.30pt" w:h="841.90pt"/>
@@ -9520,7 +9520,7 @@ Word 2024 (16.0.20326, Windows) saved one document as Strict (`SaveAs2` format 2
 as points too: `13.90pt` is 278 twips, the same number Transitional writes as 240ths of a line
 (`w:line="278"`), so reading it as a twips measure gives the right value.
 
-| Reader | Strict copy (units), before the fix | Transitional copy (twips) | Word 2024, either copy |
+| Reader | Strict copy (units), before the fix | Transitional copy (twips) | Desktop word processor, either copy |
 | --- | --- | --- | --- |
 | `GetSectionInfo` | 12240 × 15840, margins 1440 (Letter fallback) | 11906 × 16838, margins 1134 | A4, 56.7pt margins |
 | `SetPageSetup(MarginTopTwips = 720)` | other margins rewritten to 1440, header/footer to 720 | others kept | top 36pt, others 56.7pt |
@@ -9541,7 +9541,7 @@ also covers a Transitional document that writes them, though the Open XML SDK va
 **A Strict part in a transitional package.** `StrictOoxmlNormalizer` converted a package only when
 its main document part was Strict, so a chart part written in the Strict namespaces inside a
 Transitional package (the shape of #1702) kept its Strict names, and the chart renderer, looking for
-`c:chart` under the Transitional name, drew an empty frame. Word opens either copy with the chart's
+`c:chart` under the Transitional name, drew an empty frame. The word processor opens either copy with the chart's
 values (41, 36, 29). The normalizer now decides per part: in a Transitional package, each XML part
 whose own root element is in a Strict namespace is converted, URIs and values alike (`a:lumMod
 val="75%"` becomes `75000`), and every other part is left byte for byte, so Transitional text that
