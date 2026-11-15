@@ -16,12 +16,12 @@
     <PackageId>Redline</PackageId>
     <Version>1.0.0</Version>
     <Authors>OpenXmlPowerTools Authors, JSv4</Authors>
-    <Description>Compare Word documents and generate redline diffs with tracked changes. A CLI tool powered by Docxodus.</Description>
+    <Description>Compare two Word documents (.docx) from the command line and get a redline with native tracked changes that opens in Word. A CLI tool powered by Docxodus.</Description>
     <PackageProjectUrl>https://github.com/JSv4/Docxodus</PackageProjectUrl>
     <RepositoryUrl>https://github.com/JSv4/Docxodus</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageTags>openxml;docx;word;diff;redline;compare;track-changes;document</PackageTags>
+    <PackageTags>openxml;docx;word;diff;docx-diff;redline;blackline;compare;document-comparison;track-changes;tracked-changes;document;cli;legal;contracts</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
 
   </PropertyGroup>

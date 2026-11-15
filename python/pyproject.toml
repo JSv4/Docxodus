@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "docx-scalpel"
 version = "0.12.0"
-description = "Anchor-addressed DOCX editing for LLM agents — a thin client over Docxodus' DocxSession."
+description = "Edit, compare and redline Word .docx files from Python: anchor-addressed DOCX editing for LLM agents, tracked changes, DOCX to HTML and markdown — a thin client over Docxodus."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -17,6 +17,12 @@ keywords = [
     "openxml",
     "llm",
     "agent",
+    "ai-agents",
+    "docx-diff",
+    "docx-to-html",
+    "docx-to-markdown",
+    "blackline",
+    "contracts",
     "document-editing",
     "document-comparison",
     "redline",
@@ -37,6 +43,8 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Office/Business",
+    "Topic :: Office/Business :: Office Suites",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Text Processing :: Markup",
     "Typing :: Typed",
 ]
@@ -49,6 +57,9 @@ test = ["pytest>=7.4"]
 Homepage = "https://github.com/JSv4/Docxodus"
 Repository = "https://github.com/JSv4/Docxodus"
 Issues = "https://github.com/JSv4/Docxodus/issues"
+Documentation = "https://github.com/JSv4/Docxodus/blob/main/python/README.md"
+Changelog = "https://github.com/JSv4/Docxodus/blob/main/CHANGELOG.md"
+"Live demo" = "https://jsv4.github.io/Docxodus/demo/"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/docx_scalpel"]

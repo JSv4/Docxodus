@@ -25,8 +25,12 @@ render, a stable markdown projection, a stateful edit session, a tracked-changes
 in-browser editor.
 
 It runs as a **.NET library**, a **WebAssembly module in the browser**, an **npm/TypeScript package**,
-a **Python client**, and three **CLI tools** — all over the same engine, so a document behaves the
-same everywhere.
+a **Python client**, an **MCP server for AI agents**, and three **CLI tools** — all over the same
+engine, so a document behaves the same everywhere.
+
+**It's JavaScript.** The npm package is plain ES modules with TypeScript types bundled: `import`
+it in the browser or in Node, pass a `File` or `Uint8Array`, `await` the result. There is no .NET
+to install and no server to run — the engine ships inside the package as WebAssembly.
 
 ```
                     ┌───────────────────────────────────────────┐
@@ -44,7 +48,8 @@ forms that every startup lawyer actually redlines.
 
 ## Compare — a redline Word will open
 
-Docxodus compares two documents structurally and emits **native Word tracked-changes markup**:
+Docxodus compares two Word documents structurally — a docx diff, or a blackline if that is your
+firm's word for it — and emits **native Word tracked-changes markup**:
 `w:ins`, `w:del`, `w:moveFrom`/`w:moveTo`, and `w:pPrChange`. Not a text diff with highlighting — a
 file you can hand to opposing counsel, who accepts and rejects changes in Word as usual.
 
@@ -177,10 +182,48 @@ costs — is in [`docs/architecture/editor_ui_surface.md`](docs/architecture/edi
 
 ---
 
+## For AI agents
+
+Docxodus is built to be driven by a model. An agent reads a document as markdown in which every
+block carries an anchor id, edits by anchor instead of re-sending the file, and saves a `.docx`
+whose untouched formatting, numbering and footnotes are exactly what they were.
+
+| The agent needs to… | Use |
+|---|---|
+| Call tools over the Model Context Protocol | [`Docxodus.McpServer`](tools/mcp-server/README.md) — 23 tools over stdio: open, search, edit, format, comment, compare, track changes, save |
+| Script edits from Python | [`docx-scalpel`](python/README.md) — `pip install docx-scalpel`, no .NET install |
+| Call it from JavaScript or TypeScript, in a browser or Node, with no server | [`docxodus`](docs/npm-package.md) — `npm install docxodus`, import `docxodus/core`; ES modules with types included |
+| Shell out | `redline old.docx new.docx out.docx`, `docx2html document.docx` |
+
+The MCP server runs locally and makes no network calls once installed. It is the NuGet package
+`Docxodus.McpServer`, published with each release after 16.0.0; with the .NET 10 SDK installed, a
+client fetches and runs it with `dnx`:
+
+```json
+{
+  "mcpServers": {
+    "docxodus": {
+      "command": "dnx",
+      "args": ["Docxodus.McpServer", "--yes"]
+    }
+  }
+}
+```
+
+`dotnet tool install -g Docxodus.McpServer` installs it as the `docxodus-mcp` command instead, and
+from a clone it runs with `dotnet run --project tools/mcp-server`.
+
+[`llms.txt`](docs/llms.txt) is a plain-text index of the same ground for a model to read: each
+common task — compare, render, convert to markdown or PDF, edit, accept and reject changes — with
+the call that does it on every surface. It is also served at
+<https://jsv4.github.io/Docxodus/llms.txt>.
+
+---
+
 ## Get started
 
 <table>
-<tr><th align="left">.NET</th><th align="left">Browser / Node</th></tr>
+<tr><th align="left">.NET</th><th align="left">JavaScript / TypeScript</th></tr>
 <tr valign="top"><td>
 
 ```bash
@@ -254,9 +297,11 @@ TypeScript API and React hooks.
 | Surface | Package | Notes |
 |---|---|---|
 | .NET 10 library | [`Docxodus`](https://www.nuget.org/packages/Docxodus) (NuGet) | The engine. Everything else wraps it. |
-| Browser / Node | [`docxodus`](https://www.npmjs.com/package/docxodus) (npm) | .NET WASM + TypeScript. Runs fully client-side; Web Worker and React hooks included. |
+| JavaScript / TypeScript (browser and Node) | [`docxodus`](https://www.npmjs.com/package/docxodus) (npm) | Plain ES modules with bundled types; the engine is WebAssembly inside the package, so there is no .NET install and no server. Web Worker and React hooks included. |
 | Python | [`docx-scalpel`](https://pypi.org/project/docx-scalpel/) (PyPI) | Long-running host process, so an agent can issue dozens of edits against one open session. *Beta; wheels for linux-x64/arm64, osx-arm64, win-x64.* |
 | CLI | `Redline`, `Docx2Html`, `Docx2OC` | `dotnet tool install -g`, or download a self-contained binary. |
+| MCP server | [`Docxodus.McpServer`](https://www.nuget.org/packages/Docxodus.McpServer) (NuGet) | Stdio server for AI agents, command `docxodus-mcp`. `dotnet tool install -g`, or run with `dnx`. |
+| DOCX → PDF | [`@docxodus/export`](https://www.npmjs.com/package/@docxodus/export) (npm) | Paginated HTML and PDF from Node or `docxodus convert`, through a pinned Chromium. |
 
 ---
 
@@ -282,6 +327,7 @@ reading first:
 |---|---|
 | [`ir_diff_engine.md`](docs/architecture/ir_diff_engine.md) | `DocxDiff` — pipeline, edit script, settings, parity with Word |
 | [`semantic_diff.md`](docs/architecture/semantic_diff.md) | Stable semantic-change schema, package coverage, canonicalization, and limits |
+| [`docx_agent_server.md`](docs/architecture/docx_agent_server.md) | The MCP server — every tool, its arguments and result shape |
 | [`docx_mutation_api.md`](docs/architecture/docx_mutation_api.md) | `DocxSession` — full surface, anchor lifecycle, error catalog, markdown subset |
 | [`native_content_controls.md`](docs/architecture/native_content_controls.md) | Native Word content-control registry, fills, binding/lock safety, and transports |
 | [`delivery_change_receipt.md`](docs/architecture/delivery_change_receipt.md) | Deterministic delivery receipts, LIFO lineage, exact semantic/package artifacts, privacy, citations, and verification |

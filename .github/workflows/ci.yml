@@ -90,6 +90,12 @@ jobs:
           dotnet build tools/mcp-server/mcpserver.csproj -c Release
           ./scripts/mcp-smoke.sh
 
+      # publish.yml packs the MCP server with this same script on a release tag; running
+      # it here means the packaging is not first exercised on release day.
+      - name: Pack MCP server (release packaging check)
+        if: matrix.half == 'ir'
+        run: ./scripts/pack-mcp-server.sh 0.0.0-ci "$RUNNER_TEMP/mcp-server-package"
+
       - name: Run tests (${{ matrix.half }} half)
         env:
           DOCXODUS_EVAL_ARTIFACTS: ${{ github.workspace }}/eval-artifacts

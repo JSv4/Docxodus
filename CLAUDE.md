@@ -95,7 +95,7 @@ usually ripple through all of it.
 | CLI tools | `tools/redline/`, `tools/docx2html/`, `tools/docx2oc/` | Thin `dotnet tool` wrappers. Release binaries are trimmed; see `cli_trimming_and_native_aot.md`. |
 | WASM bridge | `wasm/DocxodusWasm/` | `[JSExport]` shells over the facades. |
 | Stdio host | `tools/python-host/` | NDJSON-over-stdin host (`docxodus-pyhost`) that the `docx-scalpel` pip package subprocesses. |
-| Agent server | `tools/mcp-server/` | JSON-RPC 2.0 / MCP stdio server (`docxodus-mcp`): lifecycle, grouped-intent, and sessionless tools. See `docs/architecture/docx_agent_server.md`. |
+| Agent server | `tools/mcp-server/` | NuGet package `Docxodus.McpServer`. JSON-RPC 2.0 / MCP stdio server (`docxodus-mcp`): lifecycle, grouped-intent, and sessionless tools. See `docs/architecture/docx_agent_server.md`. |
 | Python client | `python/` | `docx-scalpel` on PyPI. |
 | npm/TypeScript | `npm/` | Browser package: `src/core.ts` (engine API), `src/index.ts` (browser barrel), `src/editor.ts` (block editor), `src/ribbon.ts` (shipped UI surface), `src/embed.ts` (CDN entries), `src/react.ts`, worker proxy. |
 | Export package | `npm-export/` | `@docxodus/export` — deterministic standalone HTML + PDF through a pinned Chromium. Has its own `dist/`, tests, and `docxodus doctor` preflight. See `standalone_paginated_export.md`. |
@@ -375,7 +375,7 @@ npm packages still need maintainer approval, and Python has its own workflow.
 
 | Surface | Version source | Publication and verification |
 |---------|----------------|------------------------------|
-| NuGet: `Docxodus`, `Redline`, `Docx2Html`, `Docx2OC` | `vX.Y.Z` | `publish.yml`; verify all four registry versions. |
+| NuGet: `Docxodus`, `Redline`, `Docx2Html`, `Docx2OC`, `Docxodus.McpServer` | `vX.Y.Z` | `publish.yml`; verify all five registry versions. The MCP server is packed by `scripts/pack-mcp-server.sh`, which stamps the version into its `.mcp/server.json`. |
 | npm: `docxodus`, `@docxodus/export` | `vX.Y.Z`; export's peer dependency is exactly `X.Y.Z` | `publish.yml` **stages** both packages; approve each with maintainer 2FA, then verify public versions and CDN assets. |
 | CLI downloads: redline, docx2html, docx2oc | `vX.Y.Z` | `publish.yml` attaches twelve binaries (three tools × four RIDs) and `SHA256SUMS` to the GitHub Release. |
 | PyPI: `docx-scalpel` | `docx-scalpel-vA.B.C` and `python/pyproject.toml` | `python-publish.yml`; verify four platform wheels and one sdist, then install a wheel and ping its bundled host. |
@@ -384,8 +384,9 @@ npm packages still need maintainer approval, and Python has its own workflow.
 .NET project versions remain `1.0.0`; both npm manifests remain `0.0.0` in source.
 CI injects release versions, including the export peer dependency. Do not bump those
 placeholders. Python's in-tree version **does** move for a Python release; its installed
-`__version__` comes from wheel metadata. MCP, delivery and development tools are built from
-source and are not additional packages published by these workflows.
+`__version__` comes from wheel metadata. The MCP server's `.mcp/server.json` also stays at
+`0.0.0` in source. Delivery and development tools are built from source and are not additional
+packages published by these workflows.
 
 The tag namespaces are independent so Python-only releases remain possible. For a request
 to release all surfaces, bump and tag `docx-scalpel` too: its wheel embeds the core host, so
@@ -456,7 +457,7 @@ their own 2FA. If human interaction is required, provide the concrete stage IDs 
 the independent release checks while waiting. Do not claim either npm package is public
 until `npm view <package>@X.Y.Z version` succeeds.
 
-Verify all four NuGet packages, both npm versions (including export's exact peer dependency),
+Verify all five NuGet packages, both npm versions (including export's exact peer dependency),
 and `docx-scalpel==A.B.C` on PyPI. A PyPI release must contain four platform wheels and an
 sdist; install the matching wheel into a fresh environment with `DOCXODUS_HOST` unset and
 call `docx_scalpel.ping()` to exercise the bundled host. Verify the GitHub Release contains

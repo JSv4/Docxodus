@@ -21,7 +21,7 @@
     <RepositoryUrl>https://github.com/JSv4/Docxodus</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageTags>openxml;docx;word;html;convert;document</PackageTags>
+    <PackageTags>openxml;docx;word;html;docx-to-html;word-to-html;convert;converter;document;cli</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
 
   </PropertyGroup>

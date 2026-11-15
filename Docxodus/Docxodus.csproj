@@ -12,12 +12,12 @@
     <PackageId>Docxodus</PackageId>
     <Version>1.0.0</Version>
     <Authors>OpenXmlPowerTools Authors, JSv4</Authors>
-    <Description>A structure-aware OOXML toolkit for Word documents (and XLSX/PPTX): faithful DOCX-to-HTML rendering, Word-grade comparison producing native tracked-changes redlines, an anchor-addressed editing session for programmatic and LLM-driven edits, a stable markdown projection, plus merging, splitting and template assembly. Fork of OpenXmlPowerTools upgraded to .NET 10.0.</Description>
+    <Description>Toolkit for Word .docx files: compare two documents into a redline with native tracked changes, render DOCX to HTML, project DOCX to anchor-addressed markdown, and edit documents in place through a stateful session built for programmatic and AI-agent edits. Also accepts and rejects tracked changes and merges and splits documents. Fork of OpenXmlPowerTools upgraded to .NET 10.0.</Description>
     <PackageProjectUrl>https://github.com/JSv4/Docxodus</PackageProjectUrl>
     <RepositoryUrl>https://github.com/JSv4/Docxodus</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageTags>openxml;ooxml;docx;word;xlsx;excel;pptx;powerpoint;document;compare;diff;redline;tracked-changes;docx-to-html;html;markdown;document-editor;merge;split;llm;agent</PackageTags>
+    <PackageTags>openxml;ooxml;docx;word;document;compare;diff;docx-diff;document-comparison;redline;blackline;tracked-changes;track-changes;docx-to-html;html;markdown;docx-to-markdown;document-editor;merge;split;llm;agent;ai-agents;legal;contracts</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
 
     <!-- ReadyToRun: Pre-compile to native code during publish to eliminate JIT warmup -->

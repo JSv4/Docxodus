@@ -1,7 +1,13 @@
 # Docxodus
 
-**View, edit, and diff Word `.docx` files in the browser.** No server, no upload, no conversion
-round-trip — a real OOXML engine compiled to WebAssembly, wrapped in TypeScript.
+**View, edit, and diff Word `.docx` files from JavaScript or TypeScript.** No server, no upload, no
+conversion round-trip — a real OOXML engine compiled to WebAssembly, wrapped in TypeScript.
+
+It is an ordinary JavaScript package: ES modules you `import`, functions that take a `File` or
+`Uint8Array` and return promises, and type definitions in the box. It runs in the browser and in
+Node, works with your bundler (or, for the editor, from a single CDN bundle with none), and needs
+no .NET install — the WebAssembly is an
+implementation detail you never touch.
 
 ```bash
 npm install docxodus

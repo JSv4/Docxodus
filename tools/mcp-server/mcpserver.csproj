@@ -18,16 +18,22 @@
 
     <!-- dotnet-tool packaging, matching tools/redline and tools/docx2html -->
     <PackAsTool>true</PackAsTool>
+    <!-- Lists the package under NuGet.org's MCP-server search (packagetype=mcpserver), beside
+         the DotnetTool type PackAsTool gives it. NuGet.org reads the package's .mcp/server.json
+         to show a ready-made client configuration. -->
+    <PackageType>McpServer</PackageType>
+    <!-- scripts/pack-mcp-server.sh points this at a copy stamped with the release version. -->
+    <McpServerManifest Condition="'$(McpServerManifest)' == ''">.mcp/server.json</McpServerManifest>
     <ToolCommandName>docxodus-mcp</ToolCommandName>
     <PackageId>Docxodus.McpServer</PackageId>
     <Version>1.0.0</Version>
     <Authors>JSv4</Authors>
-    <Description>Model Context Protocol server exposing Docxodus's DocxSession editing surface to AI agents over stdio.</Description>
+    <Description>Model Context Protocol (MCP) server that lets AI agents open, read, edit, compare and redline Word .docx files locally over stdio, through Docxodus's anchor-addressed editing session.</Description>
     <PackageProjectUrl>https://github.com/JSv4/Docxodus</PackageProjectUrl>
     <RepositoryUrl>https://github.com/JSv4/Docxodus</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageTags>openxml;docx;word;mcp;model-context-protocol;agent;ai;document</PackageTags>
+    <PackageTags>openxml;docx;word;mcp;mcp-server;model-context-protocol;agent;ai;ai-agents;llm;document;document-editor;redline;tracked-changes;docx-diff</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
@@ -37,6 +43,7 @@
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="" />
+    <None Include="$(McpServerManifest)" Pack="true" PackagePath="/.mcp/" />
   </ItemGroup>
 
   <ItemGroup>

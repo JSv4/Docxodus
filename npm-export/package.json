@@ -1,7 +1,7 @@
 {
   "name": "@docxodus/export",
   "version": "0.0.0",
-  "description": "Deterministic standalone HTML and PDF export for Docxodus through pinned Chromium",
+  "description": "Convert Word .docx files to PDF and standalone paginated HTML from Node or the command line — deterministic Docxodus export through pinned Chromium",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -56,7 +56,15 @@
     "pdf",
     "document-conversion",
     "chromium",
-    "playwright"
+    "playwright",
+    "docx-to-pdf",
+    "word-to-pdf",
+    "docx-to-html",
+    "word",
+    "html",
+    "pdf-export",
+    "pagination",
+    "cli"
   ],
   "author": "John Scrudato IV",
   "license": "MIT",

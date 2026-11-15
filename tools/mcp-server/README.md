@@ -1,5 +1,8 @@
 # docxodus-mcp
 
+<!-- The MCP registry verifies ownership of a NuGet server by finding the next line in its package README. -->
+<!-- mcp-name: io.github.JSv4/docxodus -->
+
 A Model Context Protocol (MCP) server that lets AI agents open, read, and edit `.docx`
 files through Docxodus's `DocxSession` editing engine. Runs entirely locally over stdio —
 no network calls, no telemetry, nothing leaves the machine it runs on.
@@ -10,14 +13,43 @@ and a list of documented capability gaps.
 
 ## Installation
 
+The server is the NuGet package
+[`Docxodus.McpServer`](https://www.nuget.org/packages/Docxodus.McpServer), published with each
+Docxodus release after 16.0.0. It needs the .NET 10 SDK. Install it as a global tool:
+
 ```bash
 dotnet tool install -g Docxodus.McpServer
 ```
 
+Or skip the install and let the client fetch and run it with `dnx`, which ships with the .NET 10
+SDK:
+
+```json
+{
+  "mcpServers": {
+    "docxodus": {
+      "command": "dnx",
+      "args": ["Docxodus.McpServer", "--yes"]
+    }
+  }
+}
+```
+
+To build the package yourself from a clone of the
+[repository](https://github.com/JSv4/Docxodus):
+
+```bash
+./scripts/pack-mcp-server.sh 0.0.0-local ./artifacts
+```
+
+```bash
+dotnet tool install -g Docxodus.McpServer --version 0.0.0-local --add-source ./artifacts
+```
+
 ## Usage
 
-Add it to your MCP client's server configuration. For example, in a client that reads a
-`mcpServers` map:
+With the tool installed, add it to your MCP client's server configuration. For example, in a
+client that reads a `mcpServers` map:
 
 ```json
 {
