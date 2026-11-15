@@ -172,7 +172,6 @@ internal static class StrictOoxmlNormalizer
     private static readonly XName TransitionalWDrawing =
         XName.Get("drawing", "http://schemas.openxmlformats.org/wordprocessingml/2006/main");
     private const string Ms2010WpPrefix = "http://schemas.microsoft.com/office/word/2010/wordprocessing";
-    private static readonly XNamespace ChartStyle = "http://schemas.microsoft.com/office/drawing/2012/chartStyle";
 
     /// <summary>
     /// The rewrites the flat URI substitution cannot make, because they need the part's tree: the
@@ -202,51 +201,57 @@ internal static class StrictOoxmlNormalizer
         return sw.ToString();
     }
 
-    /// <summary>
-    /// The attributes of DrawingML's percentage types (ST_Percentage, ST_PositivePercentage,
-    /// ST_FixedPercentage, ST_PositiveFixedPercentage and the text spacing, font scale and bullet size
-    /// types built on them), by element: the DrawingML main schema, the Office 2010 drawing extensions
-    /// (a14) and the chart style part. Keyed by element, so free text that reads like a percentage
-    /// (a description, a tooltip, a number format of "0%") is never touched.
-    /// </summary>
-    private static readonly ILookup<XName, XName> PercentageAttributes = new (XNamespace Ns, string Attributes, string Elements)[]
+    // Nested so this Strict-only table stays out of the class's AOT-compiled type initializer and off the Transitional path.
+    private static class StrictValueTables
     {
-        (A.a, "val", "alpha alphaMod alphaOff blue blueMod blueOff buSzPct green greenMod greenOff hueMod lum lumMod lumOff " +
-                     "red redMod redOff sat satMod satOff shade spcPct tint"),
-        (A.a, "l t r b", "fillRect fillToRect srcRect tileRect"),
-        (A.a, "r g b", "scrgbClr"),
-        (A.a, "sat lum", "hsl hslClr"),
-        (A.a, "sx sy", "outerShdw reflection tile xfrm"),
-        (A.a, "stA stPos endA endPos", "reflection"),
-        (A.a, "baseline", "defRPr endParaRPr rPr"),
-        (A.a, "bright contrast", "lum"),
-        (A.a, "thresh", "alphaBiLevel biLevel"),
-        (A.a, "a", "alphaRepl"),
-        (A.a, "amt", "alphaModFix tint"),
-        (A.a, "d sp", "ds"),
-        (A.a, "lim", "miter"),
-        (A.a, "pos", "gs"),
-        (A.a, "tx ty", "relOff"),
-        (A.a, "zoom", "camera"),
-        (A.a, "fontScale lnSpcReduction", "normAutofit"),
-        (ChartStyle, "baseline", "defRPr"),
-        (A14.a14, "bright contrast", "brightnessContrast"),
-        (A14.a14, "sat", "saturation"),
-        (A14.a14, "amount", "sharpenSoften"),
-        (A14.a14, "t b l r", "backgroundRemoval"),
-        (A14.a14, "x1 y1 x2 y2", "foregroundMark backgroundMark"),
-        (A14.a14, "trans", "artisticBlur artisticCement artisticChalkSketch artisticCrisscrossEtching artisticCutout " +
-                           "artisticFilmGrain artisticGlass artisticGlowDiffused artisticGlowEdges artisticLightScreen " +
-                           "artisticLineDrawing artisticMarker artisticMosiaicBubbles artisticPaintBrush artisticPaintStrokes " +
-                           "artisticPastelsSmooth artisticPencilGrayscale artisticPencilSketch artisticPhotocopy " +
-                           "artisticPlasticWrap artisticTexturizer artisticWatercolorSponge"),
-    }.SelectMany(row => row.Elements.Split(' ').SelectMany(element =>
-        row.Attributes.Split(' ').Select(attribute => (Element: row.Ns + element, Attribute: (XName)attribute))))
-    .ToLookup(p => p.Element, p => p.Attribute);
+        private static readonly XNamespace ChartStyle = "http://schemas.microsoft.com/office/drawing/2012/chartStyle";
 
-    /// <summary>The relative size and position elements whose text is a DrawingML percentage.</summary>
-    private static readonly XName[] PercentageText =
-        { WP14.pctWidth, WP14.pctHeight, WP14.wp14 + "pctPosHOffset", WP14.pctPosVOffset };
+        /// <summary>
+        /// The attributes of DrawingML's percentage types (ST_Percentage, ST_PositivePercentage,
+        /// ST_FixedPercentage, ST_PositiveFixedPercentage and the text spacing, font scale and bullet size
+        /// types built on them), by element: the DrawingML main schema, the Office 2010 drawing extensions
+        /// (a14) and the chart style part. Keyed by element, so free text that reads like a percentage
+        /// (a description, a tooltip, a number format of "0%") is never touched.
+        /// </summary>
+        internal static readonly ILookup<XName, XName> PercentageAttributes = new (XNamespace Ns, string Attributes, string Elements)[]
+        {
+            (A.a, "val", "alpha alphaMod alphaOff blue blueMod blueOff buSzPct green greenMod greenOff hueMod lum lumMod lumOff " +
+                         "red redMod redOff sat satMod satOff shade spcPct tint"),
+            (A.a, "l t r b", "fillRect fillToRect srcRect tileRect"),
+            (A.a, "r g b", "scrgbClr"),
+            (A.a, "sat lum", "hsl hslClr"),
+            (A.a, "sx sy", "outerShdw reflection tile xfrm"),
+            (A.a, "stA stPos endA endPos", "reflection"),
+            (A.a, "baseline", "defRPr endParaRPr rPr"),
+            (A.a, "bright contrast", "lum"),
+            (A.a, "thresh", "alphaBiLevel biLevel"),
+            (A.a, "a", "alphaRepl"),
+            (A.a, "amt", "alphaModFix tint"),
+            (A.a, "d sp", "ds"),
+            (A.a, "lim", "miter"),
+            (A.a, "pos", "gs"),
+            (A.a, "tx ty", "relOff"),
+            (A.a, "zoom", "camera"),
+            (A.a, "fontScale lnSpcReduction", "normAutofit"),
+            (ChartStyle, "baseline", "defRPr"),
+            (A14.a14, "bright contrast", "brightnessContrast"),
+            (A14.a14, "sat", "saturation"),
+            (A14.a14, "amount", "sharpenSoften"),
+            (A14.a14, "t b l r", "backgroundRemoval"),
+            (A14.a14, "x1 y1 x2 y2", "foregroundMark backgroundMark"),
+            (A14.a14, "trans", "artisticBlur artisticCement artisticChalkSketch artisticCrisscrossEtching artisticCutout " +
+                               "artisticFilmGrain artisticGlass artisticGlowDiffused artisticGlowEdges artisticLightScreen " +
+                               "artisticLineDrawing artisticMarker artisticMosiaicBubbles artisticPaintBrush artisticPaintStrokes " +
+                               "artisticPastelsSmooth artisticPencilGrayscale artisticPencilSketch artisticPhotocopy " +
+                               "artisticPlasticWrap artisticTexturizer artisticWatercolorSponge"),
+        }.SelectMany(row => row.Elements.Split(' ').SelectMany(element =>
+            row.Attributes.Split(' ').Select(attribute => (Element: row.Ns + element, Attribute: (XName)attribute))))
+        .ToLookup(p => p.Element, p => p.Attribute);
+
+        /// <summary>The relative size and position elements whose text is a DrawingML percentage.</summary>
+        internal static readonly XName[] PercentageText =
+            { WP14.pctWidth, WP14.pctHeight, WP14.wp14 + "pctPosHOffset", WP14.pctPosVOffset };
+    }
 
     /// <summary>
     /// Rewrites the values Strict writes in a form transitional does not have: a DrawingML percentage
@@ -259,13 +264,13 @@ internal static class StrictOoxmlNormalizer
         var changed = false;
         foreach (var element in doc.Descendants().ToList())
         {
-            foreach (var attribute in PercentageAttributes[element.Name].Select(element.Attribute).OfType<XAttribute>())
+            foreach (var attribute in StrictValueTables.PercentageAttributes[element.Name].Select(element.Attribute).OfType<XAttribute>())
             {
                 if (Thousandths(attribute.Value) is not { } value) continue;
                 attribute.Value = value;
                 changed = true;
             }
-            if (PercentageText.Contains(element.Name) && !element.HasElements && Thousandths(element.Value) is { } text)
+            if (StrictValueTables.PercentageText.Contains(element.Name) && !element.HasElements && Thousandths(element.Value) is { } text)
             {
                 element.Value = text;
                 changed = true;
