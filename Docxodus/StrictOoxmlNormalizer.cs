@@ -357,7 +357,7 @@ internal static class StrictOoxmlNormalizer
             if (main is not null && HasStrictRoot(main))
                 return _ => true;
             var parts = zip.Entries.Where(e => e != main && e.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)
-                && HasStrictRoot(e)).Select(e => e.FullName).ToHashSet(StringComparer.Ordinal);
+                && OpensWithStrictMarker(e) && HasStrictRoot(e)).Select(e => e.FullName).ToHashSet(StringComparer.Ordinal);
             return parts.Count == 0 ? null : parts.Contains;
         }
         catch (InvalidDataException)
@@ -386,6 +386,30 @@ internal static class StrictOoxmlNormalizer
     }
 
     private static readonly System.Xml.XmlReaderSettings RootTagOnly = new() { MaxCharactersInDocument = 1 << 20 };
+
+    // A root element in a strict namespace declares that namespace in its own start tag, at the top of
+    // the part, so a part whose first bytes do not name one is ruled out without an XML reader: the read
+    // step runs on every package a pipeline opens, intermediate ones included.
+    private static bool OpensWithStrictMarker(ZipArchiveEntry entry)
+    {
+        var head = System.Buffers.ArrayPool<byte>.Shared.Rent(16 * 1024);
+        try
+        {
+            using var stream = entry.Open();
+            int read = 0, n;
+            while (read < head.Length && (n = stream.Read(head, read, head.Length - read)) > 0)
+                read += n;
+            return head.AsSpan(0, read).IndexOf("http://purl.oclc.org/ooxml/"u8) >= 0;
+        }
+        catch (Exception e) when (e is InvalidDataException or IOException)
+        {
+            return false;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(head);
+        }
+    }
 
     private static ZipArchiveEntry? FindMainDocumentEntry(ZipArchive zip)
     {
