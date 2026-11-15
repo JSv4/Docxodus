@@ -965,26 +965,59 @@ namespace Docxodus
 
         // The number syntax every imported measure shares: optional sign and decimal point, invariant
         // culture, no exponent, NaN or infinity. Out-of-range integer casts still throw.
+        private const NumberStyles MeasureNumberStyles = NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint |
+            NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite;
+
         private static decimal ParseMeasureNumber(string value) =>
-            decimal.Parse(value, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint |
-                NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite, CultureInfo.InvariantCulture);
+            decimal.Parse(value, MeasureNumberStyles, CultureInfo.InvariantCulture);
 
         private static decimal StringToDecimalTwips(string value)
         {
-            var unit = value.Length >= 2 ? value.Substring(value.Length - 2) : string.Empty;
-            var hasUnit = unit is "cm" or "mm" or "in" or "pt" or "pc" or "pi";
-            var number = ParseMeasureNumber(hasUnit ? value.Substring(0, value.Length - 2) : value);
-            // Multiply before dividing to preserve exact values such as 12.7mm.
-            return unit switch
-            {
-                "cm" => number * 144000m / 254m,
-                "mm" => number * 14400m / 254m,
-                "in" => number * 1440m,
-                "pt" => number * 20m,
-                "pc" or "pi" => number * 240m,
-                _ => number,
-            };
+            var unit = MeasureUnit(value);
+            return ScaleToTwips(ParseMeasureNumber(value.Substring(0, value.Length - unit.Length)), unit);
         }
+
+        /// <summary>
+        /// A twips measure read the way <see cref="AttributeToDecimalTwips"/> reads it, plain twips or a
+        /// universal measure such as a Strict save's <c>"595.30pt"</c>, for readers that fall back on a
+        /// value they cannot read: null when the value is missing or is not a measure, instead of throwing.
+        /// </summary>
+        internal static decimal? TryStringToDecimalTwips(string? value)
+        {
+            if (value is null) return null;
+            var unit = MeasureUnit(value);
+            return decimal.TryParse(value.AsSpan(0, value.Length - unit.Length), MeasureNumberStyles,
+                CultureInfo.InvariantCulture, out var number) && Math.Abs(number) <= MaxMeasureNumber
+                ? ScaleToTwips(number, unit)
+                : null;
+        }
+
+        /// <summary>An attribute's <see cref="TryStringToDecimalTwips"/>, truncated toward zero as
+        /// <see cref="AttributeToTwips"/> truncates; null when it does not fit an <see cref="int"/>.</summary>
+        internal static int? TryAttributeToTwips(XAttribute? attribute) =>
+            TryStringToDecimalTwips((string?)attribute) is { } twips && twips > int.MinValue - 1m && twips < int.MaxValue + 1m
+                ? (int)twips
+                : null;
+
+        // Far beyond any page, and small enough that scaling by a unit cannot overflow a decimal.
+        private const decimal MaxMeasureNumber = 1e20m;
+
+        private static string MeasureUnit(string value)
+        {
+            var unit = value.Length >= 2 ? value.Substring(value.Length - 2) : string.Empty;
+            return unit is "cm" or "mm" or "in" or "pt" or "pc" or "pi" ? unit : string.Empty;
+        }
+
+        // Multiply before dividing to preserve exact values such as 12.7mm.
+        private static decimal ScaleToTwips(decimal number, string unit) => unit switch
+        {
+            "cm" => number * 144000m / 254m,
+            "mm" => number * 14400m / 254m,
+            "in" => number * 1440m,
+            "pt" => number * 20m,
+            "pc" or "pi" => number * 240m,
+            _ => number,
+        };
 
         private static readonly List<XName> AdditionalRunContainerNames = new List<XName>
         {

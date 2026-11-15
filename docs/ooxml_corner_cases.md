@@ -9489,10 +9489,63 @@ read. The `wp14` relative size and position elements get the same conversion to 
 in Transitional: 33 errors remain on the Strict document above once the percentages are converted.
 Readers that go through `AttributeToTwips` (`PtOpenXmlUtil`) accept the units, but several parse
 an integer and fall back to Letter or fail (page size in HTML, `GetSectionInfo`, `SetPageSetup`,
-the column operations under a spanning cell): #1764. The SmartArt diagram attributes (`dgm:prSet/@custScaleX` and its siblings, `ST_PrSetCustVal`)
+the column operations under a spanning cell). These read units now; see #1764 below. The SmartArt diagram attributes (`dgm:prSet/@custScaleX` and its siblings, `ST_PrSetCustVal`)
 are typed as integers by the SDK, but the Strict save of a resized SmartArt node could not be captured
 by COM, so they are not converted. A Strict part inside a Transitional package (the chart of #1702)
-is not converted either, because the normalizer runs only on packages whose main part is Strict;
-HTML output draws such a chart empty (#1764).
+was not converted either, because the normalizer ran only on packages whose main part is Strict; it
+is now (#1764 below).
 
 Tests: `StrictOoxmlNormalizerValueTests`.
+
+## Universal measures, and a Strict part inside a transitional package (#1764)
+
+ECMA-376's twips types (`ST_TwipsMeasure`, `ST_SignedTwipsMeasure`, and the measure form of
+`ST_MeasurementOrPercent`) admit a universal measure (a number and one of `cm`, `mm`, `in`, `pt`,
+`pc`, `pi`) in Transitional as well as Strict, and a Strict save writes every twips measure that way.
+Word 2024 (16.0.20326, Windows) saved one document as Strict (`SaveAs2` format 24):
+
+```xml
+<w:pgSz w:w="595.30pt" w:h="841.90pt"/>
+<w:pgMar w:top="56.70pt" w:right="56.70pt" w:bottom="56.70pt" w:left="56.70pt" w:header="35.40pt" w:footer="35.40pt" w:gutter="0pt"/>
+<w:tblW w:w="481.90pt" w:type="dxa"/>  <w:tcW w:w="240.95pt" w:type="dxa"/>
+<!-- styles.xml: a paragraph style, a table style, and the document defaults -->
+<w:spacing w:before="18pt"/><w:ind w:start="36pt"/>
+<w:tblInd w:w="5.40pt" w:type="dxa"/>
+<w:spacing w:after="8pt" w:line="13.90pt" w:lineRule="auto"/>
+<!-- numbering.xml and settings.xml -->
+<w:ind w:start="36pt" w:hanging="18pt"/>  <w:defaultTabStop w:val="36pt"/>
+```
+
+`w:gridCol` stays in twips (`4819`) and `w:sz` in half-points (`24`). An auto line spacing is written
+as points too: `13.90pt` is 278 twips, the same number Transitional writes as 240ths of a line
+(`w:line="278"`), so reading it as a twips measure gives the right value.
+
+| Reader | Strict copy (units), before the fix | Transitional copy (twips) | Word 2024, either copy |
+| --- | --- | --- | --- |
+| `GetSectionInfo` | 12240 × 15840, margins 1440 (Letter fallback) | 11906 × 16838, margins 1134 | A4, 56.7pt margins |
+| `SetPageSetup(MarginTopTwips = 720)` | other margins rewritten to 1440, header/footer to 720 | others kept | top 36pt, others 56.7pt |
+| `SetPageSetup(Landscape = true)` | rotated Letter: 15840 × 12240 | 16838 × 11906 | 841.9 × 595.3pt |
+| `InsertTableColumn`/`DeleteTableColumn` under a spanning cell | "The input string '240pt' was not in a correct format." | succeed | (fixed outputs open, laid out alike) |
+| `GetFormatting`, `ListStyles`, `GetListMembership` indents and spacing | null | 720, 360 | 36pt, 18pt |
+| Paginated HTML page; table and cell widths | 612 × 792pt; no widths | 595.3 × 841.9pt; 240pt, 120pt | A4; cells 240pt and 120pt |
+
+LibreOffice was not available for this check. The readers that already went through
+`WordprocessingMLUtil.AttributeToTwips` (margins, indents, spacing, tab stops in the HTML render)
+read the Strict copy correctly; the ones above parsed an integer. They now read through
+`WordprocessingMLUtil.TryAttributeToTwips` and `TryStringToDecimalTwips`, the same unit conversion
+for readers that fall back on a value they cannot read rather than throw. The conversion to
+Transitional still copies the units through: they are valid ECMA-376 Transitional, and reading them
+also covers a Transitional document that writes them, though the Open XML SDK validator flags them
+(see #1758 above).
+
+**A Strict part in a transitional package.** `StrictOoxmlNormalizer` converted a package only when
+its main document part was Strict, so a chart part written in the Strict namespaces inside a
+Transitional package (the shape of #1702) kept its Strict names, and the chart renderer, looking for
+`c:chart` under the Transitional name, drew an empty frame. Word opens either copy with the chart's
+values (41, 36, 29). The normalizer now decides per part: in a Transitional package, each XML part
+whose own root element is in a Strict namespace is converted, URIs and values alike (`a:lumMod
+val="75%"` becomes `75000`), and every other part is left byte for byte, so Transitional text that
+merely mentions a Strict URI is untouched. A Strict package still converts as a whole.
+
+Tests: `UniversalMeasureReadingTests`, `TwipMeasureParsingTests`,
+`StrictOoxmlNormalizerValueTests.A_strict_part_in_a_transitional_package_is_converted_alone`.

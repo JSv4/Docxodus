@@ -1785,10 +1785,8 @@ namespace Docxodus
                 var pgSz = sectPr.Element(W.pgSz);
                 if (pgSz != null)
                 {
-                    if (int.TryParse((string?)pgSz.Attribute(W._w), out int w))
-                        pageWidthPt = w / 20.0;
-                    if (int.TryParse((string?)pgSz.Attribute(W.h), out int h))
-                        pageHeightPt = h / 20.0;
+                    pageWidthPt = PagePoints(pgSz, W._w) ?? pageWidthPt;
+                    pageHeightPt = PagePoints(pgSz, W.h) ?? pageHeightPt;
                 }
 
                 // Page margins accept twips or universal units (ECMA-376 §17.6.11).
@@ -1816,6 +1814,10 @@ namespace Docxodus
             var twips = WordprocessingMLUtil.AttributeToDecimalTwips(margins.Attribute(name));
             return twips.HasValue ? (double)(twips.Value / 20m) : fallback;
         }
+
+        // A page dimension in points, from twips or a universal measure; null when it cannot be read.
+        private static double? PagePoints(XElement pgSz, XName name) =>
+            WordprocessingMLUtil.TryStringToDecimalTwips((string?)pgSz.Attribute(name)) is { } twips ? (double)(twips / 20m) : null;
 
         /// <summary>
         /// Tracks the effective reference for each story type as sections are visited in document
@@ -6501,7 +6503,8 @@ namespace Docxodus
 
         // Parses an OOXML table/cell width value (w:w on w:tblW / w:tcW, schema type
         // ST_TblWidth / ST_MeasurementOrPercent). The value is normally a plain integer,
-        // but the spec (and authoring tools such as the `docx` JS library) also permit a
+        // but the spec also permits a universal measure such as "240pt" (a Strict save writes
+        // dxa widths that way) and, as authoring tools such as the `docx` JS library write, a
         // percent-suffixed form, e.g. "100%" or "50.5%". Returns null when the attribute is
         // missing or cannot be parsed. `isExplicitPercent` is true when the raw value carried
         // a trailing '%', meaning it is already a literal percentage (NOT fiftieths-of-a-percent).
@@ -6516,9 +6519,7 @@ namespace Docxodus
                 isExplicitPercent = true;
                 raw = raw.Substring(0, raw.Length - 1).Trim();
             }
-            if (decimal.TryParse(raw, NumberStyles.Number, NumberFormatInfo.InvariantInfo, out var value))
-                return value;
-            return null;
+            return WordprocessingMLUtil.TryStringToDecimalTwips(raw);
         }
 
         /// <summary>
@@ -11169,10 +11170,8 @@ namespace Docxodus
                 var pgSz = sectPr.Element(W.pgSz);
                 if (pgSz != null)
                 {
-                    if (int.TryParse((string?)pgSz.Attribute(W._w), out int w))
-                        dims.PageWidthPt = w / 20.0;
-                    if (int.TryParse((string?)pgSz.Attribute(W.h), out int h))
-                        dims.PageHeightPt = h / 20.0;
+                    dims.PageWidthPt = PagePoints(pgSz, W._w) ?? dims.PageWidthPt;
+                    dims.PageHeightPt = PagePoints(pgSz, W.h) ?? dims.PageHeightPt;
                 }
 
                 // Parse page margins (w:pgMar)

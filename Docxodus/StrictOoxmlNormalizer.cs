@@ -16,13 +16,13 @@ namespace Docxodus;
 /// <c>http://purl.oclc.org/ooxml/*</c>, Word's "Strict Open XML Document" save format) into its
 /// transitional equivalent. Word performs the same translation transparently on open; Docxodus'
 /// XDocument-based pipelines (IR reader, comparers, revision processing) only understand the
-/// transitional namespaces, so strict inputs are converted up front. Transitional inputs are
-/// returned unchanged (same instance, no copy).
+/// transitional namespaces, so strict inputs are converted up front, and so is a strict part inside a
+/// transitional package. Transitional inputs with no strict part are returned unchanged (same instance,
+/// no copy).
 /// </summary>
 internal static class StrictOoxmlNormalizer
 {
     private const string StrictMarker = "http://purl.oclc.org/ooxml/";
-    private static readonly XNamespace StrictW = "http://purl.oclc.org/ooxml/wordprocessingml/main";
 
     // Strict → transitional URI map (ISO/IEC 29500-4 Annex A, the families a WML package carries).
     // ORDER MATTERS: the extendedProperties entries must precede the generic
@@ -68,7 +68,7 @@ internal static class StrictOoxmlNormalizer
 
     /// <summary>
     /// Returns the transitional-conformance equivalent of <paramref name="doc"/>, or
-    /// <paramref name="doc"/> itself (no copy) when it is not a strict package.
+    /// <paramref name="doc"/> itself (no copy) when no part of it is strict.
     /// </summary>
     internal static WmlDocument NormalizeToTransitional(WmlDocument doc)
     {
@@ -91,7 +91,7 @@ internal static class StrictOoxmlNormalizer
         // The XML depth door (issue #1389), before any tree is built. A strict package is measured as
         // the unfold leaves it: its text rewrites can make an entry well-formed, and so deep, that was
         // not XML before (the unfold guards its own parse).
-        var result = IsStrict(docxBytes) ? NormalizeStrict(docxBytes) : docxBytes;
+        var result = StrictEntries(docxBytes) is { } strictEntries ? NormalizeStrict(docxBytes, strictEntries) : docxBytes;
         if (!trusted) Internal.PartDepthGuard.EnsurePackage(result);
         return result;
     }
@@ -119,7 +119,7 @@ internal static class StrictOoxmlNormalizer
         }
     }
 
-    private static byte[] NormalizeStrict(byte[] documentBytes)
+    private static byte[] NormalizeStrict(byte[] documentBytes, Predicate<string> converts)
     {
         using var ms = new MemoryStream();
         ms.Write(documentBytes, 0, documentBytes.Length);
@@ -127,8 +127,9 @@ internal static class StrictOoxmlNormalizer
         {
             foreach (var entry in zip.Entries.ToList())
             {
-                if (!entry.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) &&
-                    !entry.FullName.EndsWith(".rels", StringComparison.OrdinalIgnoreCase))
+                if ((!entry.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) &&
+                     !entry.FullName.EndsWith(".rels", StringComparison.OrdinalIgnoreCase)) ||
+                    !converts(entry.FullName))
                     continue;
 
                 string text;
@@ -339,40 +340,74 @@ internal static class StrictOoxmlNormalizer
     }
 
     /// <summary>
-    /// A package is strict when its main document part's root element lives in the strict
-    /// WordprocessingML namespace. The main part is resolved through _rels/.rels (either
-    /// conformance class's officeDocument relationship type), falling back to the conventional
+    /// The entries to convert, or null when there are none. A package is strict when its main document
+    /// part's root element lives in the strict WordprocessingML namespace, and then every entry is. In a
+    /// transitional package, a part whose own root element is in a strict namespace (a chart a strict
+    /// producer wrote, issue #1764) is converted alone. The main part is resolved through _rels/.rels
+    /// (either conformance class's officeDocument relationship type), falling back to the conventional
     /// word/document.xml path.
     /// </summary>
-    internal static bool IsStrict(WmlDocument doc)
-    {
-        ArgumentNullException.ThrowIfNull(doc);
-        return IsStrict(doc.DocumentByteArray);
-    }
-
-    private static bool IsStrict(byte[] documentBytes)
+    private static Predicate<string>? StrictEntries(byte[] documentBytes)
     {
         try
         {
             using var ms = new MemoryStream(documentBytes, writable: false);
             using var zip = new ZipArchive(ms, ZipArchiveMode.Read);
             var main = FindMainDocumentEntry(zip);
-            if (main is null)
-                return false;
-            // Only the root element's namespace decides, so read just its start tag: this check
-            // runs on every package the WmlDocument pipelines open, transitional or not.
-            using var stream = main.Open();
-            using var reader = System.Xml.XmlReader.Create(stream);
-            return reader.MoveToContent() == System.Xml.XmlNodeType.Element &&
-                   reader.NamespaceURI == StrictW.NamespaceName;
+            if (main is not null && HasStrictRoot(main))
+                return _ => true;
+            var parts = zip.Entries.Where(e => e != main && e.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)
+                && OpensWithStrictMarker(e) && HasStrictRoot(e)).Select(e => e.FullName).ToHashSet(StringComparer.Ordinal);
+            return parts.Count == 0 ? null : parts.Contains;
         }
         catch (InvalidDataException)
         {
-            return false; // not a zip — let the downstream open path produce its own error
+            return null; // not a zip — let the downstream open path produce its own error
         }
-        catch (System.Xml.XmlException)
+    }
+
+    // Only the root element's namespace decides, so read just its start tag: this check runs on every
+    // part of every package the pipelines open, transitional or not, before the depth door measures
+    // anything, so it reads no further than a start tag can reasonably run, however far the part
+    // inflates. A part it cannot read is left to the downstream open path to report.
+    private static bool HasStrictRoot(ZipArchiveEntry entry)
+    {
+        try
         {
-            return false; // malformed main part — same reasoning
+            using var stream = entry.Open();
+            using var reader = System.Xml.XmlReader.Create(stream, RootTagOnly);
+            return reader.MoveToContent() == System.Xml.XmlNodeType.Element &&
+                   reader.NamespaceURI.StartsWith(StrictMarker, StringComparison.Ordinal);
+        }
+        catch (Exception e) when (e is System.Xml.XmlException or InvalidDataException or IOException)
+        {
+            return false;
+        }
+    }
+
+    private static readonly System.Xml.XmlReaderSettings RootTagOnly = new() { MaxCharactersInDocument = 1 << 20 };
+
+    // A root element in a strict namespace declares that namespace in its own start tag, at the top of
+    // the part, so a part whose first bytes do not name one is ruled out without an XML reader: the read
+    // step runs on every package a pipeline opens, intermediate ones included.
+    private static bool OpensWithStrictMarker(ZipArchiveEntry entry)
+    {
+        var head = System.Buffers.ArrayPool<byte>.Shared.Rent(16 * 1024);
+        try
+        {
+            using var stream = entry.Open();
+            int read = 0, n;
+            while (read < head.Length && (n = stream.Read(head, read, head.Length - read)) > 0)
+                read += n;
+            return head.AsSpan(0, read).IndexOf("http://purl.oclc.org/ooxml/"u8) >= 0;
+        }
+        catch (Exception e) when (e is InvalidDataException or IOException)
+        {
+            return false;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(head);
         }
     }
 

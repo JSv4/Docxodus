@@ -71,19 +71,19 @@ internal static class BlockMetadataOps
 
         // The width attribute is `w:w` — exposed in the W class as `W._w` to avoid
         // collision with the namespace alias `W.w`. Height is just `W.h`. See
-        // WmlToHtmlConverter for the same usage pattern. Twips are integer-valued.
-        int width = ParseInt((string?)pgSz?.Attribute(W._w)) ?? 12240;   // 8.5"
-        int height = ParseInt((string?)pgSz?.Attribute(W.h)) ?? 15840;  // 11"
+        // WmlToHtmlConverter for the same usage pattern. Twips, or a universal measure.
+        int width = Twips(pgSz?.Attribute(W._w)) ?? 12240;   // 8.5"
+        int height = Twips(pgSz?.Attribute(W.h)) ?? 15840;  // 11"
         bool landscape = string.Equals((string?)pgSz?.Attribute(W.orient), "landscape",
             System.StringComparison.Ordinal);
 
-        int top = ParseInt((string?)pgMar?.Attribute(W.top)) ?? 1440;
-        int bottom = ParseInt((string?)pgMar?.Attribute(W.bottom)) ?? 1440;
-        int left = ParseInt((string?)pgMar?.Attribute(W.left)) ?? 1440;
-        int right = ParseInt((string?)pgMar?.Attribute(W.right)) ?? 1440;
-        int headerDistance = ParseInt((string?)pgMar?.Attribute(W.header))
+        int top = Twips(pgMar?.Attribute(W.top)) ?? 1440;
+        int bottom = Twips(pgMar?.Attribute(W.bottom)) ?? 1440;
+        int left = Twips(pgMar?.Attribute(W.left)) ?? 1440;
+        int right = Twips(pgMar?.Attribute(W.right)) ?? 1440;
+        int headerDistance = Twips(pgMar?.Attribute(W.header))
             ?? SectionInfo.DefaultHeaderFooterDistanceTwips;
-        int footerDistance = ParseInt((string?)pgMar?.Attribute(W.footer))
+        int footerDistance = Twips(pgMar?.Attribute(W.footer))
             ?? SectionInfo.DefaultHeaderFooterDistanceTwips;
 
         // Both flags are CT_OnOff: present-and-bare or w:val="1"/"true"/"on" means on; an explicit
@@ -280,6 +280,8 @@ internal static class BlockMetadataOps
         => int.TryParse(raw, System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
 
+    private static int? Twips(XAttribute? attribute) => WordprocessingMLUtil.TryAttributeToTwips(attribute);
+
     // ─── Internals ──────────────────────────────────────────────────────
 
     private static string? ResolveStyleId(XElement element)
@@ -384,8 +386,8 @@ internal static class BlockMetadataOps
         var abstractInd = abstractLvlEl?.Element(W.pPr)?.Element(W.ind);
         var overrideInd = overrideLvlEl?.Element(W.pPr)?.Element(W.ind);
         int? Indent(XName name, XName alternate) =>
-            ParseInt((string?)overrideInd?.Attribute(name) ?? (string?)overrideInd?.Attribute(alternate)
-                ?? (string?)abstractInd?.Attribute(name) ?? (string?)abstractInd?.Attribute(alternate));
+            Twips(overrideInd?.Attribute(name) ?? overrideInd?.Attribute(alternate)
+                ?? abstractInd?.Attribute(name) ?? abstractInd?.Attribute(alternate));
 
         return new ListMembership
         {
