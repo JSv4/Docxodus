@@ -5810,6 +5810,17 @@ listSeparator
         public static readonly XName lastRowLastColumn = w + "lastRowLastColumn";
         public static readonly XName oddHBand = w + "oddHBand";
         public static readonly XName oddVBand = w + "oddVBand";
+
+        /// <summary>
+        /// The <c>w:cnfStyle</c> flags in the order of their digits in <c>w:val</c> (ST_Cnf). The four
+        /// corner digits run NE, NW, SE, SW, not in the order the corner attributes are declared.
+        /// </summary>
+        public static readonly XName[] CnfStyleValFlags =
+        {
+            firstRow, lastRow, firstColumn, lastColumn, oddVBand, evenVBand, oddHBand, evenHBand,
+            firstRowLastColumn, firstRowFirstColumn, lastRowLastColumn, lastRowFirstColumn,
+        };
+
         public static readonly XName headers = w + "headers";
 
         public static readonly XName[] BlockLevelContentContainers =
