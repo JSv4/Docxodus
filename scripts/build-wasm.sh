@@ -180,7 +180,10 @@ du -sh "$WASM_DIST"
 # the budget of their own branch, the three together measured 6,068,407 bytes on CI, 2,231
 # bytes over 5924 KiB; another 4 KiB covers it. Assembly roots, dependencies and the AOT
 # profile are unchanged.
-WIRE_BUDGET_BYTES=$((5928 * 1024))
+# With the tab/break anchoring of #1759 and the Strict value table of #1758 merged, the
+# payload measured 6,070,349 bytes on CI, 77 bytes over 5928 KiB; 4 KiB more covers it and
+# #1757's small builder change. Roots, dependencies and the AOT profile are unchanged.
+WIRE_BUDGET_BYTES=$((5932 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""
