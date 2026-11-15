@@ -9390,6 +9390,7 @@ in Transitional: 33 errors remain on the Strict document above once the percenta
 Docxodus's own readers that go through `AttributeToTwips` (`PtOpenXmlUtil`) accept the units;
 converting them for the package is a separate change. The SmartArt diagram attributes (`dgm:prSet/@custScaleX` and its siblings, `ST_PrSetCustVal`)
 are typed as integers by the SDK, but the Strict save of a resized SmartArt node could not be captured
-by COM, so they are not converted.
+by COM, so they are not converted. A Strict part inside a Transitional package (the chart of #1702)
+is not converted either, because the normalizer runs only on packages whose main part is Strict.
 
 Tests: `StrictOoxmlNormalizerValueTests`.
