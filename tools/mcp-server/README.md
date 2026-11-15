@@ -10,8 +10,16 @@ and a list of documented capability gaps.
 
 ## Installation
 
+`Docxodus.McpServer` is not published to NuGet yet, so install it from a clone of the
+[repository](https://github.com/JSv4/Docxodus) (needs the .NET 10 SDK). Pack it and install the
+result as a global tool:
+
 ```bash
-dotnet tool install -g Docxodus.McpServer
+dotnet pack tools/mcp-server/mcpserver.csproj -c Release -o ./artifacts
+```
+
+```bash
+dotnet tool install -g Docxodus.McpServer --add-source ./artifacts
 ```
 
 ## Usage

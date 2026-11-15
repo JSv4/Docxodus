@@ -1,0 +1,61 @@
+# Docxodus
+
+> Docxodus is an open-source (MIT) toolkit for Word .docx files: compare two documents into a redline with native tracked changes, render DOCX to HTML or PDF, project DOCX to anchor-addressed markdown, and edit a document in place — programmatically, from an AI agent, or in a browser editor. One engine, available as a .NET library (NuGet `Docxodus`), a JavaScript/TypeScript package for the browser and Node (npm `docxodus`), a Python client (PyPI `docx-scalpel`), command-line tools, and an MCP server.
+
+Use Docxodus when a task needs to read, change, compare or display a real .docx and the result must still open correctly in Microsoft Word. It handles .docx, .docm, .dotx and .dotm. It does not handle .xlsx, .pptx or legacy .doc.
+
+Facts worth knowing before choosing an entry point:
+
+- A comparison ("redline", "blackline", "docx diff") is written as Word's own tracked-changes markup (`w:ins`, `w:del`, `w:moveFrom`/`w:moveTo`), so a reviewer accepts or rejects each change in Word. Accepting every change yields the revised document's content; rejecting every change yields the original's.
+- Every block in a document has a stable anchor id of the form `kind:scope:unid` (for example `p:body:a1b2c3d4`). The markdown projection prints these ids, search returns them, edits take them, and rendered HTML carries them as `data-anchor`. An agent reads the markdown, picks an anchor, and edits that block without re-sending the document.
+- Edits go through a stateful session over the live OOXML. Formatting, styles, numbering, footnotes, headers and anything else the edit did not touch are kept as they were in the saved file. Edits can be recorded as tracked changes instead of applied silently.
+- Everything runs locally. The browser package is WebAssembly with no server; the Python client and MCP server are local processes with no network calls.
+
+## Pick a surface
+
+- [.NET library — NuGet `Docxodus`](https://www.nuget.org/packages/Docxodus): the engine itself, for .NET 10. `dotnet add package Docxodus`.
+- [JavaScript and TypeScript, in the browser and Node — npm `docxodus`](https://www.npmjs.com/package/docxodus): an ordinary JavaScript package — ES modules with TypeScript types bundled, functions that take a `File` or `Uint8Array` and return promises. The engine is WebAssembly inside the package, so there is no .NET install, no native build step and no server. Also includes the block editor, ribbon UI, React hooks and a Web Worker proxy. `npm install docxodus`. Import `docxodus/core` for the engine without UI.
+- [Python — PyPI `docx-scalpel`](https://pypi.org/project/docx-scalpel/): a client that keeps one document open in a bundled local host process, so many small edits cost one parse. `pip install docx-scalpel`. No .NET install needed.
+- [MCP server — `docxodus-mcp`](https://raw.githubusercontent.com/JSv4/Docxodus/main/tools/mcp-server/README.md): 23 tools over stdio for agents that speak the Model Context Protocol. Run it from a clone of the repository with `dotnet run --project tools/mcp-server` (needs the .NET 10 SDK); it is not yet published to a package registry.
+- [CLI tools — releases](https://github.com/JSv4/Docxodus/releases): `redline`, `docx2html` and `docx2oc` as `dotnet tool install -g Redline` (or `Docx2Html`, `Docx2OC`), or as self-contained binaries for Windows, Linux and macOS.
+- [HTML and PDF export — npm `@docxodus/export`](https://www.npmjs.com/package/@docxodus/export): deterministic paginated HTML and PDF from Node or the `docxodus convert` command, through a pinned Chromium.
+
+## Task to API
+
+Each line names the same operation on every surface that has it.
+
+- Compare two .docx files into a tracked-changes redline: .NET `DocxCompare.Compare(original, revised)`; npm `compareDocuments(original, revised)`; Python `docx_diff_compare(left, right)`; MCP `docxodus_compare`; CLI `redline original.docx revised.docx out.docx`.
+- Get the differences as data instead of a document: .NET `DocxDiff.GetRevisions`, `GetEditScriptJson`, `GetSemanticChanges`; npm `docxDiffGetRevisions`, `docxDiffGetEditScript`, `docxDiffGetSemanticChanges`; Python `docx_diff_get_revisions`, `docx_diff_get_edit_script`, `docx_diff_get_semantic_changes`.
+- Merge several reviewers' copies into one multi-author redline: .NET `DocxDiff.Consolidate`; npm `docxDiffConsolidate`; Python `docx_diff_consolidate`; MCP `docxodus_compare` with several revised paths.
+- Accept or reject tracked changes: .NET `RevisionProcessor.AcceptRevisions` / `RejectRevisions`; npm `docxDiffAcceptRevisions` / `docxDiffRejectRevisions`; Python `docx_diff_accept_revisions` / `docx_diff_reject_revisions`, or per revision with `session.accept_revision(id)`; MCP `docxodus_track_changes`.
+- Convert DOCX to HTML: .NET `WmlToHtmlConverter.ConvertToHtml`; npm `convertDocxToHtml`; Python `convert_docx_to_html`; MCP `docxodus_get_content` with format `html`; CLI `docx2html document.docx`.
+- Convert DOCX to PDF: npm `@docxodus/export` `convertDocxToPdf`; CLI `docxodus convert contract.docx --to pdf --output contract.pdf`.
+- Convert DOCX to markdown with an anchor on every block: .NET `WmlToMarkdownConverter.Convert`; npm `convertWmlToMarkdown`; Python `session.project()`; MCP `docxodus_get_content` with format `markdown`.
+- Find text, then edit it in place: .NET `new DocxSession(bytes)` then `ReplaceText`; npm `openDocxSession(bytes)`; Python `open_session(bytes)` then `session.find_by_text(...)` and `session.replace_text(anchor_id, markdown)`; MCP `docxodus_open`, `docxodus_search`, `docxodus_edit`, `docxodus_save`.
+- Fill a template: bracketed placeholders with Python `session.fill_placeholders(...)`; native Word content controls with MCP `docxodus_content_controls`.
+- Add comments, format text, edit tables, lists, links and images: MCP `docxodus_comment`, `docxodus_format`, `docxodus_table`, `docxodus_list`, `docxodus_links`, `docxodus_images`; the same operations are methods on `DocxSession` in .NET, npm and Python.
+- Convert HTML to DOCX: .NET `HtmlToWmlConverter`.
+- Merge or split .docx files: .NET `DocumentBuilder.BuildDocument`.
+- Embed a Word-like editor in a web page: npm `createRibbonEditor` or `DocxEditor`; see the live demo below.
+
+## Docs
+
+- [README](https://raw.githubusercontent.com/JSv4/Docxodus/main/README.md): overview with real screenshots and a quick start for each surface.
+- [Agent server tool contract](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/architecture/docx_agent_server.md): every MCP tool, its arguments and its result shape.
+- [Editing API](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/architecture/docx_mutation_api.md): `DocxSession` — anchors, result envelopes, error codes, the markdown subset edits accept.
+- [Markdown projection](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/architecture/markdown_projection.md): the projection format and the anchor grammar.
+- [Comparison engine](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/architecture/ir_diff_engine.md): how `DocxDiff` compares, its settings, the edit script, N-way consolidation.
+- [Tracked changes](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/architecture/tracked_changes.md): how revisions are read, written, accepted and rejected.
+- [DOCX to HTML converter](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/architecture/docx_converter.md): rendering options, pagination, comments.
+- [npm package guide](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/npm-package.md): TypeScript API, React hooks, worker usage, CDN embed.
+- [Python client](https://raw.githubusercontent.com/JSv4/Docxodus/main/python/README.md): `docx-scalpel` quick start and session methods.
+- [HTML and PDF export](https://raw.githubusercontent.com/JSv4/Docxodus/main/npm-export/README.md): `@docxodus/export` Node API, CLI and deployment requirements.
+
+## Optional
+
+- [Live browser demo](https://jsv4.github.io/Docxodus/demo/): open, edit, redline and save a .docx in the browser.
+- [Semantic diff contract](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/architecture/semantic_diff.md): the versioned change-set schema for audit workflows.
+- [Deliverable verification](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/architecture/deliverable_verification.md): checking that an automated edit changed only what was asked.
+- [OOXML corner cases](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/ooxml_corner_cases.md): where Word's behaviour differs from the specification.
+- [Changelog](https://raw.githubusercontent.com/JSv4/Docxodus/main/CHANGELOG.md): release history.
+- [Source repository](https://github.com/JSv4/Docxodus): MIT licensed.
