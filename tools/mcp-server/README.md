@@ -10,22 +10,43 @@ and a list of documented capability gaps.
 
 ## Installation
 
-`Docxodus.McpServer` is not published to NuGet yet, so install it from a clone of the
-[repository](https://github.com/JSv4/Docxodus) (needs the .NET 10 SDK). Pack it and install the
-result as a global tool:
+The server is the NuGet package
+[`Docxodus.McpServer`](https://www.nuget.org/packages/Docxodus.McpServer), published with each
+Docxodus release after 16.0.0. It needs the .NET 10 SDK. Install it as a global tool:
 
 ```bash
-dotnet pack tools/mcp-server/mcpserver.csproj -c Release -o ./artifacts
+dotnet tool install -g Docxodus.McpServer
+```
+
+Or skip the install and let the client fetch and run it with `dnx`, which ships with the .NET 10
+SDK:
+
+```json
+{
+  "mcpServers": {
+    "docxodus": {
+      "command": "dnx",
+      "args": ["Docxodus.McpServer", "--yes"]
+    }
+  }
+}
+```
+
+To build the package yourself from a clone of the
+[repository](https://github.com/JSv4/Docxodus):
+
+```bash
+./scripts/pack-mcp-server.sh 0.0.0-local ./artifacts
 ```
 
 ```bash
-dotnet tool install -g Docxodus.McpServer --add-source ./artifacts
+dotnet tool install -g Docxodus.McpServer --version 0.0.0-local --add-source ./artifacts
 ```
 
 ## Usage
 
-Add it to your MCP client's server configuration. For example, in a client that reads a
-`mcpServers` map:
+With the tool installed, add it to your MCP client's server configuration. For example, in a
+client that reads a `mcpServers` map:
 
 ```json
 {

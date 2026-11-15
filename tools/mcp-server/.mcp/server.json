@@ -1,0 +1,37 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "name": "io.github.JSv4/docxodus",
+  "description": "Open, read, edit, compare and redline Word .docx files locally, with native tracked changes.",
+  "version": "0.0.0",
+  "repository": {
+    "url": "https://github.com/JSv4/Docxodus",
+    "source": "github",
+    "subfolder": "tools/mcp-server"
+  },
+  "packages": [
+    {
+      "registryType": "nuget",
+      "registryBaseUrl": "https://api.nuget.org",
+      "identifier": "Docxodus.McpServer",
+      "version": "0.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [],
+      "environmentVariables": [
+        {
+          "name": "DOCXODUS_STORAGE_ROOT",
+          "description": "Directory every document path must resolve inside. Defaults to the user's home directory.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "DOCXODUS_STORAGE_SCOPE",
+          "description": "Optional single path segment appended to the storage root, to keep one server's documents apart from another's.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

@@ -71,6 +71,11 @@ jobs:
           dotnet pack tools/docx2html/docx2html.csproj -c Release -o ./artifacts -p:PackageVersion=${{ steps.version.outputs.VERSION }}
           dotnet pack tools/docx2oc/docx2oc.csproj -c Release -o ./artifacts -p:PackageVersion=${{ steps.version.outputs.VERSION }}
 
+      # The MCP server is a fifth NuGet package. The script stamps the release version into
+      # the package's .mcp/server.json and verifies the result; ci.yml runs the same script.
+      - name: Pack MCP server
+        run: ./scripts/pack-mcp-server.sh "${{ steps.version.outputs.VERSION }}" ./artifacts
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:

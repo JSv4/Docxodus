@@ -190,24 +190,28 @@ whose untouched formatting, numbering and footnotes are exactly what they were.
 
 | The agent needs to… | Use |
 |---|---|
-| Call tools over the Model Context Protocol | [`docxodus-mcp`](tools/mcp-server/README.md) — 23 tools over stdio: open, search, edit, format, comment, compare, track changes, save |
+| Call tools over the Model Context Protocol | [`Docxodus.McpServer`](tools/mcp-server/README.md) — 23 tools over stdio: open, search, edit, format, comment, compare, track changes, save |
 | Script edits from Python | [`docx-scalpel`](python/README.md) — `pip install docx-scalpel`, no .NET install |
 | Call it from JavaScript or TypeScript, in a browser or Node, with no server | [`docxodus`](docs/npm-package.md) — `npm install docxodus`, import `docxodus/core`; ES modules with types included |
 | Shell out | `redline old.docx new.docx out.docx`, `docx2html document.docx` |
 
-The MCP server runs locally and makes no network calls. It is not on a package registry yet, so
-run it from a clone:
+The MCP server runs locally and makes no network calls once installed. It is the NuGet package
+`Docxodus.McpServer`, published with each release after 16.0.0; with the .NET 10 SDK installed, a
+client fetches and runs it with `dnx`:
 
 ```json
 {
   "mcpServers": {
     "docxodus": {
-      "command": "dotnet",
-      "args": ["run", "--project", "/path/to/Docxodus/tools/mcp-server"]
+      "command": "dnx",
+      "args": ["Docxodus.McpServer", "--yes"]
     }
   }
 }
 ```
+
+`dotnet tool install -g Docxodus.McpServer` installs it as the `docxodus-mcp` command instead, and
+from a clone it runs with `dotnet run --project tools/mcp-server`.
 
 [`llms.txt`](docs/llms.txt) is a plain-text index of the same ground for a model to read: each
 common task — compare, render, convert to markdown or PDF, edit, accept and reject changes — with
@@ -296,7 +300,7 @@ TypeScript API and React hooks.
 | JavaScript / TypeScript (browser and Node) | [`docxodus`](https://www.npmjs.com/package/docxodus) (npm) | Plain ES modules with bundled types; the engine is WebAssembly inside the package, so there is no .NET install and no server. Web Worker and React hooks included. |
 | Python | [`docx-scalpel`](https://pypi.org/project/docx-scalpel/) (PyPI) | Long-running host process, so an agent can issue dozens of edits against one open session. *Beta; wheels for linux-x64/arm64, osx-arm64, win-x64.* |
 | CLI | `Redline`, `Docx2Html`, `Docx2OC` | `dotnet tool install -g`, or download a self-contained binary. |
-| MCP server | [`docxodus-mcp`](tools/mcp-server/README.md) | Stdio server for AI agents. Run from source; not yet on a registry. |
+| MCP server | [`Docxodus.McpServer`](https://www.nuget.org/packages/Docxodus.McpServer) (NuGet) | Stdio server for AI agents, command `docxodus-mcp`. `dotnet tool install -g`, or run with `dnx`. |
 | DOCX → PDF | [`@docxodus/export`](https://www.npmjs.com/package/@docxodus/export) (npm) | Paginated HTML and PDF from Node or `docxodus convert`, through a pinned Chromium. |
 
 ---

@@ -165,3 +165,41 @@ test('package search metadata names only what the packages do', () => {
     }
   }
 });
+
+test('the MCP server manifest describes the package the release publishes', () => {
+  const manifest = JSON.parse(read('tools/mcp-server/.mcp/server.json'));
+  const project = read('tools/mcp-server/mcpserver.csproj');
+  const [entry] = manifest.packages;
+
+  // NuGet.org reads the first nuget entry to build the client configuration it shows.
+  assert.equal(entry.registryType, 'nuget');
+  assert.equal(entry.identifier, project.match(/<PackageId>([^<]+)<\/PackageId>/)[1]);
+  assert.equal(entry.transport.type, 'stdio');
+  assert.match(project, /<PackageType>McpServer<\/PackageType>/, 'listed in NuGet\'s MCP-server search');
+  assert.match(project, /<None Include="\$\(McpServerManifest\)" Pack="true" PackagePath="\/\.mcp\/" \/>/);
+
+  // The registry rejects a name without exactly one slash or a description over 100 characters.
+  assert.match(manifest.name, /^io\.github\.JSv4\/[a-z0-9._-]+$/);
+  assert.ok(manifest.description.length <= 100, `description is ${manifest.description.length} characters`);
+
+  // Release versions are stamped at pack time; a real one checked in would go stale.
+  assert.equal(manifest.version, '0.0.0');
+  assert.equal(entry.version, '0.0.0');
+
+  // Every setting the manifest offers a client is one the server reads and its README explains.
+  const server = sources('tools/mcp-server', '.cs');
+  const readme = read('tools/mcp-server/README.md');
+  assert.ok(entry.environmentVariables.length > 0);
+  for (const { name, description } of entry.environmentVariables) {
+    assert.ok(server.includes(`"${name}"`), `the server does not read ${name}`);
+    assert.ok(readme.includes(`\`${name}\``), `the README does not document ${name}`);
+    assert.ok(description.length > 20, `${name} has no useful description`);
+  }
+});
+
+test('the release and CI workflows both pack the MCP server through one script', () => {
+  const call = /run: \.\/scripts\/pack-mcp-server\.sh \S+ \S+/;
+  assert.match(read('.github/workflows/publish.yml'), call, 'publish.yml does not publish the MCP server');
+  assert.match(read('.github/workflows/ci.yml'), call, 'ci.yml does not exercise the MCP packaging');
+  assert.ok(existsSync(join(repoRoot, 'scripts/pack-mcp-server.sh')));
+});

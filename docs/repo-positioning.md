@@ -130,13 +130,18 @@ and then looks for the call to make. Three things serve that reader:
 - **Tool descriptions in `tools/mcp-server/ToolCatalog.cs`** are what an agent sees once
   connected; they are the product copy for that audience.
 
-**The open gap: the MCP server is not published.** `Docxodus.McpServer` packs as a .NET tool but
-`publish.yml` does not push it, so an agent cannot install it by name and no MCP directory can
-list it. Publishing it to NuGet — whose search has a dedicated MCP-server package type, read from a
-`.mcp/server.json` in the package — and then registering it with the
-[MCP registry](https://github.com/modelcontextprotocol/registry) would do more for agent discovery
-than everything else in this section. It is a release-process decision (a fifth NuGet package, a
-~160 MB self-contained tool), so it is recorded here rather than done.
+**The MCP server is a published package.** `Docxodus.McpServer` goes to NuGet with every release
+(`scripts/pack-mcp-server.sh`, called by `publish.yml` and exercised by `ci.yml`). It carries
+NuGet's `McpServer` package type, so it appears under
+[nuget.org's MCP-server search](https://www.nuget.org/packages?packagetype=mcpserver), and a
+`.mcp/server.json` from which NuGet.org generates a client configuration. An agent installs it by
+name with `dnx Docxodus.McpServer --yes`.
+
+Still to do by hand, once the first version is on NuGet: register the server with the
+[MCP registry](https://github.com/modelcontextprotocol/registry), which the directories agents
+browse draw from. `tools/mcp-server/.mcp/server.json` is already in that registry's format; the
+registry's `mcp-publisher` tool needs the release version written into it and a GitHub login as
+the repository owner.
 
 ---
 
