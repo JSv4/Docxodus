@@ -18,6 +18,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Rejecting a comparison whose revision removes the header or footer from every section now restores the first section's original story when a later section shares that story's part (#1763). An unchanged section break is written with the revised section properties, which held no reference, and the comparison only bound the shared part where it reappeared further on, so the first section was left with none. A changed or removed story is now bound to every section where it starts.
+
 - The NuGet `Docxodus` package no longer describes itself as handling XLSX and PPTX or offering template assembly, and its tags no longer include `xlsx`, `excel`, `pptx` and `powerpoint`; that support was removed several releases ago.
 
 - Equations whose math runs give the East Asian font slot a theme font (`w:eastAsiaTheme="minorEastAsia"`, which some Word installations write on every math run) now render instead of becoming `[MATH]` placeholders (#1710). A math run's `w:rFonts` now only has to name the math font in the font slots its characters actually use, with theme fonts resolved through the document theme; a CJK character in a non-math East Asian font still keeps the placeholder.
