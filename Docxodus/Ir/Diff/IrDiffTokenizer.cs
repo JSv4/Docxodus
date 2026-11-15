@@ -181,7 +181,7 @@ internal static class IrDiffTokenizer
             int j = i + 1;
             int atomCount = 0;
             while (j < tokens.Count &&
-                   IsZeroWidthContentAtom(tokens[j].Kind) &&
+                   tokens[j].IsObject &&
                    tokens[j].StartChar == tokens[j - 1].EndChar)
             {
                 atomCount++;
@@ -220,10 +220,6 @@ internal static class IrDiffTokenizer
             i = rightWord - 1;
         }
     }
-
-    private static bool IsZeroWidthContentAtom(IrDiffTokenKind kind) => kind is
-        IrDiffTokenKind.NoteRef or IrDiffTokenKind.Image or
-        IrDiffTokenKind.Opaque or IrDiffTokenKind.Textbox;
 
     private static IrDiffToken AppendMarker(IrDiffToken token, string marker) =>
         token with { MatchKey = token.MatchKey + marker };

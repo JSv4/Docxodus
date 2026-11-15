@@ -3085,6 +3085,79 @@ Docxodus keeps paired so that reviewer edits of such labels still compose in `Co
 `RewrittenClauses_StayWhole_BesideAnEditedClauseOrNone`) and
 `Docxodus.Tests/DocxDiffWordShapeTests.cs` (`InteriorWeakPair_IsReplacedWhole`).
 
+## Compare: a tab or a break is whitespace to the word diff (#1759)
+
+### The corner case
+
+Word's Compare treats a tab (`w:tab`) or a break (`w:br` of any type, or `w:cr`) in a paragraph the way it
+treats a space. It never keeps one unmarked on its own between changed words, and it keeps one that both
+versions share at the edge of a changed span. Docxodus grouped tabs and breaks with note references and
+images, whose keys cannot tell one occurrence from another. Any paragraph holding a tab or break therefore
+took the diff in which spaces anchor too, so a replaced phrase came out as one-word deletions and insertions
+alternating around kept spaces. The rewrite test (#1739) also skipped such paragraphs, so a clause laid out as
+tab, label, tab, text stayed paired and was diffed word by word.
+
+### Minimal reproducer
+
+```xml
+<!-- original -->
+<w:p><w:r><w:tab/></w:r><w:r><w:t>Every harbor pilot logs tide charts before noon.</w:t></w:r></w:p>
+<!-- revised -->
+<w:p><w:r><w:tab/></w:r><w:r><w:t>Every harbor pilot checks wind gauges and buoy lamps before noon.</w:t></w:r></w:p>
+```
+
+Word deletes `logs tide charts` and inserts `checks wind gauges and buoy lamps`. Docxodus wrote six
+deletions and seven insertions, keeping the spaces between the changed words.
+
+### Behavior table
+
+Word 2024, Compare Documents at word level, one paragraph per document unless noted. A span is a run of
+inserted or deleted text as the redline shows it. LibreOffice was not measured.
+
+| Pair | Word | Docxodus before | Docxodus after |
+|---|---|---|---|
+| phrase replaced, no tab (control) | 1 deleted, 1 inserted span | same | same |
+| the same after a leading tab, before a trailing tab, or after a leading line break | 1 deleted, 1 inserted span | 6 deleted, 7 inserted one-word spans | 1 deleted, 1 inserted span |
+| four words replaced around a tab, line break, `w:cr`, page or column break | 1 deleted, 1 inserted span, the tab or break inside each | 2 deleted, 2 inserted spans, the tab or break kept between them | as Word |
+| tab, `(3)`, tab, clause text, rewritten between unchanged paragraphs | old paragraph deleted, new one inserted | one paragraph of 60 deletions and 61 insertions | as Word |
+| the same clause as `(3) ` and text in one run (control) | old paragraph deleted, new one inserted | same | same |
+| `Crate`, tab, middle column, tab, `12 kg`, middle column replaced | both tabs kept | both tabs kept | both tabs kept |
+| tab, then `Ropes, nets and hooks are stowed.` → `Sails, oars and cleats are stowed.` | `Ropes, nets` and `hooks` replaced, the comma with them | the comma kept between one-word spans | as Word, and as the same sentence without the tab |
+| a space replaced by a tab; a tab inserted before a space | space deleted, tab inserted; tab inserted | same | same |
+| a paragraph of two tabs cut to one | 1 tab deleted | same | same |
+
+### Analysis
+
+The token differ anchors a paragraph's diff on its words and punctuation, never on whitespace, because two
+unrelated phrases share many spaces and matching them threads one phrase through the other. A paragraph with
+a note reference, image, opaque inline or text box falls back to anchoring on every token, whitespace
+included, so that one of several identical objects is paired by its surroundings. Tabs and breaks fell into
+that fallback, although a tab, like a space, has no identity to mispair. They are now connective whitespace,
+like spaces, everywhere the comparison draws that line: the token differ's anchors and kept edges, and the
+split segmenter's re-pairing of whitespace at a segment boundary. The rewrite test measures a tabbed paragraph
+by its text, a tab or break counting as a space would. The rule that keeps a lone shared punctuation mark out
+of the unchanged text (decoded from the same compare) applies only to plain text, since dropping an anchor
+inside a field or hyperlink would split its plumbing between the two sides; a tab or break is a leaf of its
+run, so a paragraph holding one now counts as plain text there too (`IrCrossParagraphSegmenter.IsPlainText`).
+The cross-paragraph token stream still takes only paragraphs of text runs alone. Note references, images, text boxes and other objects
+keep the fallback and keep their pairing. `w:ptab` is read as an opaque inline and stays an object.
+
+### Relevant code
+
+- `Docxodus/Ir/Diff/IrDiffToken.cs` — `IsObject` and `IsConnective`, the one definition every pass reads.
+- `Docxodus/Ir/Diff/IrTokenDiffer.cs` — `AnchoredSpans` (all-token fallback only for objects), `EmitSegment`.
+- `Docxodus/Ir/Diff/IrBlockSimilarity.cs` — `HasOnlyTextTokens`, read by `IsRewrite`.
+- `Docxodus/Ir/Diff/IrCrossParagraphSegmenter.cs` — `IsPlainText`, the lone-punctuation precondition that
+  `IrEditScriptBuilder.PlainTextPair` and the split segmenter read; `IsStreamable` builds on it.
+
+### Tests
+
+`Docxodus.Tests/Ir/Diff/IrTokenDifferTests.cs` (`Tab_or_break_leaves_a_replaced_phrase_one_deletion_and_one_insertion`,
+`Tab_or_break_between_changed_words_does_not_anchor`, `Shared_tabs_at_the_edges_of_a_changed_column_are_kept`,
+`A_tab_that_is_the_edit_stays_visible`, `Note_reference_still_pairs_in_full_context`),
+`Docxodus.Tests/Ir/Diff/IrBlockAlignerTests.cs` (`Rewrite_with_a_tab_or_break_is_replaced_like_plain_text`) and
+`Docxodus.Tests/DocxDiffTabBreakTests.cs`.
+
 ## Compare: rejecting a moved and edited paragraph (#1716)
 
 ### The corner case

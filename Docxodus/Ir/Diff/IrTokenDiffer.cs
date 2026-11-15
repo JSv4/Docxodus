@@ -80,8 +80,8 @@ internal static class IrTokenDiffer
     /// anchors on content words, not whitespace. We do the same in two levels:
     /// <list type="number">
     /// <item>Run the LCS over the subsequence of NON-connective (content) tokens only — a token is
-    /// connective iff it is a whitespace-only <see cref="IrDiffTokenKind.Separator"/>; Words, punctuation
-    /// separators, and the atomic kinds all count as content and CAN anchor. This yields ordered Equal
+    /// connective iff <see cref="IrDiffToken.IsConnective"/> (whitespace, a tab or a break); Words and
+    /// punctuation separators count as content and CAN anchor. This yields ordered Equal
     /// content-anchor pairs mapped back to full-stream indices.</item>
     /// <item>Partition both full streams at the anchors and emit, per segment, a common WHITESPACE prefix
     /// and suffix as Equal with the middle as Delete(all left)+Insert(all right) — no nested all-token
@@ -112,14 +112,14 @@ internal static class IrTokenDiffer
         }
 
         // 1. Content-token anchors (full-stream index pairs, strictly increasing on both sides).
-        // Atomic tokens (note refs, images, tabs, breaks, opaque, textboxes) share coarse MatchKeys
-        // (every footnote ref keys "fn"), so anchoring the content LCS on them can pair the WRONG
-        // occurrence and mis-attribute which one was inserted — breaking note/definition reject
-        // round-trips. When either side carries an atomic token, fall back to all-token anchoring
-        // (the pre-content-anchor behavior: whitespace participates, so an atomic token is paired
-        // in its full surrounding context). Pure text/word/space paragraphs — where whitespace
-        // crowding is the problem this pass exists to fix — take the content-anchored path.
-        bool anchorAll = HasAtomic(left) || HasAtomic(right);
+        // Object tokens (note refs, images, opaque, textboxes) share coarse MatchKeys (every footnote
+        // ref keys "fn"), so anchoring the content LCS on them can pair the WRONG occurrence and
+        // mis-attribute which one was inserted — breaking note/definition reject round-trips. When
+        // either side carries an object, fall back to all-token anchoring (the pre-content-anchor
+        // behavior: whitespace participates, so an object is paired in its full surrounding context).
+        // Text paragraphs — where whitespace crowding is the problem this pass exists to fix — take
+        // the content-anchored path; tabs and breaks are whitespace there, like spaces.
+        bool anchorAll = HasObject(left) || HasObject(right);
         var anchors = ContentAnchors(left, right, anchorAll);
 
         // 1b. Lone-punctuation rule (decoded 2026-07-27 from reference compare output): an isolated
@@ -151,18 +151,13 @@ internal static class IrTokenDiffer
         return spans;
     }
 
-    /// <summary>True for a connective token: a whitespace-only <see cref="IrDiffTokenKind.Separator"/>.
-    /// These are the tokens that MUST NOT anchor the diff (else the LCS crowds on abundant spaces).</summary>
-    private static bool IsConnective(IrDiffToken t) =>
-        t.Kind == IrDiffTokenKind.Separator && string.IsNullOrWhiteSpace(t.Text);
-
-    /// <summary>True if any token is atomic (not a Word or Separator) — a note ref, image, tab,
-    /// break, opaque inline, or textbox. These carry coarse MatchKeys and must be paired in full
-    /// context (all-token anchoring), never content-anchored, or note/definition reject can break.</summary>
-    private static bool HasAtomic(IReadOnlyList<IrDiffToken> tokens)
+    /// <summary>True if any token is an object (<see cref="IrDiffToken.IsObject"/>) — a note ref, image,
+    /// opaque inline, or textbox. These carry coarse MatchKeys and must be paired in full context
+    /// (all-token anchoring), never content-anchored, or note/definition reject can break.</summary>
+    private static bool HasObject(IReadOnlyList<IrDiffToken> tokens)
     {
         foreach (var t in tokens)
-            if (t.Kind is not (IrDiffTokenKind.Word or IrDiffTokenKind.Separator))
+            if (t.IsObject)
                 return true;
         return false;
     }
@@ -177,12 +172,12 @@ internal static class IrTokenDiffer
     {
         var leftContent = new List<int>();
         for (int i = 0; i < left.Count; i++)
-            if (anchorAll || !IsConnective(left[i]))
+            if (anchorAll || !left[i].IsConnective)
                 leftContent.Add(i);
 
         var rightContent = new List<int>();
         for (int j = 0; j < right.Count; j++)
-            if (anchorAll || !IsConnective(right[j]))
+            if (anchorAll || !right[j].IsConnective)
                 rightContent.Add(j);
 
         var leftKeys = new string[leftContent.Count];
@@ -254,7 +249,7 @@ internal static class IrTokenDiffer
                     return (l, r);                       // end of both streams
                 if (l < 0 || r < 0 || l >= n || r >= m)
                     return (-1, -1);                     // one side ran out — no bridge
-                if (!IsConnective(left[l]) || !IsConnective(right[r]))
+                if (!left[l].IsConnective || !right[r].IsConnective)
                     return (l, r);
                 if (left[l].MatchKey != right[r].MatchKey)
                     return (-1, -1);
@@ -509,14 +504,14 @@ internal static class IrTokenDiffer
         int p = 0;
         while (p < leftLen && p < rightLen &&
                left[ls + p].MatchKey == right[rs + p].MatchKey &&
-               IsConnective(left[ls + p]))
+               left[ls + p].IsConnective)
             p++;
 
         // Common whitespace suffix from the ends, not overlapping the prefix on either side.
         int sfx = 0;
         while (p + sfx < leftLen && p + sfx < rightLen &&
                left[le - 1 - sfx].MatchKey == right[re - 1 - sfx].MatchKey &&
-               IsConnective(left[le - 1 - sfx]))
+               left[le - 1 - sfx].IsConnective)
             sfx++;
 
         // Equal prefix.

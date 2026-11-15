@@ -118,9 +118,9 @@ internal sealed class IrBlockSimilarity
     /// call; used by the junction pass's uniqueness discipline.</summary>
     public IReadOnlyDictionary<string, int> WordKeys(IrParagraph paragraph) => Bag(paragraph).WordCounts;
 
-    /// <summary>True when cached tokens contain only prose, without notes, images or other atoms.</summary>
-    public bool HasOnlyTextTokens(IrParagraph paragraph) => Bag(paragraph).Tokens
-        .All(token => token.Kind is IrDiffTokenKind.Word or IrDiffTokenKind.Separator);
+    /// <summary>True when cached tokens contain only text (tabs and breaks included), without notes, images or
+    /// other objects.</summary>
+    public bool HasOnlyTextTokens(IrParagraph paragraph) => !Bag(paragraph).Tokens.Any(token => token.IsObject);
 
     /// <summary>
     /// True when two prose paragraphs keep too little of each other, in order, to be drawn as one edited
@@ -137,9 +137,9 @@ internal sealed class IrBlockSimilarity
     /// together every chance match of a recurring short word, so two unrelated sentences sharing their articles
     /// and clause labels would clear the floor; the reference replaces those. This measure decides the pairing
     /// only; a pair kept in place is still rendered by <see cref="IrTokenDiffer"/>.</para>
-    /// <para>Paragraphs carrying notes, images or other atoms keep their pairing, since text length does not
+    /// <para>Paragraphs carrying notes, images or other objects keep their pairing, since text length does not
     /// measure them, as does a pair whose match would visit more than <see cref="RewriteMatchCellCap"/>
-    /// token cells.</para>
+    /// token cells. A tab or break is text, measured like a space (issue #1759).</para>
     /// </remarks>
     public bool IsRewrite(IrBlock left, IrBlock right)
     {

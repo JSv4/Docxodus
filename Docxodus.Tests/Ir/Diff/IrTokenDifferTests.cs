@@ -437,4 +437,93 @@ public class IrTokenDifferTests
         Assert.Contains(IrTokenOpKind.Insert, d.Ops.Select(o => o.Kind));
         Assert.Contains(IrTokenOpKind.Equal, d.Ops.Select(o => o.Kind));
     }
+
+    // --- tabs and breaks (issue #1759) -------------------------------------
+    //
+    // A reference compare treats a tab or a break like a space: it never anchors on one, and keeps one both
+    // sides share at the edge of a changed span. Only objects (note references, images) pair in full context.
+
+    private const string Tab = "<w:r><w:tab/></w:r>";
+    private const string LineBreak = "<w:r><w:br/></w:r>";
+    private const string PageBreak = "<w:r><w:br w:type=\"page\"/></w:r>";
+    private const string NoteRef = "<w:r><w:footnoteReference w:id=\"1\"/></w:r>";
+
+    private static string R(string text) => $"<w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r>";
+
+    private static IReadOnlyList<IrDiffToken> Tokens(string runsXml) => IrDiffTokenizer.Tokenize(
+        IrReader.Read(IrTestDocuments.FromBodyXml($"<w:p>{runsXml}</w:p>"), new IrReaderOptions { RetainSources = false })
+            .Body.Blocks.OfType<IrParagraph>().Single(), Default);
+
+    /// <summary>Each op as its kind and the text of the side it shows: "=" kept, "-" deleted, "+" inserted.</summary>
+    private static string[] Edits(string leftRuns, string rightRuns)
+    {
+        var (left, right) = (Tokens(leftRuns), Tokens(rightRuns));
+        string Text(IReadOnlyList<IrDiffToken> side, int start, int end) => string.Concat(side.Skip(start).Take(end - start)
+            .Select(t => t.Kind switch { IrDiffTokenKind.Tab => "\t", IrDiffTokenKind.Break => "\n", _ => t.Text }));
+        return Diff(left, right).Ops.Select(op => op.Kind == IrTokenOpKind.Insert
+            ? "+" + Text(right, op.RightStart, op.RightEnd)
+            : (op.Kind == IrTokenOpKind.Delete ? "-" : "=") + Text(left, op.LeftStart, op.LeftEnd)).ToArray();
+    }
+
+    [Theory]
+    [InlineData("", "", "", "")] // control: no tab or break
+    [InlineData(Tab, "", "\t", "")]
+    [InlineData("", Tab, "", "\t")]
+    [InlineData(LineBreak, "", "\n", "")]
+    [InlineData(PageBreak, "", "\n", "")]
+    public void Tab_or_break_leaves_a_replaced_phrase_one_deletion_and_one_insertion(
+        string before, string after, string kept, string keptAfter)
+    {
+        var edits = Edits(before + R("Every harbor pilot logs tide charts before noon.") + after,
+            before + R("Every harbor pilot checks wind gauges and buoy lamps before noon.") + after);
+
+        Assert.Equal(new[] { $"={kept}Every harbor pilot ", "-logs tide charts", "+checks wind gauges and buoy lamps",
+            $"= before noon.{keptAfter}" }, edits);
+    }
+
+    [Theory]
+    [InlineData("<w:r><w:t xml:space=\"preserve\"> </w:t></w:r>", " ")] // control: a space
+    [InlineData(Tab, "\t")]
+    [InlineData(LineBreak, "\n")]
+    [InlineData(PageBreak, "\n")]
+    public void Tab_or_break_between_changed_words_does_not_anchor(string joiner, string joinerText)
+    {
+        // No punctuation: the lone-punctuation rule would otherwise drop an isolated anchor on the tab too.
+        const string head = "The ship keeps its harbor log in the chart room ";
+        const string tail = " and the mate signs it every evening";
+        var edits = Edits(R(head + "alpha beta") + joiner + R("gamma delta" + tail),
+            R(head + "one two") + joiner + R("three four" + tail));
+
+        Assert.Equal(new[] { "=" + head, $"-alpha beta{joinerText}gamma delta", $"+one two{joinerText}three four",
+            "=" + tail }, edits);
+    }
+
+    [Fact]
+    public void Shared_tabs_at_the_edges_of_a_changed_column_are_kept()
+    {
+        var edits = Edits(R("Crate") + Tab + R("rope and twine") + Tab + R("12 kg"),
+            R("Crate") + Tab + R("steel cable spool") + Tab + R("12 kg"));
+
+        Assert.Equal(new[] { "=Crate\t", "-rope and twine", "+steel cable spool", "=\t12 kg" }, edits);
+    }
+
+    [Theory]
+    [InlineData(" ", "\t", new[] { "=alpha", "- ", "+\t", "=beta" })] // a space replaced by a tab
+    [InlineData(" ", "\t ", new[] { "=alpha", "+\t", "= beta" })]     // a tab inserted before a space
+    public void A_tab_that_is_the_edit_stays_visible(string leftJoin, string rightJoin, string[] expected)
+    {
+        string Runs(string join) => string.Concat(join.Select(c => c == '\t' ? Tab : R(c.ToString())));
+        Assert.Equal(expected, Edits(R("alpha") + Runs(leftJoin) + R("beta"), R("alpha") + Runs(rightJoin) + R("beta")));
+    }
+
+    [Fact]
+    public void Note_reference_still_pairs_in_full_context()
+    {
+        // Every note reference shares one key, so the differ keeps all-token anchoring around one; the spaces
+        // between changed words then anchor too. Unchanged by issue #1759.
+        var edits = Edits(NoteRef + R("Every harbor pilot logs tide charts before noon."),
+            NoteRef + R("Every harbor pilot checks wind gauges and buoy lamps before noon."));
+
+        Assert.Equal(3, edits.Count(e => e[0] == '-'));
+    }
 }

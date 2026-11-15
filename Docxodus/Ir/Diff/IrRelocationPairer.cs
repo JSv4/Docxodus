@@ -792,8 +792,7 @@ internal static class IrRelocationPairer
             var token = tokens[i];
             if (token.Kind == IrDiffTokenKind.Word)
                 words++;
-            if (token.Kind is IrDiffTokenKind.Image or IrDiffTokenKind.NoteRef or IrDiffTokenKind.Opaque or
-                IrDiffTokenKind.Textbox)
+            if (token.IsObject)
             {
                 if (space)
                     sb.Append(' ');

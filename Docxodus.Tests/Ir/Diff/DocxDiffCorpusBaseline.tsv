@@ -2,9 +2,9 @@
 # Revisions are the per-kind (kind, normalized-text) multiset: Kind|count|text, joined by two spaces.
 # Regenerate with DOCXODUS_REGEN_CORPUS_BASELINE=1; review the diff as an engine change.
 WC-BodyBookmarks-After -> WC-BodyBookmarks-Before	compat	#digest atoms[Inserted=1828,Deleted=2064,FormatChanged=86] sha256:733087a71fd3212ac67ddd2281820fa0629f3d01d2fa2d2de3615b4d6192d947
-WC-BodyBookmarks-After -> WC-BodyBookmarks-Before	fine	#digest atoms[Inserted=1889,Deleted=2091,FormatChanged=2763] sha256:db12034f73688c38819873c0010f8ffadf7201aba2b38210e1cb8e7f333857b2
+WC-BodyBookmarks-After -> WC-BodyBookmarks-Before	fine	#digest atoms[Inserted=1883,Deleted=2087,FormatChanged=2763] sha256:3373e60aa1e70a3c3c54abffc7fc64fb2e9f8220b42dc1c61a861c9930770502
 WC-BodyBookmarks-Before -> WC-BodyBookmarks-After	compat	#digest atoms[Inserted=2073,Deleted=1817,FormatChanged=86] sha256:d7450519fa7fee4b7495433ddc1b68825f091e561ccce9468ace9725eeb4105e
-WC-BodyBookmarks-Before -> WC-BodyBookmarks-After	fine	#digest atoms[Inserted=2111,Deleted=1862,FormatChanged=2763] sha256:7aea5f39dc1c4b9ac18af4bcd1817c69a1fd5bbcf98d548ddc621d403b97a55e
+WC-BodyBookmarks-Before -> WC-BodyBookmarks-After	fine	#digest atoms[Inserted=2106,Deleted=1858,FormatChanged=2763] sha256:2604c0637a83e82ff3648222b164a5b7bcfb0171f998cf9a6b722ef362439653
 WC001-Digits -> WC001-Digits-Deleted-Paragraph	compat	Deleted|1|12,34
 WC001-Digits -> WC001-Digits-Deleted-Paragraph	fine	Deleted|1|12,34
 WC001-Digits -> WC001-Digits-Mod	compat	Inserted|1|4  Inserted|1|st  Deleted|1|34  Deleted|1|Test

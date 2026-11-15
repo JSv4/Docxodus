@@ -192,9 +192,9 @@ internal static class IrSplitSegmenter
             int j = i;                                   // tokens [j..i) move into segment `seg`
             int k = partner[i];                          // flat counterpart cursor (exclusive)
             while (j - 1 >= 0 && segmentOf[j - 1] < seg &&
-                   IsConnective(single[j - 1]) &&
+                   single[j - 1].IsConnective &&
                    k - 1 >= 0 && memberOfFlat[k - 1] == memberOfFlat[partner[i]] &&
-                   IsConnective(flat[k - 1]) &&
+                   flat[k - 1].IsConnective &&
                    single[j - 1].MatchKey == flat[k - 1].MatchKey)
             {
                 j--;
@@ -209,11 +209,11 @@ internal static class IrSplitSegmenter
                 segmentOf[t] = seg;
         }
 
-        // Lone-punctuation suppression precondition: every source paragraph is plain direct text
+        // Lone-punctuation suppression precondition: every source paragraph is plain text
         // (the split/merge lowering already excludes field carriers, but hyperlinks/atomics pass it).
-        bool plain = IrCrossParagraphSegmenter.IsStreamable(singular);
+        bool plain = IrCrossParagraphSegmenter.IsPlainText(singular);
         foreach (var member in run)
-            plain &= IrCrossParagraphSegmenter.IsStreamable(member);
+            plain &= IrCrossParagraphSegmenter.IsPlainText(member);
 
         var diffs = new List<IrTokenDiff>(run.Count);
         int cursor = 0;
@@ -257,11 +257,6 @@ internal static class IrSplitSegmenter
 
     private static bool IsContent(IrDiffToken t) =>
         t.Kind is not (IrDiffTokenKind.Separator or IrDiffTokenKind.Textbox);
-
-    /// <summary>Connective whitespace — the tokens that re-pair across a moved segment boundary
-    /// (same definition as <c>IrTokenDiffer.IsConnective</c>).</summary>
-    private static bool IsConnective(IrDiffToken t) =>
-        t.Kind == IrDiffTokenKind.Separator && string.IsNullOrWhiteSpace(t.Text);
 
     private static int CountContent(IReadOnlyList<IrDiffToken> tokens)
     {
