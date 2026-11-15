@@ -20,7 +20,7 @@ function repoFileFor(url) {
   if (url.startsWith(RAW)) return url.slice(RAW.length);
   if (url.startsWith(SITE)) {
     const path = url.slice(SITE.length);
-    return join('docs', path === '' || path.endsWith('/') ? `${path}index.html` : path);
+    return `docs/${path === '' || path.endsWith('/') ? `${path}index.html` : path}`;
   }
   return null;
 }
@@ -182,6 +182,11 @@ test('the MCP server manifest describes the package the release publishes', () =
   assert.match(manifest.name, /^io\.github\.JSv4\/[a-z0-9._-]+$/);
   assert.ok(manifest.description.length <= 100, `description is ${manifest.description.length} characters`);
 
+  // The registry verifies a NuGet server by finding this line in the package README, which
+  // each release freezes into its package.
+  assert.ok(read('tools/mcp-server/README.md').includes(`<!-- mcp-name: ${manifest.name} -->`),
+    'the package README does not claim the registry name');
+
   // Release versions are stamped at pack time; a real one checked in would go stale.
   assert.equal(manifest.version, '0.0.0');
   assert.equal(entry.version, '0.0.0');
@@ -201,5 +206,7 @@ test('the release and CI workflows both pack the MCP server through one script',
   const call = /run: \.\/scripts\/pack-mcp-server\.sh \S+ \S+/;
   assert.match(read('.github/workflows/publish.yml'), call, 'publish.yml does not publish the MCP server');
   assert.match(read('.github/workflows/ci.yml'), call, 'ci.yml does not exercise the MCP packaging');
+  assert.match(read('.github/workflows/publish.yml'), /dotnet nuget push [^\n]*\\\n\s*\|\| \{/,
+    'one refused package stops the push loop before the packages after it');
   assert.ok(existsSync(join(repoRoot, 'scripts/pack-mcp-server.sh')));
 });

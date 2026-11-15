@@ -1,5 +1,8 @@
 # docxodus-mcp
 
+<!-- The MCP registry verifies ownership of a NuGet server by finding the next line in its package README. -->
+<!-- mcp-name: io.github.JSv4/docxodus -->
+
 A Model Context Protocol (MCP) server that lets AI agents open, read, and edit `.docx`
 files through Docxodus's `DocxSession` editing engine. Runs entirely locally over stdio —
 no network calls, no telemetry, nothing leaves the machine it runs on.

@@ -113,11 +113,16 @@ jobs:
         with:
           user: JSv4
 
+      # One refused package (say, a new package id the trusted-publishing policy does not cover)
+      # must not stop the packages after it. The job still fails, and a re-run skips duplicates.
       - name: Publish NuGet packages
         run: |
+          failed=0
           for package in ./artifacts/*.nupkg; do
-            dotnet nuget push "$package" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate --timeout 600
+            dotnet nuget push "$package" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate --timeout 600 \
+              || { echo "::error::NuGet did not accept $package"; failed=1; }
           done
+          exit "$failed"
 
   # Build self-contained executables for releases
   build-binaries:
