@@ -162,6 +162,36 @@ public class StrictOoxmlNormalizerValueTests
     }
 
     [Fact]
+    public void A_strict_part_in_a_transitional_package_is_converted_alone()
+    {
+        var chart =
+            $"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><c:chartSpace xmlns:c=\"{StrictC}\" xmlns:a=\"{StrictA}\">" +
+            "<c:chart><c:plotArea><c:barChart><c:ser><c:spPr><a:solidFill><a:srgbClr val=\"5B9BD5\"><a:lumMod val=\"75%\"/></a:srgbClr>" +
+            "</a:solidFill></c:spPr></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>";
+        // The transitional document names the Strict chart namespace in its text; only a part whose own
+        // root is Strict converts, so the document is left exactly as it was.
+        var document = Document("<w:p><w:r><w:t>Charts here use " + StrictC + ".</w:t></w:r></w:p>", strict: false);
+        var package = Package(document, false, ("word/charts/chart1.xml", chart));
+
+        var chartDoc = Normalized(package, "word/charts/chart1.xml");
+        Assert.Equal(XName.Get("chartSpace", "http://schemas.openxmlformats.org/drawingml/2006/chart"), chartDoc.Root!.Name);
+        Assert.Equal("75000", (string?)chartDoc.Descendants(A + "lumMod").Single().Attribute("val"));
+        using var zip = new ZipArchive(new MemoryStream(StrictOoxmlNormalizer.NormalizeToTransitional(package)), ZipArchiveMode.Read);
+        using var reader = new StreamReader(zip.GetEntry("word/document.xml")!.Open());
+        Assert.Equal(document, reader.ReadToEnd());
+    }
+
+    [Fact]
+    public void Each_part_is_read_no_further_than_a_root_start_tag_runs()
+    {
+        // Every part of every package is sniffed before the depth door, so the sniff is bounded: a
+        // root start tag padded past any real one is not read to its end, and the part is left as is.
+        var padded = $"<c:chartSpace xmlns:c=\"{StrictC}\" pad=\"{new string('x', 1 << 21)}\"/>";
+        var package = Package(Document("<w:p/>", strict: false), false, ("word/charts/chart1.xml", padded));
+        Assert.Same(package, StrictOoxmlNormalizer.NormalizeToTransitional(package));
+    }
+
+    [Fact]
     public void Text_that_looks_like_a_percentage_is_left_alone()
     {
         var body =

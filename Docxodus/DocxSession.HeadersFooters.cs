@@ -788,8 +788,7 @@ public sealed partial class DocxSession
         var pgSz = sectPr.Element(W.pgSz);
         var pgMar = sectPr.Element(W.pgMar);
         static int Read(XElement? e, XName attr, int fallback) =>
-            int.TryParse((string?)e?.Attribute(attr), System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
+            WordprocessingMLUtil.TryAttributeToTwips(e?.Attribute(attr)) ?? fallback;
 
         int curWidth = Read(pgSz, W._w, 12240);
         int curHeight = Read(pgSz, W.h, 15840);

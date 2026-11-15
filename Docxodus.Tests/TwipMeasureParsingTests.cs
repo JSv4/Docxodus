@@ -32,6 +32,8 @@ public class TwipMeasureParsingTests
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
             Assert.Equal(expected, WordprocessingMLUtil.StringToTwips(value));
             Assert.Equal(expected, WordprocessingMLUtil.AttributeToTwips(new XAttribute(W.pos, value)));
+            // Readers that fall back on an unreadable value read the same measures (issue #1764).
+            Assert.Equal(expected, WordprocessingMLUtil.TryAttributeToTwips(new XAttribute(W.pos, value)));
         }
         finally { CultureInfo.CurrentCulture = original; }
     }
@@ -44,15 +46,21 @@ public class TwipMeasureParsingTests
     [InlineData("Infinity")]
     [InlineData("2e3")]
     [InlineData("")]
-    public void MalformedTwipsRemainInvalid(string value) =>
+    public void MalformedTwipsRemainInvalid(string value)
+    {
         Assert.Throws<FormatException>(() => WordprocessingMLUtil.StringToTwips(value));
+        Assert.Null(WordprocessingMLUtil.TryStringToDecimalTwips(value));
+    }
 
     [Theory]
     [InlineData("2147483648")]
     [InlineData("-2147483649")]
     [InlineData("107374182.4pt")]
-    public void IntegerConsumersKeepTheirRangeChecks(string value) =>
+    public void IntegerConsumersKeepTheirRangeChecks(string value)
+    {
         Assert.Throws<OverflowException>(() => WordprocessingMLUtil.StringToTwips(value));
+        Assert.Null(WordprocessingMLUtil.TryAttributeToTwips(new XAttribute(W.pos, value)));
+    }
 
     [Theory]
     [InlineData("4", 4)]

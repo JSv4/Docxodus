@@ -212,7 +212,7 @@ public sealed partial class DocxSession
     {
         var tcW = properties?.Element(W.tcW);
         if (tcW is null || (string?)tcW.Attribute(W.type) != "dxa") return;
-        tcW.SetAttributeValue(W._w, Math.Max(0, ((int?)tcW.Attribute(W._w) ?? 0) + delta));
+        tcW.SetAttributeValue(W._w, Math.Max(0, (WordprocessingMLUtil.AttributeToTwips(tcW.Attribute(W._w)) ?? 0) + delta));
     }
 
     private static void SetRowGridOmissionProperty(XElement? properties, XName name, int value)

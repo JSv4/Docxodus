@@ -179,7 +179,7 @@ internal static class FormattingIntrospectionOps
         var ind = pPr?.Element(W.ind);
         var spacing = pPr?.Element(W.spacing);
         var alignment = ParseAlignment((string?)pPr?.Element(W.jc)?.Attribute(W.val));
-        var line = ReadIntAttribute(spacing?.Attribute(W.line));
+        var line = ReadTwipsAttribute(spacing?.Attribute(W.line));
         var lineRule = ParseLineSpacingRule((string?)spacing?.Attribute(W.lineRule));
 
         var value = new ParagraphFormatting
@@ -187,12 +187,12 @@ internal static class FormattingIntrospectionOps
             StyleId = effectiveStyleId
                 ?? (string?)pPr?.Element(W.pStyle)?.Attribute(W.val),
             Alignment = alignment,
-            LeftIndentTwips = ReadIntAttribute(WordprocessingMLUtil.IndLeadingAttribute(ind)),
-            RightIndentTwips = ReadIntAttribute(WordprocessingMLUtil.IndTrailingAttribute(ind)),
-            FirstLineIndentTwips = ReadIntAttribute(ind?.Attribute(W.firstLine)),
-            HangingIndentTwips = ReadIntAttribute(ind?.Attribute(W.hanging)),
-            SpacingBeforeTwips = ReadIntAttribute(spacing?.Attribute(W.before)),
-            SpacingAfterTwips = ReadIntAttribute(spacing?.Attribute(W.after)),
+            LeftIndentTwips = ReadTwipsAttribute(WordprocessingMLUtil.IndLeadingAttribute(ind)),
+            RightIndentTwips = ReadTwipsAttribute(WordprocessingMLUtil.IndTrailingAttribute(ind)),
+            FirstLineIndentTwips = ReadTwipsAttribute(ind?.Attribute(W.firstLine)),
+            HangingIndentTwips = ReadTwipsAttribute(ind?.Attribute(W.hanging)),
+            SpacingBeforeTwips = ReadTwipsAttribute(spacing?.Attribute(W.before)),
+            SpacingAfterTwips = ReadTwipsAttribute(spacing?.Attribute(W.after)),
             LineSpacing = line,
             LineSpacingRule = line is null ? null : lineRule ?? LineSpacingRule.Auto,
             KeepNext = ReadOnOffElement(pPr?.Element(W.keepNext)),
@@ -280,10 +280,10 @@ internal static class FormattingIntrospectionOps
         var width = tblPr?.Element(W.tblW);
         var indent = tblPr?.Element(W.tblInd);
         var widthTwips = string.Equals((string?)width?.Attribute(W.type), "dxa", StringComparison.Ordinal)
-            ? ReadIntAttribute(width?.Attribute(W._w))
+            ? ReadTwipsAttribute(width?.Attribute(W._w))
             : null;
         var indentTwips = string.Equals((string?)indent?.Attribute(W.type), "dxa", StringComparison.Ordinal)
-            ? ReadIntAttribute(indent?.Attribute(W._w))
+            ? ReadTwipsAttribute(indent?.Attribute(W._w))
             : null;
         return new TableStyleFormatting
         {
@@ -336,6 +336,9 @@ internal static class FormattingIntrospectionOps
         int.TryParse((string?)attribute, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
             ? value
             : null;
+
+    // A twips measure may also be written as a universal measure ("36pt"), as a Strict save writes it.
+    private static int? ReadTwipsAttribute(XAttribute? attribute) => WordprocessingMLUtil.TryAttributeToTwips(attribute);
 
     private static bool? ReadOnOffElement(XElement? element)
     {
