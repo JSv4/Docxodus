@@ -5,7 +5,8 @@ conversion round-trip — a real OOXML engine compiled to WebAssembly, wrapped i
 
 It is an ordinary JavaScript package: ES modules you `import`, functions that take a `File` or
 `Uint8Array` and return promises, and type definitions in the box. It runs in the browser and in
-Node, works with any bundler or none, and needs no .NET install — the WebAssembly is an
+Node, works with your bundler (or, for the editor, from a single CDN bundle with none), and needs
+no .NET install — the WebAssembly is an
 implementation detail you never touch.
 
 ```bash
