@@ -180,7 +180,13 @@ du -sh "$WASM_DIST"
 # the budget of their own branch, the three together measured 6,068,407 bytes on CI, 2,231
 # bytes over 5924 KiB; another 4 KiB covers it. Assembly roots, dependencies and the AOT
 # profile are unchanged.
-WIRE_BUDGET_BYTES=$((5928 * 1024))
+# The Strict value conversion (#1758) adds 5,417 bytes, all of it in Docxodus.wasm (+7 KiB
+# raw for the percentage table and its methods; no framework assembly changed size), measured
+# by two local builds that differ only in that change. With the section pairing of #1757 also
+# merged, CI runners measured the payload at 6,069,718 to 6,072,589 bytes, up to 2,317 over
+# 5928 KiB. 8 KiB more covers that spread between runners. Assembly roots, dependencies and
+# the AOT profile are unchanged.
+WIRE_BUDGET_BYTES=$((5936 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""
