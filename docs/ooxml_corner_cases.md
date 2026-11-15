@@ -5413,6 +5413,7 @@ The input ends with a retained section. This schema-valid markup produces differ
 | Docxodus `RevisionProcessor.RejectRevisions` | Removes the inserted paragraph and its boundary; one section remains. |
 | LibreOffice 25.8.7.3 | Keeps an empty boundary paragraph and two sections, with extra running-story bindings. |
 | Word Online, Playwright UI Reject All Changes | Keeps an empty first section and blank first PDF page. The downloaded DOCX has two sections and no insertion/deletion markers. |
+| Word 2024 desktop (16.0.20326), `Revisions.RejectAll` on every story range by COM | On a Docxodus redline of the same shape (#1757: two inserted opening sections, then twelve deleted ones, 2026-11-14), removes both inserted boundaries; the twelve original sections remain, each under its own restored header, with no empty first section. |
 
 This is evidence about the authored markup, not native Word Compare output. An inserted
 paragraph mark is insufficient to claim native section-boundary reversibility. The #1534
@@ -5422,6 +5423,32 @@ paragraph on rejection. No native-boundary fix is claimed here. The independent 
 keeps exact package endpoints and review-story text mandatory, and explicitly excludes the
 two LibreOffice rejection measurements that fail authored calibration. See the
 [authored fixtures and native capture evidence](https://github.com/JSv4/docx-fidelity-bench/tree/main/docs/results/inserted-section-stories).
+
+### A deleted section keeps its own header unchanged in a comparison
+
+Issue #1757 (2026-11-14). The original has three sections, each with its own default header
+(`Quarry ledger 1`…`3`); the revision replaces the whole body with two sections of unrelated text,
+each with its own header (`Kiln register 1`, `2`), so the comparison deletes section breaks and
+inserts others:
+
+```xml
+<!-- original: three bodies like this, each sectPr naming its own header part -->
+<w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="rQuarry1"/>…</w:sectPr></w:pPr>
+  <w:r><w:t>Masons split granite blocks at the northern quarry face…</w:t></w:r></w:p>
+```
+
+| Engine | Header of a section that holds only deleted text | After Reject All |
+| --- | --- | --- |
+| Word 2024 desktop (16.0.20326), `Application.CompareDocuments`, headers compared | The original section's header, with no revision marks | Every original header in place |
+| Docxodus before the fix | The next original section's header, beside the revision's last header (fields included) | Sections 1–2 under the headers of sections 2–3 |
+| Docxodus after the fix | The original section's header, unchanged | Every original header in place |
+
+A section that holds only deleted text disappears on accept, so its header has nothing to change
+to: only reject reads it. `IrEditScriptBuilder.BuildOneHeaderFooterScope` therefore pairs such a
+review section with no revised story at all. It shares the output of any pair that already holds
+the same original story (whose rejected text is that story), or else keeps the original's part
+unchanged, rather than marking the story deleted. Marking it deleted would need a copy of the part
+whenever another section shares it.
 
 ## Contributing
 
