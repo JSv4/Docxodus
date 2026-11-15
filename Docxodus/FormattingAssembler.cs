@@ -195,19 +195,9 @@ namespace Docxodus
                     continue;
                 if (cnfStyle.Attribute(W.val) == null)
                     continue;
-                var va = cnfStyle.Attribute(W.val)!.Value.ToArray();
-                cnfStyle.Add(new XAttribute(W.firstRow, va[0]));
-                cnfStyle.Add(new XAttribute(W.lastRow, va[1]));
-                cnfStyle.Add(new XAttribute(W.firstColumn, va[2]));
-                cnfStyle.Add(new XAttribute(W.lastColumn, va[3]));
-                cnfStyle.Add(new XAttribute(W.oddVBand, va[4]));
-                cnfStyle.Add(new XAttribute(W.evenVBand, va[5]));
-                cnfStyle.Add(new XAttribute(W.oddHBand, va[6]));
-                cnfStyle.Add(new XAttribute(W.evenHBand, va[7]));
-                cnfStyle.Add(new XAttribute(W.firstRowLastColumn, va[8]));
-                cnfStyle.Add(new XAttribute(W.firstRowFirstColumn, va[9]));
-                cnfStyle.Add(new XAttribute(W.lastRowLastColumn, va[10]));
-                cnfStyle.Add(new XAttribute(W.lastRowFirstColumn, va[11]));
+                var va = cnfStyle.Attribute(W.val)!.Value;
+                for (var i = 0; i < W.CnfStyleValFlags.Length; i++)
+                    cnfStyle.Add(new XAttribute(W.CnfStyleValFlags[i], va[i]));
             }
         }
 

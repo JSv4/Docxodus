@@ -9321,3 +9321,75 @@ CSS then spreads a fixed table's width over the columns that remain in proportio
 **Tests.** `TableHorizontalPlacementTests` (`Columns_no_own_row_reaches_leave_the_grid`,
 `A_trailing_column_another_own_row_reaches_stays_in_the_grid`) and
 `npm/tests/export-table-unused-columns.spec.ts`.
+
+## Strict and Transitional write some values differently (#1758)
+
+A Strict package is not a Transitional package with other namespace URIs. Two kinds of value are
+spelled differently in the two conformance classes, and `StrictOoxmlNormalizer` used to rewrite only
+the URIs:
+
+```xml
+<!-- Strict, as the Strict save writes it -->
+<w:cnfStyle w:firstRow="1" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:oddVBand="0"
+            w:evenVBand="0" w:oddHBand="0" w:evenHBand="0" w:firstRowFirstColumn="0"
+            w:firstRowLastColumn="0" w:lastRowFirstColumn="0" w:lastRowLastColumn="0"/>
+<a:schemeClr val="accent1"><a:lumMod val="50%"/></a:schemeClr>
+<wp14:pctWidth>40%</wp14:pctWidth>
+
+<!-- Transitional, as the Transitional save writes the same content -->
+<w:cnfStyle w:val="100000000000" w:firstRow="1" … w:lastRowLastColumn="0"/>
+<a:schemeClr val="accent1"><a:lumMod val="50000"/></a:schemeClr>
+<wp14:pctWidth>40000</wp14:pctWidth>
+```
+
+Word 2024 (16.0.20326, Windows) saved the same documents both ways (`SaveAs2` with formats 24 and 12):
+a styled table, two charts, a gradient-filled shape with shadow, glow and reflection, a shape sized
+and placed relative to the margin, text with glow, shadow and reflection, and a picture with
+brightness, contrast, saturation and sharpen corrections. LibreOffice was not available for this check.
+
+| Value | Strict | Transitional | Docxodus before the fix |
+| --- | --- | --- | --- |
+| DrawingML percentages in `a:` (colour transforms, `a:gs/@pos`, `a:miter/@lim`, `a:defRPr/@baseline`, `a:scrgbClr`, `a:reflection`, `a:lum` brightness and contrast) | `50%`, `-38%`, `12.5%` | `50000`, `-38000`, `12500` | Strict form copied through |
+| The same types in Office 2010 extensions: `a14:sharpenSoften/@amount`, `wp14:pctWidth` and its siblings, `cs:defRPr/@baseline` | `100%`, `40%` | `100000`, `40000` | copied through |
+| `w14` text effects (`w14:alpha`, `w14:gs/@w14:pos`, `w14:reflection`) | `35000` | `35000` | unchanged, correctly |
+| Chart values (`c:gapWidth`, `c:overlap`, `c:holeSize`) | `219`, `-27`, `75` | the same | unchanged, correctly |
+| `w:cnfStyle` | the twelve flags | `w:val` and the twelve flags | no `w:val` |
+| `w:zoom/@w:percent` | `100%` | `100` | copied through; valid in both |
+| Twips measures (`w:pgSz`, `w:pgMar`, `w:tcW`, `w:tblInd`, `w:defaultTabStop`, …) | `612pt`, `5.40pt` | `12240`, `108` | copied through; **not fixed**, see below |
+
+The Open XML SDK validator (`FileFormatVersions.Microsoft365`) types the DrawingML percentages as
+integers and requires `w:cnfStyle/@w:val`, so a redline of two valid Strict documents failed
+validation: the issue's pair gave six errors, and a Strict document with a theme, two charts and a
+table gave 276, nearly all percentages. Word opens such a redline and reads `50%` where it expects
+`50000`, but Docxodus's own shape renderer did not: `WmlToHtmlConverter.Shapes` parses `a:lumMod`
+as a number and dropped `50%`, so a darkened Strict shape was drawn at full brightness.
+
+**`w:val` order.** The twelve `w:val` digits do not follow the order the corner attributes are
+declared in. A table style that shades each corner cell differently, saved as Transitional, writes
+the top-left cell as `001000000100` and the top-right as `000100001000`: digits 9 to 12 are the
+top-right, top-left, bottom-right and bottom-left cells (`firstRowLastColumn`, `firstRowFirstColumn`,
+`lastRowLastColumn`, `lastRowFirstColumn`), the cell-mask order of ST_Cnf. `FormattingAssembler`
+already read `w:val` in that order.
+
+**Fix.** `StrictOoxmlNormalizer.RewriteTree` parses each Strict part once, after the URI
+substitution, and runs both tree rewrites on it: the existing shape-namespace unfold and
+`ConvertStrictValues`. `PercentageAttributes` lists, by element, every attribute whose type is one of
+DrawingML's percentage types (ST_Percentage, ST_PositivePercentage, ST_FixedPercentage,
+ST_PositiveFixedPercentage, and the text spacing, font scale and bullet size types built on them).
+It is drawn from the ISO/IEC 29500-4 DrawingML schema and from the Open XML SDK's ranges for the a14
+picture effects. Each value ending in `%` becomes thousandths, rounded half away from zero. A value
+with no `%` is already Transitional and is left alone, and so is free text that reads like a
+percentage (`descr`, `tooltip`, `c:numFmt/@formatCode="0%"`), because only the listed attributes are
+read. The `wp14` relative size and position elements get the same conversion to their text. A
+`w:cnfStyle` without `w:val` gains one, spelled from its flags in `W.CnfStyleValFlags` order, which
+`FormattingAssembler` now uses too.
+
+**Not fixed: universal measures.** The Strict save writes every twips measure as a universal measure
+(`w:pgSz w:w="612pt"`, `w:tcW w:w="156pt"`, `w:tblInd w:w="5.40pt"`), and the validator rejects these
+in Transitional: 33 errors remain on the Strict document above once the percentages are converted.
+Docxodus's own readers that go through `AttributeToTwips` (`PtOpenXmlUtil`) accept the units;
+converting them for the package is a separate change. The SmartArt diagram attributes (`dgm:prSet/@custScaleX` and its siblings, `ST_PrSetCustVal`)
+are typed as integers by the SDK, but the Strict save of a resized SmartArt node could not be captured
+by COM, so they are not converted.
+
+Tests: `StrictOoxmlNormalizerValueTests`.

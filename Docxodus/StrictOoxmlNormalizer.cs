@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -154,7 +155,7 @@ internal static class StrictOoxmlNormalizer
                 rewritten = rewritten
                     .Replace(" w:conformance=\"strict\"", string.Empty, StringComparison.Ordinal)
                     .Replace(" conformance=\"strict\"", string.Empty, StringComparison.Ordinal);
-                rewritten = UnfoldGraphicDataNamespaces(rewritten);
+                rewritten = RewriteTree(rewritten);
 
                 using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
                 writer.BaseStream.SetLength(0);
@@ -171,6 +172,123 @@ internal static class StrictOoxmlNormalizer
     private static readonly XName TransitionalWDrawing =
         XName.Get("drawing", "http://schemas.openxmlformats.org/wordprocessingml/2006/main");
     private const string Ms2010WpPrefix = "http://schemas.microsoft.com/office/word/2010/wordprocessing";
+    private static readonly XNamespace ChartStyle = "http://schemas.microsoft.com/office/drawing/2012/chartStyle";
+
+    /// <summary>
+    /// The rewrites the flat URI substitution cannot make, because they need the part's tree: the
+    /// shape-namespace fold and the values Strict writes in a form transitional does not have. A part
+    /// that is not well-formed, or nests too deep, is left to the package's own depth measurement.
+    /// </summary>
+    private static string RewriteTree(string xml)
+    {
+        XDocument doc;
+        try
+        {
+            // Depth-limited: the recursive re-homing must not meet a deeper tree, and this entry may be
+            // one the read step never measured; the package is measured again afterwards.
+            doc = Internal.DepthLimitedXmlReader.Parse(xml, LoadOptions.PreserveWhitespace);
+        }
+        catch (System.Xml.XmlException)
+        {
+            return xml;
+        }
+        if (!(UnfoldGraphicDataNamespaces(doc) | ConvertStrictValues(doc)))
+            return xml;
+        // StringWriter reports UTF-16, which XDocument.Save stamps into the XML declaration — but
+        // the entry is written as UTF-8, making the SDK's reader refuse the part ("There is no
+        // Unicode byte order mark"). Declare UTF-8 explicitly.
+        using var sw = new Utf8StringWriter();
+        doc.SaveLf(sw, SaveOptions.DisableFormatting);
+        return sw.ToString();
+    }
+
+    /// <summary>
+    /// The attributes of DrawingML's percentage types (ST_Percentage, ST_PositivePercentage,
+    /// ST_FixedPercentage, ST_PositiveFixedPercentage and the text spacing, font scale and bullet size
+    /// types built on them), by element: the DrawingML main schema, the Office 2010 drawing extensions
+    /// (a14) and the chart style part. Keyed by element, so free text that reads like a percentage
+    /// (a description, a tooltip, a number format of "0%") is never touched.
+    /// </summary>
+    private static readonly ILookup<XName, XName> PercentageAttributes = new (XNamespace Ns, string Attributes, string Elements)[]
+    {
+        (A.a, "val", "alpha alphaMod alphaOff blue blueMod blueOff buSzPct green greenMod greenOff hueMod lum lumMod lumOff " +
+                     "red redMod redOff sat satMod satOff shade spcPct tint"),
+        (A.a, "l t r b", "fillRect fillToRect srcRect tileRect"),
+        (A.a, "r g b", "scrgbClr"),
+        (A.a, "sat lum", "hsl hslClr"),
+        (A.a, "sx sy", "outerShdw reflection tile xfrm"),
+        (A.a, "stA stPos endA endPos", "reflection"),
+        (A.a, "baseline", "defRPr endParaRPr rPr"),
+        (A.a, "bright contrast", "lum"),
+        (A.a, "thresh", "alphaBiLevel biLevel"),
+        (A.a, "a", "alphaRepl"),
+        (A.a, "amt", "alphaModFix tint"),
+        (A.a, "d sp", "ds"),
+        (A.a, "lim", "miter"),
+        (A.a, "pos", "gs"),
+        (A.a, "tx ty", "relOff"),
+        (A.a, "zoom", "camera"),
+        (A.a, "fontScale lnSpcReduction", "normAutofit"),
+        (ChartStyle, "baseline", "defRPr"),
+        (A14.a14, "bright contrast", "brightnessContrast"),
+        (A14.a14, "sat", "saturation"),
+        (A14.a14, "amount", "sharpenSoften"),
+        (A14.a14, "t b l r", "backgroundRemoval"),
+        (A14.a14, "x1 y1 x2 y2", "foregroundMark backgroundMark"),
+        (A14.a14, "trans", "artisticBlur artisticCement artisticChalkSketch artisticCrisscrossEtching artisticCutout " +
+                           "artisticFilmGrain artisticGlass artisticGlowDiffused artisticGlowEdges artisticLightScreen " +
+                           "artisticLineDrawing artisticMarker artisticMosiaicBubbles artisticPaintBrush artisticPaintStrokes " +
+                           "artisticPastelsSmooth artisticPencilGrayscale artisticPencilSketch artisticPhotocopy " +
+                           "artisticPlasticWrap artisticTexturizer artisticWatercolorSponge"),
+    }.SelectMany(row => row.Elements.Split(' ').SelectMany(element =>
+        row.Attributes.Split(' ').Select(attribute => (Element: row.Ns + element, Attribute: (XName)attribute))))
+    .ToLookup(p => p.Element, p => p.Attribute);
+
+    /// <summary>The relative size and position elements whose text is a DrawingML percentage.</summary>
+    private static readonly XName[] PercentageText =
+        { WP14.pctWidth, WP14.pctHeight, WP14.wp14 + "pctPosHOffset", WP14.pctPosVOffset };
+
+    /// <summary>
+    /// Rewrites the values Strict writes in a form transitional does not have: a DrawingML percentage
+    /// ("50%") becomes thousandths of a percent ("50000"), and a <c>w:cnfStyle</c>, which in Strict
+    /// carries only its flags, gains the <c>w:val</c> transitional requires, spelled from those flags.
+    /// A value already in its transitional form is left as it is.
+    /// </summary>
+    private static bool ConvertStrictValues(XDocument doc)
+    {
+        var changed = false;
+        foreach (var element in doc.Descendants().ToList())
+        {
+            foreach (var attribute in PercentageAttributes[element.Name].Select(element.Attribute).OfType<XAttribute>())
+            {
+                if (Thousandths(attribute.Value) is not { } value) continue;
+                attribute.Value = value;
+                changed = true;
+            }
+            if (PercentageText.Contains(element.Name) && !element.HasElements && Thousandths(element.Value) is { } text)
+            {
+                element.Value = text;
+                changed = true;
+            }
+            if (element.Name == W.cnfStyle && element.Attribute(W.val) is null)
+            {
+                // Strict's ST_OnOff is xsd:boolean, so a flag is on when it is "1" or "true".
+                var val = string.Concat(W.CnfStyleValFlags.Select(flag => (string?)element.Attribute(flag) is "1" or "true" ? '1' : '0'));
+                element.ReplaceAttributes(new XAttribute(W.val, val), element.Attributes().ToList());
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    /// <summary>"50%" as thousandths of a percent ("50000", "-12.5%" as "-12500"); null for a value that
+    /// is not a percentage or does not fit the transitional types' integer range.</summary>
+    private static string? Thousandths(string value) =>
+        value.EndsWith('%') && decimal.TryParse(value.AsSpan(0, value.Length - 1),
+            NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var percent)
+        && Math.Abs(percent) <= int.MaxValue / 1000m
+            ? ((int)Math.Round(percent * 1000m, MidpointRounding.AwayFromZero)).ToString(CultureInfo.InvariantCulture)
+            : null;
 
     /// <summary>
     /// Un-fold Word's strict-save namespace fold: strict packages write MS-2010
@@ -182,21 +300,8 @@ internal static class StrictOoxmlNormalizer
     /// nested <c>w:drawing</c> boundaries (a drawing inside a <c>wps:txbx</c> keeps its own genuine
     /// wpDrawing container elements).
     /// </summary>
-    private static string UnfoldGraphicDataNamespaces(string xml)
+    private static bool UnfoldGraphicDataNamespaces(XDocument doc)
     {
-        if (!xml.Contains("graphicData", StringComparison.Ordinal))
-            return xml;
-        XDocument doc;
-        try
-        {
-            // Depth-limited: the recursive re-homing below must not meet a deeper tree, and this entry
-            // may be one the read step never measured; the package is measured again afterwards.
-            doc = Internal.DepthLimitedXmlReader.Parse(xml, LoadOptions.PreserveWhitespace);
-        }
-        catch (System.Xml.XmlException)
-        {
-            return xml;
-        }
         bool changed = false;
         foreach (var graphicData in doc.Descendants(TransitionalA + "graphicData"))
         {
@@ -220,14 +325,7 @@ internal static class StrictOoxmlNormalizer
             }
             Rehome(graphicData);
         }
-        if (!changed)
-            return xml;
-        // StringWriter reports UTF-16, which XDocument.Save stamps into the XML declaration — but
-        // the entry is written as UTF-8, making the SDK's reader refuse the part ("There is no
-        // Unicode byte order mark"). Declare UTF-8 explicitly.
-        using var sw = new Utf8StringWriter();
-        doc.SaveLf(sw, SaveOptions.DisableFormatting);
-        return sw.ToString();
+        return changed;
     }
 
     private sealed class Utf8StringWriter : StringWriter
