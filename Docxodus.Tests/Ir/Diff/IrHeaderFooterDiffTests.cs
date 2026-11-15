@@ -338,6 +338,32 @@ public class IrHeaderFooterDiffTests
     }
 
     [Fact]
+    public void Builder_pairs_mixed_boundary_sections_with_the_sections_their_content_came_from()
+    {
+        // Issue #1757. No paragraph is shared, so the review body is the right's two sections (one inserted
+        // boundary) followed by the left's three (two deleted boundaries): the review sections hold
+        // [R0], [R1 + L0], [L1], [L2]. Each pairs the stories of the sections it holds, not of its ordinal;
+        // [L1] disappears on accept, so it keeps L1's story unchanged and is only bound to it.
+        HeaderFooterFixtures.Section[] Sections(string text, int count) => Enumerable.Range(0, count)
+            .Select(i => new HeaderFooterFixtures.Section(new[] { string.Format(text, i) }, Headers: new[] { ("default", $"rId{i}") }))
+            .ToArray();
+        Dictionary<string, string[]> Stories(string word, int count) =>
+            Enumerable.Range(0, count).ToDictionary(i => $"rId{i}", i => new[] { $"{word} {i}" });
+        var left = HeaderFooterFixtures.Build(Sections("Cooper {0} seals every oak barrel in the cellar.", 3), Stories("Ledger", 3));
+        var right = HeaderFooterFixtures.Build(Sections("Survey team {0} measured crevasse depth at dawn.", 2), Stories("Survey", 2));
+
+        var script = Build(left, right);
+
+        Assert.Equal(
+            new (int, string?, string?, bool, int?)[]
+            {
+                (0, null, "hdr1", true, 0), (1, "hdr1", "hdr2", true, 1), (2, "hdr2", null, false, -1), (3, "hdr3", "hdr2", true, 1),
+            },
+            script.HeaderFooterOps!.Select(diff => (diff.SectionIndex, diff.LeftScopeName,
+                diff.RightPartUri is null ? null : diff.ScopeName, diff.Ops.Count > 0, diff.ReferenceBindings?.Single().RightSectionIndex)));
+    }
+
+    [Fact]
     public void Builder_binds_each_explicit_right_story_cell_when_one_right_part_is_reused()
     {
         // Both right sections reference B, but each needs a separate reversible left-derived output part.
