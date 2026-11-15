@@ -218,6 +218,31 @@ public class IrBlockAlignerTests
         AssertInvariants(l, r, a);
     }
 
+    private const string Space = "<w:r><w:t xml:space=\"preserve\"> </w:t></w:r>";
+    private const string Tab = "<w:r><w:tab/></w:r>";
+
+    [Theory]
+    // A clause laid out as tab, label, tab, text is measured by its text, like the same clause typed with a
+    // space after its label (issue #1759). The reference replaces both whole.
+    [InlineData("", Space, 0)]
+    [InlineData(Tab, Tab, 0)]
+    [InlineData("<w:r><w:br/></w:r>", Space, 0)]
+    // Control: a note reference is not text, so its paragraph keeps its pairing.
+    [InlineData("<w:r><w:footnoteReference w:id=\"1\"/></w:r>", Space, 1)]
+    public void Rewrite_with_a_tab_or_break_is_replaced_like_plain_text(string lead, string afterLabel, int modified)
+    {
+        IrDocument Clause(string text) => FromXml("<w:p><w:r><w:t>Clause 1</w:t></w:r></w:p>" +
+            $"<w:p>{lead}<w:r><w:t>(a)</w:t></w:r>{afterLabel}<w:r><w:t>{text}</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>Clause 2</w:t></w:r></w:p>");
+        var l = Clause("For courier by with for warehouse on supplier voucher for by ledger supplier manifest courier with.");
+        var r = Clause("Lease garden tenant of for utilities and utilities on fixtures notice repair fixtures by notice tenant.");
+        var a = Align(l, r);
+
+        Assert.Equal(modified, Count(a, IrAlignmentKind.Modified));
+        Assert.Equal(1 - modified, Count(a, IrAlignmentKind.Deleted));
+        AssertInvariants(l, r, a);
+    }
+
     [Fact]
     public void Full_rewrite_1x1_residue_stays_delete_insert()
     {
