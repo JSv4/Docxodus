@@ -9460,10 +9460,12 @@ read. The `wp14` relative size and position elements get the same conversion to 
 **Not fixed: universal measures.** The Strict save writes every twips measure as a universal measure
 (`w:pgSz w:w="612pt"`, `w:tcW w:w="156pt"`, `w:tblInd w:w="5.40pt"`), and the validator rejects these
 in Transitional: 33 errors remain on the Strict document above once the percentages are converted.
-Docxodus's own readers that go through `AttributeToTwips` (`PtOpenXmlUtil`) accept the units;
-converting them for the package is a separate change. The SmartArt diagram attributes (`dgm:prSet/@custScaleX` and its siblings, `ST_PrSetCustVal`)
+Readers that go through `AttributeToTwips` (`PtOpenXmlUtil`) accept the units, but several parse
+an integer and fall back to Letter or fail (page size in HTML, `GetSectionInfo`, `SetPageSetup`,
+the column operations under a spanning cell): #1764. The SmartArt diagram attributes (`dgm:prSet/@custScaleX` and its siblings, `ST_PrSetCustVal`)
 are typed as integers by the SDK, but the Strict save of a resized SmartArt node could not be captured
 by COM, so they are not converted. A Strict part inside a Transitional package (the chart of #1702)
-is not converted either, because the normalizer runs only on packages whose main part is Strict.
+is not converted either, because the normalizer runs only on packages whose main part is Strict;
+HTML output draws such a chart empty (#1764).
 
 Tests: `StrictOoxmlNormalizerValueTests`.
