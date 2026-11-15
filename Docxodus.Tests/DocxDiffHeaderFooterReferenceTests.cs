@@ -514,6 +514,55 @@ public class DocxDiffHeaderFooterReferenceTests
         AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), header, kind);
     }
 
+    /// <summary>
+    /// Issue #1771: the revision's section breaks name its header parts by its own relationship ids, which the
+    /// original may lack or give to a different story. The revision keeps the first section's story under id
+    /// <paramref name="first"/> and, unless <paramref name="second"/> names a part, lets later sections inherit
+    /// it, so one revision part pairs with two original stories: unchanged against the first section's,
+    /// changed against the second's. One section (the control) has no second pairing; with both ids swapped
+    /// (<c>b</c>, <c>a</c>) nothing changes at all.
+    /// </summary>
+    [Theory]
+    [InlineData(1, "z", null)]
+    [InlineData(2, "z", null)]
+    [InlineData(3, "z", null)]
+    [InlineData(2, "b", null)]
+    [InlineData(2, "b", "a")]
+    public void RevisionPartsUnderTheirOwnIds_RejectRestoresEachSection(int count, string first, string? second)
+    {
+        var original = HeaderFooterFixtures.Build(Bodies.Take(count).Select((text, i) =>
+                new Section(new[] { text }, Headers: new[] { ("default", i == 1 ? "b" : "a") })).ToArray(),
+            new Dictionary<string, string[]> { ["a"] = new[] { "North quay" }, ["b"] = new[] { "South quay" } });
+        var revisedParts = new Dictionary<string, string[]> { [first] = new[] { "North quay" } };
+        if (second is not null) revisedParts[second] = new[] { "South quay" };
+        string?[] revisedIds = { first, second, null };
+        var revised = HeaderFooterFixtures.Build(Bodies.Take(count).Select((text, i) =>
+                new Section(new[] { text }, Headers: revisedIds[i] is { } id ? new[] { ("default", id) } : null)).ToArray(),
+            revisedParts);
+        AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), true, "default");
+    }
+
+    /// <summary>
+    /// Issue #1771: every original section has a title page with its own first-page header; the revision
+    /// has neither. Rejecting must restore the flag on the inline section break as well as on the final
+    /// section (the one-section control).
+    /// </summary>
+    [Theory]
+    [InlineData(1, "first")]
+    [InlineData(2, "first")]
+    [InlineData(2, "default")]
+    public void TitlePageTurnedOff_RejectRestoresEverySection(int count, string kind)
+    {
+        var original = HeaderFooterFixtures.Build(Bodies.Take(count).Select(text => new Section(new[] { text },
+                Headers: new[] { ("first", "f"), ("default", "d") })).ToArray(),
+            new Dictionary<string, string[]> { ["f"] = new[] { "Cover" }, ["d"] = new[] { "Running" } }, titlePg: true);
+        var revised = HeaderFooterFixtures.Build(Bodies.Take(count).Select(text => new Section(new[] { text })).ToArray());
+        AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), true, kind);
+    }
+
+    private static readonly string[] Bodies = { "Harbor pilots log the tide charts before noon.",
+        "Pilot boats return to the inner mooring after dusk.", "The tide tables are posted on the quay every Monday." };
+
     [Theory]
     [InlineData("whole-paragraph-replace")]
     [InlineData("body-delete-paragraph")]

@@ -9549,3 +9549,46 @@ merely mentions a Strict URI is untouched. A Strict package still converts as a 
 
 Tests: `UniversalMeasureReadingTests`, `TwipMeasureParsingTests`,
 `StrictOoxmlNormalizerValueTests.A_strict_part_in_a_transitional_package_is_converted_alone`.
+
+## A title page turned off on a section break inside the body (#1771)
+
+Original: two sections, each with `w:titlePg` and a first-page and a default header. Revision: the same
+body with neither.
+
+```xml
+<!-- original: the first section's break; the final section's w:sectPr is the same -->
+<w:p><w:pPr><w:sectPr>
+  <w:headerReference w:type="first" r:id="f"/><w:headerReference w:type="default" r:id="d"/>
+  <w:pgSz w:w="12240" w:h="15840"/><w:titlePg/>
+</w:sectPr></w:pPr>…</w:p>
+<!-- revision -->
+<w:p><w:pPr><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:pPr>…</w:p>
+```
+
+Title page per section (Docxodus columns resolved with `RevisionProcessor`):
+
+| | Redline | After reject | After accept |
+| --- | --- | --- | --- |
+| Desktop word processor (build 16.0.20326), its own compare | on, on; no section revision | on, on | on, on |
+| Docxodus `54eb5836` | off, off; `w:sectPrChange` on the final section only | **off**, on | off, off |
+| Docxodus with the fix | off, off; `w:sectPrChange` on both | on, on | off, off |
+
+LibreOffice was not available for this check.
+
+The reference compare does not compare `w:titlePg`: it keeps the original's value in every section and
+records no revision, so its accept does not give the revision. Docxodus archives the change, so both
+round trips hold, but before the fix only the final section did. An inline break's paragraph counted
+as changed under `ModeledOnly` only for page size, margins, orientation or section type
+(`IrModeledFormat.SectionKey`), and an unchanged paragraph is emitted as the revision's copy, section
+properties included. `IrMarkupRenderer.ReconcileSectionBreaks` now archives any property that differs on
+a section break both documents share, as the final section always has; the revisions list still reports
+modeled section properties only. The reference application reads that inline archive correctly. It
+mishandles a final-section archive that leaves a default out; see #1775.
+
+The same copy also carried the revision's `w:headerReference`/`w:footerReference` ids, which name parts
+of the revision's package; it now keeps the original's references, which the header/footer planner
+binds against.
+
+Tests: `BlockFormatChangeTests.MidDoc_inline_sectPr_change_outside_the_modeled_fields_is_tracked_under_either_policy`,
+`DocxDiffHeaderFooterReferenceTests.TitlePageTurnedOff_RejectRestoresEverySection`,
+`DocxDiffHeaderFooterReferenceTests.RevisionPartsUnderTheirOwnIds_RejectRestoresEachSection`.

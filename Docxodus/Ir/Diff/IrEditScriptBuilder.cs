@@ -427,9 +427,9 @@ internal static class IrEditScriptBuilder
         // right rId, and a right part may map to different left-derived outputs in different sections. Pure A/A
         // unchanged stories remain absent as before. We also bind at output-part transitions and when an explicit
         // left reference would override an inherited clone even though the desired output part stays the same.
-        // This produces the crucial clone→primary rejoin record with empty Ops when needed. Where a timeline
-        // starts, the original's reference stands in for a binding only for an unchanged story, which the revision
-        // references there too: an unchanged section break is written with the revised section properties.
+        // This produces the crucial clone→primary rejoin record with empty Ops when needed. The plan is made against
+        // the original's references, which a section break both documents share keeps in the review document (the
+        // renderer restores them over the revision's); a changed story is bound where its timeline starts as well.
         bool changedSectionOwnership = sections is not null && sections.Any(pair => pair.Left != pair.Right);
         foreach (var kind in HeaderFooterKinds)
         {
