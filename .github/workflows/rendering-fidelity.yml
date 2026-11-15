@@ -92,10 +92,12 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       # The renderer build is the longest step and needs none of the measurement host, so it runs
-      # in the background while the host is provisioned.
+      # in the background while the host is provisioned. The step shell runs with `-e`, which the
+      # background group would inherit and exit on a failed build before writing build.status, so
+      # the group turns it off; the build's own subshell keeps it.
       - name: Start the main renderer build
         run: |
-          { ( set -e; dotnet workload install wasm-tools
+          { set +e; ( set -e; dotnet workload install wasm-tools
               cd oracle && python3 -m bench build-docxodus --source ../main-source --commit "$MAIN_COMMIT"
             ) > "$RUNNER_TEMP/build.log" 2>&1; echo $? > "$RUNNER_TEMP/build.status"; } &
       - name: Provision the measurement host
@@ -240,10 +242,11 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ env.NODE_VERSION }}
-      # The candidate is always built fresh, in the background while the host is provisioned.
+      # The candidate is always built fresh, in the background while the host is provisioned
+      # (`set +e`: see the main renderer build).
       - name: Start the candidate renderer build
         run: |
-          { ( set -e; dotnet workload install wasm-tools
+          { set +e; ( set -e; dotnet workload install wasm-tools
               cd oracle && python3 -m bench build-docxodus --source ../candidate-source --commit "$CANDIDATE_COMMIT"
             ) > "$RUNNER_TEMP/build.log" 2>&1; echo $? > "$RUNNER_TEMP/build.status"; } &
       - name: Provision the measurement host
