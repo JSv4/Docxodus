@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [16.1.0] - 2026-11-16
+
 ### Added
 
 - The MCP server is now published to NuGet as `Docxodus.McpServer` with each release, so an agent or MCP client can install it by name: `dotnet tool install -g Docxodus.McpServer`, or `dnx Docxodus.McpServer --yes` with no install step. The package carries NuGet's MCP-server package type, which lists it in nuget.org's MCP-server search, and a `.mcp/server.json` manifest (in the MCP registry's format, declaring the `DOCXODUS_STORAGE_ROOT` and `DOCXODUS_STORAGE_SCOPE` settings) from which NuGet.org generates a client configuration.
