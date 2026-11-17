@@ -7,7 +7,8 @@ namespace Docxodus.Tests;
 
 /// <summary>
 /// An on/off property's <c>w:val</c> (ST_OnOff) is read the same way by every Docxodus reader: <c>1</c>,
-/// <c>true</c> and <c>on</c> are on, in any letter case (issue #1786).
+/// <c>true</c> and <c>on</c> are on and <c>0</c>, <c>false</c> and <c>off</c> are off, in any letter case
+/// (issue #1786).
 /// </summary>
 public class OnOffPropertyTests
 {
@@ -33,6 +34,35 @@ public class OnOffPropertyTests
         Assert.Equal(expected, WordprocessingMLUtil.GetBoolProp(properties, W.b));
         if (value is not null && value != "maybe")
             Assert.Equal(expected, bold.Attribute(W.val).ToBoolean());
+    }
+
+    [Theory]
+    [InlineData("1", true)]
+    [InlineData("true", true)]
+    [InlineData("on", true)]
+    [InlineData("On", true)]
+    [InlineData("TRUE", true)]
+    [InlineData("0", false)]
+    [InlineData("false", false)]
+    [InlineData("off", false)]
+    [InlineData("OFF", false)]
+    [InlineData("maybe", null)]
+    [InlineData(null, null)]
+    public void OnOffValue_reads_the_six_spellings_in_any_case(string? value, bool? expected) =>
+        Assert.Equal(expected, WordprocessingMLUtil.OnOffValue(value));
+
+    [Theory]
+    [InlineData(" w:val=\"off\"", "Ferry timetable")]
+    [InlineData(" w:val=\"Off\"", "Ferry timetable")]
+    [InlineData(" w:val=\"On\"", "**Ferry timetable**")]
+    [InlineData("", "**Ferry timetable**")]
+    public void The_markdown_projection_reads_every_spelling_of_bold(string value, string expected)
+    {
+        var doc = IrTestDocuments.FromBodyXml($"<w:p><w:r><w:rPr><w:b{value}/></w:rPr><w:t>Ferry timetable</w:t></w:r></w:p>");
+        var markdown = WmlToMarkdownConverter.Convert(doc, new WmlToMarkdownConverterSettings()).Markdown;
+        Assert.Contains(expected, markdown);
+        if (!expected.StartsWith("**"))
+            Assert.DoesNotContain("**", markdown);
     }
 
     [Fact]

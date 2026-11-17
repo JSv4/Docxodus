@@ -3681,13 +3681,6 @@ internal static class IrReader
     {
         if (el is null)
             return null;
-        var val = (string?)el.Attribute(W + "val");
-        if (val is null)
-            return true;
-        return val switch
-        {
-            "0" or "false" or "off" => false,
-            _ => true,
-        };
+        return WordprocessingMLUtil.OnOffValue((string?)el.Attribute(W + "val")) != false;
     }
 }

@@ -12277,7 +12277,7 @@ namespace Docxodus
             && element.Name != W.footnoteReference && element.Name != W.endnoteReference;
 
         private static bool IsFieldLocked(XElement element) =>
-            (string?)element.Attribute(W.fldLock) is "1" or "true" or "on";
+            WordprocessingMLUtil.OnOffValue((string?)element.Attribute(W.fldLock)) == true;
 
         private static bool InFieldInstruction(XElement element)
         {
@@ -12446,7 +12446,7 @@ namespace Docxodus
                 styles = document.MainDocumentPart!.StyleDefinitionsPart?.GetXDocument().Root?.Elements(W.style).ToList()
                     ?? new List<XElement>();
                 defaultStyle = (string?)styles.FirstOrDefault(s => (string?)s.Attribute(W.type) == "paragraph"
-                    && (string?)s.Attribute(W._default) is "1" or "true" or "on")?.Attribute(W.styleId);
+                    && WordprocessingMLUtil.OnOffValue((string?)s.Attribute(W._default)) == true)?.Attribute(W.styleId);
                 paragraphs = document.MainDocumentPart.GetXDocument().Root!.Element(W.body)!.Descendants(W.p)
                     .Where(p => !p.Ancestors(W.txbxContent).Any()).ToList();
                 positions = paragraphs.Select((paragraph, ordinal) => (paragraph, ordinal))

@@ -912,12 +912,21 @@ namespace Docxodus
             if (p == null)
                 return false;
             var v = p.Attribute(W.val);
-            if (v == null)
-                return true;
-            // ST_OnOff: 1, true and on turn the property on, in any letter case, as XAttribute.ToBoolean reads
-            // them (issue #1786); any other value leaves it off.
-            return v.Value.ToLowerInvariant() is "1" or "true" or "on";
+            // Any value that is not a spelling of on leaves it off.
+            return v == null || OnOffValue(v.Value) == true;
         }
+
+        /// <summary>
+        /// An ST_OnOff value, as every on/off reader reads it: <c>1</c>, <c>true</c> and <c>on</c> are on and
+        /// <c>0</c>, <c>false</c> and <c>off</c> are off, in any letter case (issue #1786). Null for any other
+        /// value, or none, so each reader keeps its own reading of a value that is neither.
+        /// </summary>
+        public static bool? OnOffValue(string? value) => value?.ToLowerInvariant() switch
+        {
+            "1" or "true" or "on" => true,
+            "0" or "false" or "off" => false,
+            _ => null,
+        };
 
         public static int StringToTwips(string twipsOrPoints) =>
             (int)StringToDecimalTwips(twipsOrPoints);
