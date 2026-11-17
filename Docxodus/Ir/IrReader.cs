@@ -3073,15 +3073,18 @@ internal static class IrReader
     internal static IrSectionFormat MapSectionFormat(XElement sectPr)
     {
         // A stated default (w:orient="portrait", <w:titlePg w:val="0"/>, …) reads as the omitted value it
-        // restates, so a resolved redline that writes defaults out reads as its input (issue #1775).
+        // restates, so a resolved redline that writes defaults out reads as its input (issue #1775). The
+        // orientation and type as written are kept beside it for revision payloads.
+        var written = sectPr;
         sectPr = SectionPropertyDefaults.WithoutStatedDefaults(sectPr);
-        var pgSz = sectPr.Element(W + "pgSz");
-        bool? landscape = (string?)pgSz?.Attribute(W + "orient") switch
+        bool? Orientation(XElement section) => (string?)section.Element(W + "pgSz")?.Attribute(W + "orient") switch
         {
             "landscape" => true,
             null => null,
             _ => false,
         };
+        var pgSz = sectPr.Element(W + "pgSz");
+        bool? landscape = Orientation(sectPr);
         var pgMar = sectPr.Element(W + "pgMar");
         return new IrSectionFormat
         {
@@ -3093,6 +3096,8 @@ internal static class IrReader
             MarginLeftTwips = IntAttr(pgMar, W + "left"),
             MarginRightTwips = IntAttr(pgMar, W + "right"),
             SectionType = AttrVal(sectPr.Element(W + "type")),
+            StatedLandscape = Orientation(written),
+            StatedSectionType = AttrVal(written.Element(W + "type")),
             UnmodeledDigest = UnmodeledDigest(sectPr, SectPrConsumed),
         };
     }

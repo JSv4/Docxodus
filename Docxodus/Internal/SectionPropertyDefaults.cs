@@ -86,10 +86,13 @@ internal static class SectionPropertyDefaults
             {
                 if (IsOff(child))
                     child.Remove();
+                else
+                    child.Attribute(W.val)?.Remove();   // every spelling of on is the bare element
                 continue;
             }
             foreach (var attribute in child.Attributes().ToList())
-                if (AttributeDefaults.TryGetValue((child.Name, attribute.Name), out var value) && attribute.Value == value)
+                if (AttributeDefaults.TryGetValue((child.Name, attribute.Name), out var value) &&
+                    (attribute.Value == value || OnOffAttributes.Contains((child.Name, attribute.Name)) && IsOff(attribute.Value)))
                     attribute.Remove();
             // Bookkeeping attributes (the reader's unids) say nothing about the property.
             if (ElementsWithDefaults.Contains(child.Name) && !child.HasElements &&
@@ -99,6 +102,10 @@ internal static class SectionPropertyDefaults
         return copy;
     }
 
-    private static bool IsOff(XElement toggle) =>
-        (string?)toggle.Attribute(W.val) is "0" or "false" or "off";
+    /// <summary>The attribute defaults above that are on/off values, whose off reads in any spelling.</summary>
+    private static readonly (XName Element, XName Attribute)[] OnOffAttributes = { (W.cols, W.sep) };
+
+    private static bool IsOff(XElement toggle) => IsOff((string?)toggle.Attribute(W.val));
+
+    private static bool IsOff(string? value) => value is "0" or "false" or "off";
 }

@@ -1114,16 +1114,54 @@ public class BlockFormatChangeTests
                 Assert.Empty(DocxDiff.GetRevisions(input, resolved, settings));
                 Assert.Empty(BodyOf(DocxDiff.Compare(input, resolved, settings)).Descendants(W + "sectPrChange"));
             }
+            Assert.DoesNotContain(Docxodus.Verification.SemanticDiff.Compare(input, resolved).Changes, change =>
+                change.Family is Docxodus.Verification.SemanticChangeFamily.Section or Docxodus.Verification.SemanticChangeFamily.PageSetup);
+        }
+    }
+
+    [Theory]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\" w:orient=\"portrait\"/><w:titlePg w:val=\"0\"/>",
+        "<w:type w:val=\"nextPage\"/><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:num=\"1\"/>")]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:sep=\"false\"/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>")]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg w:val=\"1\"/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>")]
+    public void A_stated_default_and_an_omitted_one_are_not_a_section_change(string leftProps, string rightProps)
+    {
+        foreach (var inline in new[] { false, true })
+        {
+            var (left, right) = SectionPair(inline, leftProps, rightProps);
+            Assert.Empty(DocxDiff.GetRevisions(left, right, Full));
+            Assert.Empty(BodyOf(DocxDiff.Compare(left, right, Full)).Descendants(W + "sectPrChange"));
+        }
+    }
+
+    [Theory]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg w:val=\"0\"/>")]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\" w:orient=\"portrait\"/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\" w:orient=\"landscape\"/>")]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:sep=\"true\"/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>")]
+    public void A_stated_value_that_is_not_the_default_is_still_a_section_change(string leftProps, string rightProps)
+    {
+        // Control: dropping stated defaults before comparing never drops a value that differs from one.
+        foreach (var inline in new[] { false, true })
+        {
+            var (left, right) = SectionPair(inline, leftProps, rightProps);
+            Assert.Single(BodyOf(DocxDiff.Compare(left, right, Full)).Descendants(W + "sectPrChange"));
         }
     }
 
     [Fact]
-    public void A_stated_default_and_an_omitted_one_are_not_a_section_change()
+    public void A_section_revision_reports_the_values_as_written()
     {
-        var (left, right) = SectionPair(true, "<w:pgSz w:w=\"12240\" w:h=\"15840\" w:orient=\"portrait\"/><w:titlePg w:val=\"0\"/>",
-            "<w:type w:val=\"nextPage\"/><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:num=\"1\"/>");
-        Assert.Empty(DocxDiff.GetRevisions(left, right, Full));
-        Assert.Empty(BodyOf(DocxDiff.Compare(left, right, Full)).Descendants(W + "sectPrChange"));
+        // The comparison reads a stated default as the omitted one, but the revision still reports what each
+        // document states.
+        var (left, right) = SectionPair(false, "<w:type w:val=\"nextPage\"/><w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/>",
+            "<w:type w:val=\"continuous\"/><w:pgSz w:w=\"12240\" w:h=\"15840\" w:orient=\"portrait\"/>");
+        var change = Assert.Single(DocxDiff.GetRevisions(left, right, ModeledOnly)).FormatChange!;
+        Assert.Equal("nextPage", change.OldProperties["sectionType"]);
+        Assert.Equal("continuous", change.NewProperties["sectionType"]);
+        Assert.Equal("true", change.OldProperties["landscape"]);
+        Assert.Equal("false", change.NewProperties["landscape"]);
+        Assert.Contains("landscape", change.ChangedPropertyNames);
+        Assert.Contains("sectionType", change.ChangedPropertyNames);
     }
 
     [Fact]
