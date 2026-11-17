@@ -9616,20 +9616,33 @@ Docxodus's `RevisionProcessor` rejects it to portrait. The issue reports (deskto
 | Desktop word processor, the redline above | landscape | on, and no revision listed |
 | Desktop word processor, `w:orient="portrait"` / `<w:titlePg w:val="0"/>` written out | portrait | off, one revision |
 | Desktop word processor, its own compare | portrait (archive writes `w:orient="portrait"` and the full `w:pgMar`) | tracks no `w:titlePg` change |
-| Docxodus `RevisionProcessor`, either shape | portrait | off |
+| Docxodus `RevisionProcessor`, either shape | portrait (`w:orient` written out after the fix) | off |
 
 That application appears to read a value one side of a section change leaves out as unchanged, not as
 its default. `IrMarkupRenderer.ApplySectPrChange`, which every section change goes through (final and
 inline sections, the comparison of several reviewers and the header/footer title-page binding), now makes
-each side state every value the other states: the specification's default for an omitted attribute
-(`w:pgSz/@w:orient`, `w:cols/@w:num` and `@w:sep`, `w:pgNumType/@w:fmt`, `w:docGrid/@w:type`) or element
-(`w:type`, `w:vAlign`, `w:textDirection`), and `w:val="0"` for a toggle (`w:titlePg`, `w:bidi`,
-`w:rtlGutter`, `w:noEndnote`, `w:formProt`) the other side has on. Page size and margins without an
-element have no specified default and are written as before.
+each side state the values the other states that have a specified default: the default for an omitted
+attribute (`w:pgSz/@w:orient`, `w:cols/@w:num` and `@w:sep`, `w:pgNumType/@w:fmt`, `w:docGrid/@w:type`) or
+element (`w:type`, `w:vAlign`, `w:textDirection`), and `w:val="0"` for a toggle (`w:titlePg`, `w:bidi`,
+`w:rtlGutter`, `w:noEndnote`) the other side has on. Page size and margins without an element, a page-numbering
+start, line numbering and page borders have no specified default and are written as before, as is
+`w:formProt`, whose omitted reading under forms protection was not settled. No column count is written beside
+explicit `w:col` children. The defaults live in `Internal/SectionPropertyDefaults`.
+
+Writing a default out changes the XML a resolved redline holds (reject now gives `w:orient="portrait"`), and
+Docxodus's own readers treated a stated default as different from an omitted one: the IR mapped a missing
+`w:orient` to "unset" but `"portrait"` to "not landscape", and the section digests hashed the raw XML. Every
+section comparison now drops values that only restate a default first, so a resolved redline compares equal
+to the document it restores, and two documents that differ only in spelling a default out are not a change.
 
 The same issue reported that a paragraph whose only change was its section break gave every run an
-empty `w:rPrChange`; `EmitFormatOnlyParagraph` now marks a run only when its formatting differs.
+empty `w:rPrChange`; `EmitFormatOnlyParagraph` now leaves a run unmarked when every original run under its
+text has its formatting. (The cursor that loop uses counts only `w:t`, so after a `w:sym` it reads the wrong
+original run; that older defect is #1784.)
 
 Tests: `BlockFormatChangeTests.A_section_change_archives_the_default_orientation_it_restores`,
 `BlockFormatChangeTests.A_toggle_one_side_leaves_out_is_written_as_off`,
+`BlockFormatChangeTests.A_resolved_redline_compares_equal_to_the_document_it_restores`,
+`BlockFormatChangeTests.A_stated_default_and_an_omitted_one_are_not_a_section_change`,
+`BlockFormatChangeTests.A_value_written_out_beside_an_extension_property_keeps_schema_order`,
 `BlockFormatChangeTests.A_paragraph_whose_only_change_is_its_section_break_has_no_run_format_change`.

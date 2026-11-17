@@ -1033,7 +1033,7 @@ public class BlockFormatChangeTests
     [InlineData("<w:titlePg/>", "", "titlePg")]
     [InlineData("", "<w:titlePg/>", "titlePg")]
     [InlineData("<w:titlePg/><w:rtlGutter/>", "<w:rtlGutter/>", "titlePg")]
-    [InlineData("<w:bidi/>", "<w:bidi w:val=\"0\"/>", "bidi")]
+    [InlineData("<w:bidi/>", "", "bidi")]
     public void A_toggle_one_side_leaves_out_is_written_as_off(string leftToggles, string rightToggles, string toggle)
     {
         const string page = "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>";
@@ -1087,6 +1087,82 @@ public class BlockFormatChangeTests
         Assert.Equal(new[] { "w", "h" }, archive.Element(W + "pgSz")!.Attributes().Select(a => a.Name.LocalName));
         Assert.Equal(new[] { "pgSz", "titlePg", "sectPrChange" }, current.Elements().Select(e => e.Name.LocalName));
         Assert.Null(current.Element(W + "titlePg")!.Attribute(W + "val"));
+
+        // A toggle both sides already state, on and off, is left as written.
+        (left, right) = SectionPair(false, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:bidi/>",
+            "<w:pgSz w:w=\"12000\" w:h=\"15840\"/><w:bidi w:val=\"0\"/>");
+        current = SectionOf(DocxDiff.Compare(left, right, ModeledOnly), false);
+        Assert.Equal("0", Attr(current, "bidi", "val"));
+        Assert.Null(Attr(current.Element(W + "sectPrChange")!.Element(W + "sectPr")!, "bidi", "val"));
+    }
+
+    [Theory]
+    [InlineData(false, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>", "<w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/>")]
+    [InlineData(true, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>", "<w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/>")]
+    [InlineData(false, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>")]
+    [InlineData(true, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>", "<w:type w:val=\"continuous\"/><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:num=\"2\"/>")]
+    public void A_resolved_redline_compares_equal_to_the_document_it_restores(bool inline, string leftProps, string rightProps)
+    {
+        // The values a section change writes out are defaults, so neither endpoint is a change against its input.
+        var (left, right) = SectionPair(inline, leftProps, rightProps);
+        var redline = DocxDiff.Compare(left, right, ModeledOnly);
+        foreach (var (input, resolved) in new[] {
+            (left, RevisionProcessor.RejectRevisions(redline)), (right, RevisionProcessor.AcceptRevisions(redline)) })
+        {
+            foreach (var settings in new[] { ModeledOnly, Full })
+            {
+                Assert.Empty(DocxDiff.GetRevisions(input, resolved, settings));
+                Assert.Empty(BodyOf(DocxDiff.Compare(input, resolved, settings)).Descendants(W + "sectPrChange"));
+            }
+        }
+    }
+
+    [Fact]
+    public void A_stated_default_and_an_omitted_one_are_not_a_section_change()
+    {
+        var (left, right) = SectionPair(true, "<w:pgSz w:w=\"12240\" w:h=\"15840\" w:orient=\"portrait\"/><w:titlePg w:val=\"0\"/>",
+            "<w:type w:val=\"nextPage\"/><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:num=\"1\"/>");
+        Assert.Empty(DocxDiff.GetRevisions(left, right, Full));
+        Assert.Empty(BodyOf(DocxDiff.Compare(left, right, Full)).Descendants(W + "sectPrChange"));
+    }
+
+    [Fact]
+    public void A_value_written_out_beside_an_extension_property_keeps_schema_order()
+    {
+        // w15:footnoteColumns closes the property list, so a toggle written out goes before it.
+        const string w15 = "xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"";
+        var (left, right) = SectionPair(false, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>",
+            $"<w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/><w15:footnoteColumns {w15} w:val=\"1\"/>");
+
+        var result = DocxDiff.Compare(left, right, ModeledOnly);
+        Assert.Equal(new[] { "pgSz", "titlePg", "footnoteColumns", "sectPrChange" },
+            SectionOf(result, false).Elements().Select(e => e.Name.LocalName));
+        PackageValidation.AssertValid(result, DocumentFormat.OpenXml.FileFormatVersions.Office2019, PackageValidation.IsSchemaError);
+    }
+
+    [Fact]
+    public void Explicit_columns_are_not_given_a_stated_count()
+    {
+        // Columns set by w:col children carry their own count; a stated count of one would contradict them.
+        var (left, right) = SectionPair(true,
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:equalWidth=\"0\" w:space=\"720\"><w:col w:w=\"3000\" w:space=\"720\"/><w:col w:w=\"5640\"/></w:cols>",
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:num=\"3\"/>");
+
+        var archive = SectionOf(DocxDiff.Compare(left, right, ModeledOnly), true).Element(W + "sectPrChange")!.Element(W + "sectPr")!;
+        Assert.Null(Attr(archive, "cols", "num"));
+        Assert.Equal(2, archive.Element(W + "cols")!.Elements(W + "col").Count());
+    }
+
+    [Fact]
+    public void Consolidating_a_title_page_turned_off_states_it_off()
+    {
+        var (baseDoc, reviewerDoc) = SectionPair(false, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>",
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>");
+        var merged = DocxDiff.Consolidate(baseDoc, new[] { new DocxDiffReviewer { Document = reviewerDoc, Author = "Reviewer A" } });
+        var current = SectionOf(merged, false);
+        Assert.Equal("0", Attr(current, "titlePg", "val"));
+        Assert.NotNull(current.Element(W + "sectPrChange")!.Element(W + "sectPr")!.Element(W + "titlePg"));
+        Assert.True(WordprocessingMLUtil.GetBoolProp(SectionOf(RevisionProcessor.RejectRevisions(merged), false), W + "titlePg"));
     }
 
     [Fact]

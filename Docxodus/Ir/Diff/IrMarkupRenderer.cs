@@ -8238,14 +8238,15 @@ internal static partial class IrMarkupRenderer
         new XAttribute(W.gutter, "0"));
 
     /// <summary>True when two trailing sectPrs differ in their tracked PROPERTIES (page setup/columns/…),
-    /// ignoring header/footer references, the change marker, and canonical noise (rsids).</summary>
+    /// ignoring header/footer references, the change marker, canonical noise (rsids) and values that only
+    /// restate a default.</summary>
     private static bool SectPrPropsDiffer(XElement left, XElement right)
         => !IrHasher.CanonicalHash(SectPrPropsContainer(left)).Equals(IrHasher.CanonicalHash(SectPrPropsContainer(right)));
 
     private static XElement SectPrPropsContainer(XElement sectPr)
     {
         var c = new XElement("sect");
-        foreach (var e in sectPr.Elements().Where(IsSectPrProp))
+        foreach (var e in SectionPropertyDefaults.WithoutStatedDefaults(sectPr).Elements().Where(IsSectPrProp))
             c.Add(new XElement(e));
         return c;
     }
@@ -8268,63 +8269,13 @@ internal static partial class IrMarkupRenderer
             inner.Add(StripUnids(new XElement(e)));
         var current = new XElement(W.sectPr, rightSectPr.Elements().Where(IsSectPrProp)
             .Select(e => StripUnids(new XElement(e))));
-        StateOmittedSectionValues(inner, current);
-        StateOmittedSectionValues(current, inner);
+        // Each side states what the other states, defaults included (issue #1775).
+        SectionPropertyDefaults.StateOmitted(inner, current);
+        SectionPropertyDefaults.StateOmitted(current, inner);
 
         outputSectPr.Elements().Where(IsSectPrProp).Remove();   // strip current props (references stay)
         outputSectPr.Add(current.Elements());                    // apply the right (accepted) props after refs
         outputSectPr.Add(new XElement(W.sectPrChange, state.RevisionAttributes(), inner));   // last child
-    }
-
-    /// <summary>The section properties that are on/off toggles (<c>CT_OnOff</c> children of <c>w:sectPr</c>).</summary>
-    private static readonly XName[] SectionToggles = { W.formProt, W.noEndnote, W.titlePg, W.bidi, W.rtlGutter };
-
-    /// <summary>Section-property attributes whose omission the specification defines as a value.</summary>
-    private static readonly Dictionary<(XName Element, XName Attribute), string> SectionAttributeDefaults = new()
-    {
-        [(W.type, W.val)] = "nextPage",
-        [(W.pgSz, W.orient)] = "portrait",
-        [(W.pgNumType, W.fmt)] = "decimal",
-        [(W.cols, W.num)] = "1",
-        [(W.cols, W.sep)] = "0",
-        [(W.vAlign, W.val)] = "top",
-        [(W.textDirection, W.val)] = "lrTb",
-        [(W.docGrid, W.type)] = "default",
-    };
-
-    /// <summary>Section-property elements whose omission reads as an element holding only the defaults
-    /// above. (An omitted page size, margin set, line numbering or page border has no such reading.)</summary>
-    private static readonly XName[] SectionElementsWithDefaults = { W.type, W.pgNumType, W.cols, W.vAlign, W.textDirection, W.docGrid };
-
-    /// <summary>
-    /// Make <paramref name="target"/>, one side of a section-property revision, state every value that
-    /// <paramref name="other"/> states where leaving it out means a value the specification defines: a toggle
-    /// <paramref name="other"/> turns on is written as <c>w:val="0"</c>, and an attribute (or the element
-    /// holding it) left at its default is written out. A desktop word processor reads a value one side leaves
-    /// out as unchanged, not as its default, so it keeps the revised value on reject or does not see the
-    /// change (issue #1775). Values with no specified default are left as written.
-    /// </summary>
-    private static void StateOmittedSectionValues(XElement target, XElement other)
-    {
-        foreach (var source in other.Elements().ToList())
-        {
-            var existing = target.Element(source.Name);
-            if (SectionToggles.Contains(source.Name))
-            {
-                if (existing is null && WordprocessingMLUtil.GetBoolProp(other, source.Name))
-                    InsertIntoSectPr(target, new XElement(source.Name, new XAttribute(W.val, "0")));
-                continue;
-            }
-            if (existing is null && !SectionElementsWithDefaults.Contains(source.Name))
-                continue;
-            var stated = existing ?? new XElement(source.Name);
-            foreach (var attribute in source.Attributes())
-                if (stated.Attribute(attribute.Name) is null &&
-                    SectionAttributeDefaults.TryGetValue((source.Name, attribute.Name), out var value))
-                    stated.SetAttributeValue(attribute.Name, value);
-            if (existing is null && stated.HasAttributes)
-                InsertIntoSectPr(target, stated);
-        }
     }
 
     // ----------------------------------------------------------------- helpers

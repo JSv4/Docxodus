@@ -3072,6 +3072,9 @@ internal static class IrReader
     /// </summary>
     internal static IrSectionFormat MapSectionFormat(XElement sectPr)
     {
+        // A stated default (w:orient="portrait", <w:titlePg w:val="0"/>, …) reads as the omitted value it
+        // restates, so a resolved redline that writes defaults out reads as its input (issue #1775).
+        sectPr = SectionPropertyDefaults.WithoutStatedDefaults(sectPr);
         var pgSz = sectPr.Element(W + "pgSz");
         bool? landscape = (string?)pgSz?.Attribute(W + "orient") switch
         {
@@ -3102,7 +3105,7 @@ internal static class IrReader
         // so a header/footer-reference rel-id renumber (r:id pointing at content-identical header/footer
         // parts) does not perturb a section break's identity.
         var contentBuilder = new IrContentHashBuilder();
-        contentBuilder.AppendHash(IrHasher.CanonicalHash(sectPr, ctx.RelResolver));
+        contentBuilder.AppendHash(IrHasher.CanonicalHash(SectionPropertyDefaults.WithoutStatedDefaults(sectPr), ctx.RelResolver));
 
         return new IrSectionBreak
         {
@@ -3637,8 +3640,8 @@ internal static class IrReader
             return EmptyUnmodeledDigest;
 
         var container = new XElement("unmodeled");
-        foreach (var e in leftovers)
-            container.Add(new XElement(e));
+        foreach (var e in leftovers)   // an inline section break's stated defaults restate its omissions (#1775)
+            container.Add(e.Name == W + "sectPr" ? SectionPropertyDefaults.WithoutStatedDefaults(e) : new XElement(e));
         if (extra is not null)
             container.Add(new XElement(extra));
         return IrHasher.CanonicalHash(container);
