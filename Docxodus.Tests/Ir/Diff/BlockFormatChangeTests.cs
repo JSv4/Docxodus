@@ -1124,6 +1124,7 @@ public class BlockFormatChangeTests
         "<w:type w:val=\"nextPage\"/><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:num=\"1\"/>")]
     [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:sep=\"false\"/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>")]
     [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg w:val=\"1\"/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>")]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg w:val=\"False\"/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>")]
     public void A_stated_default_and_an_omitted_one_are_not_a_section_change(string leftProps, string rightProps)
     {
         foreach (var inline in new[] { false, true })
@@ -1138,6 +1139,8 @@ public class BlockFormatChangeTests
     [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg w:val=\"0\"/>")]
     [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\" w:orient=\"portrait\"/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\" w:orient=\"landscape\"/>")]
     [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:sep=\"true\"/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>")]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg w:val=\"False\"/>")]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg w:val=\"maybe\"/>")]
     public void A_stated_value_that_is_not_the_default_is_still_a_section_change(string leftProps, string rightProps)
     {
         // Control: dropping stated defaults before comparing never drops a value that differs from one.

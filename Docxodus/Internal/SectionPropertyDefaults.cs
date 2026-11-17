@@ -50,7 +50,7 @@ internal static class SectionPropertyDefaults
             var existing = target.Element(source.Name);
             if (Toggles.Contains(source.Name))
             {
-                if (existing is null && !IsOff(source))
+                if (existing is null && OnOff(source) == true)
                     WordprocessingMLUtil.InsertSectPrChildInOrder(target, new XElement(source.Name, new XAttribute(W.val, "0")));
                 continue;
             }
@@ -84,15 +84,18 @@ internal static class SectionPropertyDefaults
         {
             if (Toggles.Contains(child.Name))
             {
-                if (IsOff(child))
+                // Every spelling of off is the omitted toggle and every spelling of on the bare element; a value
+                // that is neither stays as written, so it still differs from both.
+                var state = OnOff(child);
+                if (state == false)
                     child.Remove();
-                else
-                    child.Attribute(W.val)?.Remove();   // every spelling of on is the bare element
+                else if (state == true)
+                    child.Attribute(W.val)?.Remove();
                 continue;
             }
             foreach (var attribute in child.Attributes().ToList())
                 if (AttributeDefaults.TryGetValue((child.Name, attribute.Name), out var value) &&
-                    (attribute.Value == value || OnOffAttributes.Contains((child.Name, attribute.Name)) && IsOff(attribute.Value)))
+                    (attribute.Value == value || OnOffAttributes.Contains((child.Name, attribute.Name)) && OnOff(attribute.Value) == false))
                     attribute.Remove();
             // Bookkeeping attributes (the reader's unids) say nothing about the property.
             if (ElementsWithDefaults.Contains(child.Name) && !child.HasElements &&
@@ -105,7 +108,16 @@ internal static class SectionPropertyDefaults
     /// <summary>The attribute defaults above that are on/off values, whose off reads in any spelling.</summary>
     private static readonly (XName Element, XName Attribute)[] OnOffAttributes = { (W.cols, W.sep) };
 
-    private static bool IsOff(XElement toggle) => IsOff((string?)toggle.Attribute(W.val));
+    /// <summary>A toggle's state: on when it has no <c>w:val</c>.</summary>
+    private static bool? OnOff(XElement toggle) =>
+        toggle.Attribute(W.val) is { } value ? OnOff(value.Value) : true;
 
-    private static bool IsOff(string? value) => value is "0" or "false" or "off";
+    /// <summary>An on/off value, read without regard to case as Docxodus's readers read it; null when it is
+    /// neither, so an unreadable value is never taken for a default.</summary>
+    private static bool? OnOff(string value) => value.ToLowerInvariant() switch
+    {
+        "1" or "true" or "on" => true,
+        "0" or "false" or "off" => false,
+        _ => null,
+    };
 }
