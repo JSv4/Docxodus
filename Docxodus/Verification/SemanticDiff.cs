@@ -576,7 +576,16 @@ internal static class SemanticDiffEngine
                         RecordAlignment(op.LeftAnchor, splitRight);
 
                 if (op.Kind == IrEditOpKind.EqualBlock)
+                {
+                    // The edit script pairs blocks under its own format policy, which by default compares modeled
+                    // properties only. A pair it calls equal can still differ in a property it does not model (an
+                    // inline section break's title page or columns, an unmodeled paragraph or run property), and
+                    // the full format fingerprint says so; compare those pairs as format changes (issue #1785).
+                    if (Find(_left, op.LeftAnchor) is { } equalLeft && Find(_right, op.RightAnchor) is { } equalRight &&
+                        !equalLeft.FormatFingerprint.Equals(equalRight.FormatFingerprint))
+                        CompareBlocks(equalLeft, equalRight, op, partUri, leftScope, rightScope);
                     continue;
+                }
 
                 if (op.Kind is IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock)
                 {
