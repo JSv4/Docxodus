@@ -12223,21 +12223,7 @@ namespace Docxodus
 
         #endregion
 
-        private static bool GetBoolProp(XElement runProps, XName xName)
-        {
-            var p = runProps.Element(xName);
-            if (p == null)
-                return false;
-            var v = p.Attribute(W.val);
-            if (v == null)
-                return true;
-            var s = v.Value.ToLower();
-            if (s == "0" || s == "false")
-                return false;
-            if (s == "1" || s == "true")
-                return true;
-            return false;
-        }
+        private static bool GetBoolProp(XElement runProps, XName xName) => WordprocessingMLUtil.GetBoolProp(runProps, xName);
 
         private static readonly XName FormCheckboxAttribute = PtOpenXml.pt + "FormCheckbox";
         private static readonly XName FormCheckboxSizeAttribute = PtOpenXml.pt + "FormCheckboxSize";

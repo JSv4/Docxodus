@@ -914,12 +914,9 @@ namespace Docxodus
             var v = p.Attribute(W.val);
             if (v == null)
                 return true;
-            var s = v.Value.ToLower();
-            if (s == "0" || s == "false")
-                return false;
-            if (s == "1" || s == "true")
-                return true;
-            return false;
+            // ST_OnOff: 1, true and on turn the property on, in any letter case, as XAttribute.ToBoolean reads
+            // them (issue #1786); any other value leaves it off.
+            return v.Value.ToLowerInvariant() is "1" or "true" or "on";
         }
 
         public static int StringToTwips(string twipsOrPoints) =>
