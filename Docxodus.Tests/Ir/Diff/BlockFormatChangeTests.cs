@@ -992,6 +992,251 @@ public class BlockFormatChangeTests
         AssertNoSchemaErrors(result);
     }
 
+    // ------------------------------------------------- both sides of a section change state their values (#1775)
+
+    /// <summary>The section break a fixture's section properties end up on: the first paragraph's inline
+    /// break, or the body's final one.</summary>
+    private static XElement SectionOf(WmlDocument doc, bool inline) => inline
+        ? BodyOf(doc).Elements(W + "p").First().Element(W + "pPr")!.Element(W + "sectPr")!
+        : BodyOf(doc).Elements(W + "sectPr").Single();
+
+    private static (WmlDocument Left, WmlDocument Right) SectionPair(bool inline, string left, string right)
+    {
+        const string text = "<w:p><w:r><w:t>Section body.</w:t></w:r></w:p>";
+        WmlDocument Build(string props) => IrTestDocuments.FromBodyXml(inline
+            ? InlineSectBody.Replace("{S}", props)
+            : text + $"<w:sectPr>{props}</w:sectPr>");
+        return (Build(left), Build(right));
+    }
+
+    private static string? Attr(XElement sectPr, string element, string attribute) =>
+        (string?)sectPr.Element(W + element)?.Attribute(W + attribute);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_section_change_archives_the_default_orientation_it_restores(bool inline)
+    {
+        var (left, right) = SectionPair(inline, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>",
+            "<w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/>");
+
+        var result = DocxDiff.Compare(left, right, ModeledOnly);
+        var sectPr = SectionOf(result, inline);
+        Assert.Equal("portrait", Attr(sectPr.Element(W + "sectPrChange")!.Element(W + "sectPr")!, "pgSz", "orient"));
+        Assert.Equal("landscape", Attr(sectPr, "pgSz", "orient"));
+        Assert.Equal("portrait", Attr(SectionOf(RevisionProcessor.RejectRevisions(result), inline), "pgSz", "orient"));
+        Assert.Equal("landscape", Attr(SectionOf(RevisionProcessor.AcceptRevisions(result), inline), "pgSz", "orient"));
+        AssertNoSchemaErrors(result);
+    }
+
+    [Theory]
+    [InlineData("<w:titlePg/>", "", "titlePg")]
+    [InlineData("", "<w:titlePg/>", "titlePg")]
+    [InlineData("<w:titlePg/><w:rtlGutter/>", "<w:rtlGutter/>", "titlePg")]
+    [InlineData("<w:bidi/>", "", "bidi")]
+    public void A_toggle_one_side_leaves_out_is_written_as_off(string leftToggles, string rightToggles, string toggle)
+    {
+        const string page = "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>";
+        var (left, right) = SectionPair(false, page + leftToggles, page + rightToggles);
+
+        var result = DocxDiff.Compare(left, right, ModeledOnly);
+        var current = SectionOf(result, false);
+        var archive = current.Element(W + "sectPrChange")!.Element(W + "sectPr")!;
+        bool On(XElement sectPr) => WordprocessingMLUtil.GetBoolProp(sectPr, W + toggle);
+        bool turnedOn = rightToggles.Contains(toggle + "/>");
+        foreach (var side in new[] { current, archive })
+            Assert.NotNull(side.Element(W + toggle));                                       // both sides state it
+        Assert.Equal(turnedOn, On(current));
+        Assert.Equal(!turnedOn, On(archive));
+        Assert.Equal(!turnedOn, On(SectionOf(RevisionProcessor.RejectRevisions(result), false)));
+        Assert.Equal(turnedOn, On(SectionOf(RevisionProcessor.AcceptRevisions(result), false)));
+        AssertNoSchemaErrors(result);
+    }
+
+    [Theory]
+    [InlineData("", "<w:type w:val=\"continuous\"/>", "type", "val", "nextPage")]
+    [InlineData("", "<w:cols w:num=\"2\" w:space=\"720\"/>", "cols", "num", "1")]
+    [InlineData("<w:cols w:space=\"720\"/>", "<w:cols w:num=\"2\" w:space=\"720\"/>", "cols", "num", "1")]
+    [InlineData("", "<w:vAlign w:val=\"center\"/>", "vAlign", "val", "top")]
+    public void A_value_one_side_leaves_out_is_archived_as_its_default(
+        string leftProps, string rightProps, string element, string attribute, string expected)
+    {
+        const string page = "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>";
+        // Schema order puts w:type before w:pgSz and the others after it.
+        string Props(string props) => element == "type" ? props + page : page + props;
+        var (left, right) = SectionPair(true, Props(leftProps), Props(rightProps));
+
+        var result = DocxDiff.Compare(left, right, ModeledOnly);
+        var archive = SectionOf(result, true).Element(W + "sectPrChange")!.Element(W + "sectPr")!;
+        Assert.Equal(expected, Attr(archive, element, attribute));
+        var rejected = SectionOf(RevisionProcessor.RejectRevisions(result), true);
+        Assert.Equal(expected, Attr(rejected, element, attribute));
+        AssertNoSchemaErrors(result);
+    }
+
+    [Fact]
+    public void Values_both_sides_state_or_both_leave_out_are_written_as_they_are()
+    {
+        // Control: only the page width changes, so nothing beyond the two sides' own values is written.
+        var (left, right) = SectionPair(false, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>",
+            "<w:pgSz w:w=\"12000\" w:h=\"15840\"/><w:titlePg/>");
+
+        var current = SectionOf(DocxDiff.Compare(left, right, ModeledOnly), false);
+        var archive = current.Element(W + "sectPrChange")!.Element(W + "sectPr")!;
+        Assert.Equal(new[] { "pgSz", "titlePg" }, archive.Elements().Select(e => e.Name.LocalName));
+        Assert.Equal(new[] { "w", "h" }, archive.Element(W + "pgSz")!.Attributes().Select(a => a.Name.LocalName));
+        Assert.Equal(new[] { "pgSz", "titlePg", "sectPrChange" }, current.Elements().Select(e => e.Name.LocalName));
+        Assert.Null(current.Element(W + "titlePg")!.Attribute(W + "val"));
+
+        // A toggle both sides already state, on and off, is left as written.
+        (left, right) = SectionPair(false, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:bidi/>",
+            "<w:pgSz w:w=\"12000\" w:h=\"15840\"/><w:bidi w:val=\"0\"/>");
+        current = SectionOf(DocxDiff.Compare(left, right, ModeledOnly), false);
+        Assert.Equal("0", Attr(current, "bidi", "val"));
+        Assert.Null(Attr(current.Element(W + "sectPrChange")!.Element(W + "sectPr")!, "bidi", "val"));
+    }
+
+    [Theory]
+    [InlineData(false, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>", "<w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/>")]
+    [InlineData(true, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>", "<w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/>")]
+    [InlineData(false, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>")]
+    [InlineData(true, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>", "<w:type w:val=\"continuous\"/><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:num=\"2\"/>")]
+    public void A_resolved_redline_compares_equal_to_the_document_it_restores(bool inline, string leftProps, string rightProps)
+    {
+        // The values a section change writes out are defaults, so neither endpoint is a change against its input.
+        var (left, right) = SectionPair(inline, leftProps, rightProps);
+        var redline = DocxDiff.Compare(left, right, ModeledOnly);
+        foreach (var (input, resolved) in new[] {
+            (left, RevisionProcessor.RejectRevisions(redline)), (right, RevisionProcessor.AcceptRevisions(redline)) })
+        {
+            foreach (var settings in new[] { ModeledOnly, Full })
+            {
+                Assert.Empty(DocxDiff.GetRevisions(input, resolved, settings));
+                Assert.Empty(BodyOf(DocxDiff.Compare(input, resolved, settings)).Descendants(W + "sectPrChange"));
+            }
+            Assert.DoesNotContain(Docxodus.Verification.SemanticDiff.Compare(input, resolved).Changes, change =>
+                change.Family is Docxodus.Verification.SemanticChangeFamily.Section or Docxodus.Verification.SemanticChangeFamily.PageSetup);
+        }
+    }
+
+    [Theory]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\" w:orient=\"portrait\"/><w:titlePg w:val=\"0\"/>",
+        "<w:type w:val=\"nextPage\"/><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:num=\"1\"/>")]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:sep=\"false\"/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>")]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg w:val=\"1\"/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>")]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg w:val=\"False\"/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>")]
+    public void A_stated_default_and_an_omitted_one_are_not_a_section_change(string leftProps, string rightProps)
+    {
+        foreach (var inline in new[] { false, true })
+        {
+            var (left, right) = SectionPair(inline, leftProps, rightProps);
+            Assert.Empty(DocxDiff.GetRevisions(left, right, Full));
+            Assert.Empty(BodyOf(DocxDiff.Compare(left, right, Full)).Descendants(W + "sectPrChange"));
+        }
+    }
+
+    [Theory]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg w:val=\"0\"/>")]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\" w:orient=\"portrait\"/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\" w:orient=\"landscape\"/>")]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:sep=\"true\"/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>")]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg w:val=\"False\"/>")]
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg w:val=\"maybe\"/>")]
+    public void A_stated_value_that_is_not_the_default_is_still_a_section_change(string leftProps, string rightProps)
+    {
+        // Control: dropping stated defaults before comparing never drops a value that differs from one.
+        foreach (var inline in new[] { false, true })
+        {
+            var (left, right) = SectionPair(inline, leftProps, rightProps);
+            Assert.Single(BodyOf(DocxDiff.Compare(left, right, Full)).Descendants(W + "sectPrChange"));
+        }
+    }
+
+    [Fact]
+    public void A_section_revision_reports_the_values_as_written()
+    {
+        // The comparison reads a stated default as the omitted one, but the revision still reports what each
+        // document states.
+        var (left, right) = SectionPair(false, "<w:type w:val=\"nextPage\"/><w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/>",
+            "<w:type w:val=\"continuous\"/><w:pgSz w:w=\"12240\" w:h=\"15840\" w:orient=\"portrait\"/>");
+        var change = Assert.Single(DocxDiff.GetRevisions(left, right, ModeledOnly)).FormatChange!;
+        Assert.Equal("nextPage", change.OldProperties["sectionType"]);
+        Assert.Equal("continuous", change.NewProperties["sectionType"]);
+        Assert.Equal("true", change.OldProperties["landscape"]);
+        Assert.Equal("false", change.NewProperties["landscape"]);
+        Assert.Contains("landscape", change.ChangedPropertyNames);
+        Assert.Contains("sectionType", change.ChangedPropertyNames);
+    }
+
+    [Fact]
+    public void A_value_written_out_beside_an_extension_property_keeps_schema_order()
+    {
+        // w15:footnoteColumns closes the property list, so a toggle written out goes before it.
+        const string w15 = "xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"";
+        var (left, right) = SectionPair(false, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>",
+            $"<w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/><w15:footnoteColumns {w15} w:val=\"1\"/>");
+
+        var result = DocxDiff.Compare(left, right, ModeledOnly);
+        Assert.Equal(new[] { "pgSz", "titlePg", "footnoteColumns", "sectPrChange" },
+            SectionOf(result, false).Elements().Select(e => e.Name.LocalName));
+        PackageValidation.AssertValid(result, DocumentFormat.OpenXml.FileFormatVersions.Office2019, PackageValidation.IsSchemaError);
+    }
+
+    [Fact]
+    public void Explicit_columns_are_not_given_a_stated_count()
+    {
+        // Columns set by w:col children carry their own count; a stated count of one would contradict them.
+        var (left, right) = SectionPair(true,
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:equalWidth=\"0\" w:space=\"720\"><w:col w:w=\"3000\" w:space=\"720\"/><w:col w:w=\"5640\"/></w:cols>",
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:cols w:num=\"3\"/>");
+
+        var archive = SectionOf(DocxDiff.Compare(left, right, ModeledOnly), true).Element(W + "sectPrChange")!.Element(W + "sectPr")!;
+        Assert.Null(Attr(archive, "cols", "num"));
+        Assert.Equal(2, archive.Element(W + "cols")!.Elements(W + "col").Count());
+    }
+
+    [Fact]
+    public void Consolidating_a_title_page_turned_off_states_it_off()
+    {
+        var (baseDoc, reviewerDoc) = SectionPair(false, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:titlePg/>",
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>");
+        var merged = DocxDiff.Consolidate(baseDoc, new[] { new DocxDiffReviewer { Document = reviewerDoc, Author = "Reviewer A" } });
+        var current = SectionOf(merged, false);
+        Assert.Equal("0", Attr(current, "titlePg", "val"));
+        Assert.NotNull(current.Element(W + "sectPrChange")!.Element(W + "sectPr")!.Element(W + "titlePg"));
+        Assert.True(WordprocessingMLUtil.GetBoolProp(SectionOf(RevisionProcessor.RejectRevisions(merged), false), W + "titlePg"));
+    }
+
+    [Fact]
+    public void A_paragraph_whose_only_change_is_its_section_break_has_no_run_format_change()
+    {
+        var (left, right) = SectionPair(true, "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>",
+            "<w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/>");
+
+        var paragraph = BodyOf(DocxDiff.Compare(left, right, ModeledOnly)).Elements(W + "p").First();
+        Assert.Single(paragraph.Descendants(W + "sectPrChange"));
+        Assert.Empty(paragraph.Descendants(W + "rPrChange"));
+        Assert.Null(paragraph.Element(W + "r")!.Element(W + "rPr"));
+    }
+
+    [Fact]
+    public void Only_the_reformatted_run_of_a_format_changed_paragraph_has_a_run_format_change()
+    {
+        // Control: one run turns bold beside a section change; the run that kept its formatting is not marked.
+        const string body = "<w:p><w:pPr><w:sectPr>{S}</w:sectPr></w:pPr><w:r><w:t xml:space=\"preserve\">Plain lead. </w:t></w:r>"
+            + "<w:r>{B}<w:t>Changed tail.</w:t></w:r></w:p><w:p><w:r><w:t>Next.</w:t></w:r></w:p>";
+        var left = IrTestDocuments.FromBodyXml(body.Replace("{S}", "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>").Replace("{B}", ""));
+        var right = IrTestDocuments.FromBodyXml(body.Replace("{S}", "<w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/>")
+            .Replace("{B}", "<w:rPr><w:b/></w:rPr>"));
+
+        var result = DocxDiff.Compare(left, right, ModeledOnly);
+        var runs = BodyOf(result).Elements(W + "p").First().Descendants(W + "r").ToList();
+        Assert.Empty(runs.First().Descendants(W + "rPrChange"));
+        Assert.Single(runs.Last().Descendants(W + "rPrChange"));
+        Assert.Empty(BodyOf(RevisionProcessor.RejectRevisions(result)).Elements(W + "p").First().Descendants(W + "b"));
+        Assert.Single(BodyOf(RevisionProcessor.AcceptRevisions(result)).Elements(W + "p").First().Descendants(W + "b"));
+        AssertNoSchemaErrors(result);
+    }
+
     // Return a copy of <paramref name="doc"/> whose trailing sectPr has a w:pgMar with the given uniform margin.
     private static WmlDocument WithSectPrMargin(WmlDocument doc, string margin)
     {

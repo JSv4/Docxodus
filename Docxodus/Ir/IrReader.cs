@@ -3072,13 +3072,19 @@ internal static class IrReader
     /// </summary>
     internal static IrSectionFormat MapSectionFormat(XElement sectPr)
     {
-        var pgSz = sectPr.Element(W + "pgSz");
-        bool? landscape = (string?)pgSz?.Attribute(W + "orient") switch
+        // A stated default (w:orient="portrait", <w:titlePg w:val="0"/>, …) reads as the omitted value it
+        // restates, so a resolved redline that writes defaults out reads as its input (issue #1775). The
+        // orientation and type as written are kept beside it for revision payloads.
+        var written = sectPr;
+        sectPr = SectionPropertyDefaults.WithoutStatedDefaults(sectPr);
+        bool? Orientation(XElement section) => (string?)section.Element(W + "pgSz")?.Attribute(W + "orient") switch
         {
             "landscape" => true,
             null => null,
             _ => false,
         };
+        var pgSz = sectPr.Element(W + "pgSz");
+        bool? landscape = Orientation(sectPr);
         var pgMar = sectPr.Element(W + "pgMar");
         return new IrSectionFormat
         {
@@ -3090,6 +3096,8 @@ internal static class IrReader
             MarginLeftTwips = IntAttr(pgMar, W + "left"),
             MarginRightTwips = IntAttr(pgMar, W + "right"),
             SectionType = AttrVal(sectPr.Element(W + "type")),
+            StatedLandscape = Orientation(written),
+            StatedSectionType = AttrVal(written.Element(W + "type")),
             UnmodeledDigest = UnmodeledDigest(sectPr, SectPrConsumed),
         };
     }
@@ -3102,7 +3110,7 @@ internal static class IrReader
         // so a header/footer-reference rel-id renumber (r:id pointing at content-identical header/footer
         // parts) does not perturb a section break's identity.
         var contentBuilder = new IrContentHashBuilder();
-        contentBuilder.AppendHash(IrHasher.CanonicalHash(sectPr, ctx.RelResolver));
+        contentBuilder.AppendHash(IrHasher.CanonicalHash(SectionPropertyDefaults.WithoutStatedDefaults(sectPr), ctx.RelResolver));
 
         return new IrSectionBreak
         {
@@ -3637,8 +3645,8 @@ internal static class IrReader
             return EmptyUnmodeledDigest;
 
         var container = new XElement("unmodeled");
-        foreach (var e in leftovers)
-            container.Add(new XElement(e));
+        foreach (var e in leftovers)   // an inline section break's stated defaults restate its omissions (#1775)
+            container.Add(e.Name == W + "sectPr" ? SectionPropertyDefaults.WithoutStatedDefaults(e) : new XElement(e));
         if (extra is not null)
             container.Add(new XElement(extra));
         return IrHasher.CanonicalHash(container);

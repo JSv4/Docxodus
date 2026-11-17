@@ -311,20 +311,27 @@ internal static class IrModeledFormat
     /// described here — the modeled-only-revision limitation, consistent with the run/paragraph scopes.</summary>
     public static IrFormatChangeDetails SectionFormatChangeDetails(IrSectionFormat? left, IrSectionFormat? right)
     {
-        var oldProps = ModeledSectionProperties(left);
-        var newProps = ModeledSectionProperties(right);
+        // Changes are judged on the read values (a stated default equals the omitted one, issue #1775); the
+        // payload reports the values as written.
+        var oldProps = ModeledSectionProperties(AsWritten(left));
+        var newProps = ModeledSectionProperties(AsWritten(right));
+        var oldComparable = ModeledSectionProperties(left);
+        var newComparable = ModeledSectionProperties(right);
 
         var changed = new List<string>();
         foreach (var name in ModeledSectionFieldOrder)
         {
-            bool hasOld = oldProps.TryGetValue(name, out var oldVal);
-            bool hasNew = newProps.TryGetValue(name, out var newVal);
+            bool hasOld = oldComparable.TryGetValue(name, out var oldVal);
+            bool hasNew = newComparable.TryGetValue(name, out var newVal);
             if (hasOld != hasNew || (hasOld && hasNew && oldVal != newVal))
                 changed.Add(name);
         }
 
         return new IrFormatChangeDetails(oldProps, newProps, changed, IrFormatChangeScope.Section);
     }
+
+    private static IrSectionFormat? AsWritten(IrSectionFormat? f) =>
+        f is null ? null : f with { Landscape = f.StatedLandscape ?? f.Landscape, SectionType = f.StatedSectionType ?? f.SectionType };
 
     private static readonly string[] ModeledSectionFieldOrder =
     {

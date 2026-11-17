@@ -6254,9 +6254,12 @@ internal static partial class IrMarkupRenderer
             state.RegisterMediaReferences(clone);
             if (clone.Name == W.r)
             {
-                var oldRPr = leftRuns.RPrAtTextOffset(cursor);
-                ApplyRPrChange(clone, oldRPr, state);
-                cursor += RunTextLength(clone);
+                // A run whose old formatting is its own (the paragraph changed only its paragraph or section
+                // properties, or other runs changed) carries no run-format revision (issue #1775).
+                var length = RunTextLength(clone);
+                if (!leftRuns.TextRangeHasRPr(cursor, cursor + length, clone.Element(W.rPr)))
+                    ApplyRPrChange(clone, leftRuns.RPrAtTextOffset(cursor), state);
+                cursor += length;
             }
             newPara.Add(clone);
         }
@@ -8235,14 +8238,15 @@ internal static partial class IrMarkupRenderer
         new XAttribute(W.gutter, "0"));
 
     /// <summary>True when two trailing sectPrs differ in their tracked PROPERTIES (page setup/columns/…),
-    /// ignoring header/footer references, the change marker, and canonical noise (rsids).</summary>
+    /// ignoring header/footer references, the change marker, canonical noise (rsids) and values that only
+    /// restate a default.</summary>
     private static bool SectPrPropsDiffer(XElement left, XElement right)
         => !IrHasher.CanonicalHash(SectPrPropsContainer(left)).Equals(IrHasher.CanonicalHash(SectPrPropsContainer(right)));
 
     private static XElement SectPrPropsContainer(XElement sectPr)
     {
         var c = new XElement("sect");
-        foreach (var e in sectPr.Elements().Where(IsSectPrProp))
+        foreach (var e in SectionPropertyDefaults.WithoutStatedDefaults(sectPr).Elements().Where(IsSectPrProp))
             c.Add(new XElement(e));
         return c;
     }
@@ -8263,12 +8267,14 @@ internal static partial class IrMarkupRenderer
         var inner = new XElement(W.sectPr);
         foreach (var e in oldSectPr.Elements().Where(IsSectPrProp))
             inner.Add(StripUnids(new XElement(e)));
-        var rightProps = rightSectPr.Elements().Where(IsSectPrProp)
-            .Select(e => StripUnids(new XElement(e))).ToList();
+        var current = new XElement(W.sectPr, rightSectPr.Elements().Where(IsSectPrProp)
+            .Select(e => StripUnids(new XElement(e))));
+        // Each side states what the other states, defaults included (issue #1775).
+        SectionPropertyDefaults.StateOmitted(inner, current);
+        SectionPropertyDefaults.StateOmitted(current, inner);
 
         outputSectPr.Elements().Where(IsSectPrProp).Remove();   // strip current props (references stay)
-        foreach (var e in rightProps)
-            outputSectPr.Add(e);                                 // apply the right (accepted) props after refs
+        outputSectPr.Add(current.Elements());                    // apply the right (accepted) props after refs
         outputSectPr.Add(new XElement(W.sectPrChange, state.RevisionAttributes(), inner));   // last child
     }
 
@@ -12181,6 +12187,17 @@ internal static partial class IrMarkupRenderer
         public XElement? RPrAtTextOffset(int at) => RPrAtPosition(at, textOffset: true);
 
         public XElement? RPrAtPosition(int at) => RPrAtPosition(at, textOffset: false);
+
+        /// <summary>Whether every source run covering the text offsets <c>[start, end)</c> would stamp the same
+        /// <c>w:rPrChange</c> inner as <paramref name="rPr"/> (an empty range reads the run at <paramref name="start"/>).</summary>
+        public bool TextRangeHasRPr(int start, int end, XElement? rPr)
+        {
+            var covering = _segments.Where(segment => segment.Kind == SegmentKind.RunText &&
+                segment.TextStart < end && start < segment.TextEnd).ToList();
+            return covering.Count > 0
+                ? covering.All(segment => SameStampedRPr(segment.Element.Element(W.rPr), rPr))
+                : SameStampedRPr(RPrAtTextOffset(start), rPr);
+        }
 
         private XElement? RPrAtPosition(int at, bool textOffset)
         {

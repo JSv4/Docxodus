@@ -1482,7 +1482,10 @@ listSeparator
 
         /// <summary>
         /// Insert <paramref name="child"/> into <paramref name="sectPr"/> at its CT_SectPr schema
-        /// slot: before the first sibling <c>Order_sectPr</c> ranks strictly later, else at the end.
+        /// slot: after the last sibling <c>Order_sectPr</c> ranks no later, else before the first
+        /// sibling it ranks, else first. Placing it after its known predecessor, rather than before its
+        /// known successor, keeps it ahead of extension content such as <c>w15:footnoteColumns</c>,
+        /// which closes the property list.
         /// </summary>
         /// <remarks>
         /// Same slot-insert discipline as <see cref="EnsureSettingsChildInOrder"/>, and for the same
@@ -1492,12 +1495,16 @@ listSeparator
         internal static void InsertSectPrChildInOrder(XElement sectPr, XElement child)
         {
             var rank = Order_sectPr[child.Name];
+            var lastEarlier = sectPr.Elements().LastOrDefault(e =>
+                Order_sectPr.TryGetValue(e.Name, out var earlierRank) && earlierRank <= rank);
             var firstLater = sectPr.Elements().FirstOrDefault(e =>
                 Order_sectPr.TryGetValue(e.Name, out var laterRank) && laterRank > rank);
-            if (firstLater == null)
-                sectPr.Add(child);
-            else
+            if (lastEarlier != null)
+                lastEarlier.AddAfterSelf(child);
+            else if (firstLater != null)
                 firstLater.AddBeforeSelf(child);
+            else
+                sectPr.AddFirst(child);
         }
 
         private static Dictionary<XName, int> Order_pPr = new Dictionary<XName, int>
