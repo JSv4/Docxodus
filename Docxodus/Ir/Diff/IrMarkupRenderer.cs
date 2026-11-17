@@ -6254,9 +6254,12 @@ internal static partial class IrMarkupRenderer
             state.RegisterMediaReferences(clone);
             if (clone.Name == W.r)
             {
-                var oldRPr = leftRuns.RPrAtTextOffset(cursor);
-                ApplyRPrChange(clone, oldRPr, state);
-                cursor += RunTextLength(clone);
+                // A run whose old formatting is its own (the paragraph changed only its paragraph or section
+                // properties, or other runs changed) carries no run-format revision (issue #1775).
+                var length = RunTextLength(clone);
+                if (!leftRuns.TextRangeHasRPr(cursor, cursor + length, clone.Element(W.rPr)))
+                    ApplyRPrChange(clone, leftRuns.RPrAtTextOffset(cursor), state);
+                cursor += length;
             }
             newPara.Add(clone);
         }
@@ -8263,13 +8266,65 @@ internal static partial class IrMarkupRenderer
         var inner = new XElement(W.sectPr);
         foreach (var e in oldSectPr.Elements().Where(IsSectPrProp))
             inner.Add(StripUnids(new XElement(e)));
-        var rightProps = rightSectPr.Elements().Where(IsSectPrProp)
-            .Select(e => StripUnids(new XElement(e))).ToList();
+        var current = new XElement(W.sectPr, rightSectPr.Elements().Where(IsSectPrProp)
+            .Select(e => StripUnids(new XElement(e))));
+        StateOmittedSectionValues(inner, current);
+        StateOmittedSectionValues(current, inner);
 
         outputSectPr.Elements().Where(IsSectPrProp).Remove();   // strip current props (references stay)
-        foreach (var e in rightProps)
-            outputSectPr.Add(e);                                 // apply the right (accepted) props after refs
+        outputSectPr.Add(current.Elements());                    // apply the right (accepted) props after refs
         outputSectPr.Add(new XElement(W.sectPrChange, state.RevisionAttributes(), inner));   // last child
+    }
+
+    /// <summary>The section properties that are on/off toggles (<c>CT_OnOff</c> children of <c>w:sectPr</c>).</summary>
+    private static readonly XName[] SectionToggles = { W.formProt, W.noEndnote, W.titlePg, W.bidi, W.rtlGutter };
+
+    /// <summary>Section-property attributes whose omission the specification defines as a value.</summary>
+    private static readonly Dictionary<(XName Element, XName Attribute), string> SectionAttributeDefaults = new()
+    {
+        [(W.type, W.val)] = "nextPage",
+        [(W.pgSz, W.orient)] = "portrait",
+        [(W.pgNumType, W.fmt)] = "decimal",
+        [(W.cols, W.num)] = "1",
+        [(W.cols, W.sep)] = "0",
+        [(W.vAlign, W.val)] = "top",
+        [(W.textDirection, W.val)] = "lrTb",
+        [(W.docGrid, W.type)] = "default",
+    };
+
+    /// <summary>Section-property elements whose omission reads as an element holding only the defaults
+    /// above. (An omitted page size, margin set, line numbering or page border has no such reading.)</summary>
+    private static readonly XName[] SectionElementsWithDefaults = { W.type, W.pgNumType, W.cols, W.vAlign, W.textDirection, W.docGrid };
+
+    /// <summary>
+    /// Make <paramref name="target"/>, one side of a section-property revision, state every value that
+    /// <paramref name="other"/> states where leaving it out means a value the specification defines: a toggle
+    /// <paramref name="other"/> turns on is written as <c>w:val="0"</c>, and an attribute (or the element
+    /// holding it) left at its default is written out. A desktop word processor reads a value one side leaves
+    /// out as unchanged, not as its default, so it keeps the revised value on reject or does not see the
+    /// change (issue #1775). Values with no specified default are left as written.
+    /// </summary>
+    private static void StateOmittedSectionValues(XElement target, XElement other)
+    {
+        foreach (var source in other.Elements().ToList())
+        {
+            var existing = target.Element(source.Name);
+            if (SectionToggles.Contains(source.Name))
+            {
+                if (existing is null && WordprocessingMLUtil.GetBoolProp(other, source.Name))
+                    InsertIntoSectPr(target, new XElement(source.Name, new XAttribute(W.val, "0")));
+                continue;
+            }
+            if (existing is null && !SectionElementsWithDefaults.Contains(source.Name))
+                continue;
+            var stated = existing ?? new XElement(source.Name);
+            foreach (var attribute in source.Attributes())
+                if (stated.Attribute(attribute.Name) is null &&
+                    SectionAttributeDefaults.TryGetValue((source.Name, attribute.Name), out var value))
+                    stated.SetAttributeValue(attribute.Name, value);
+            if (existing is null && stated.HasAttributes)
+                InsertIntoSectPr(target, stated);
+        }
     }
 
     // ----------------------------------------------------------------- helpers
@@ -12181,6 +12236,17 @@ internal static partial class IrMarkupRenderer
         public XElement? RPrAtTextOffset(int at) => RPrAtPosition(at, textOffset: true);
 
         public XElement? RPrAtPosition(int at) => RPrAtPosition(at, textOffset: false);
+
+        /// <summary>Whether every source run covering the text offsets <c>[start, end)</c> would stamp the same
+        /// <c>w:rPrChange</c> inner as <paramref name="rPr"/> (an empty range reads the run at <paramref name="start"/>).</summary>
+        public bool TextRangeHasRPr(int start, int end, XElement? rPr)
+        {
+            var covering = _segments.Where(segment => segment.Kind == SegmentKind.RunText &&
+                segment.TextStart < end && start < segment.TextEnd).ToList();
+            return covering.Count > 0
+                ? covering.All(segment => SameStampedRPr(segment.Element.Element(W.rPr), rPr))
+                : SameStampedRPr(RPrAtTextOffset(start), rPr);
+        }
 
         private XElement? RPrAtPosition(int at, bool textOffset)
         {
