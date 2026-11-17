@@ -94,16 +94,19 @@ public class DocxSessionParagraphFormatSettersTests
         var (s, plain, _) = Open();
         using (s)
         {
-            // A paragraph written with the bidi-neutral spelling keeps it.
+            // A paragraph written with the bidi-neutral spelling keeps it. Its indents in character
+            // units, which Word would show instead of the twips, go.
             Assert.True(s.Raw.ReplaceXml(plain,
                 "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
-                "<w:pPr><w:ind w:start=\"100\" w:end=\"50\"/></w:pPr><w:r><w:t>Plain paragraph.</w:t></w:r></w:p>").Success);
+                "<w:pPr><w:ind w:start=\"100\" w:startChars=\"200\" w:end=\"50\" w:endChars=\"100\"/></w:pPr>" +
+                "<w:r><w:t>Plain paragraph.</w:t></w:r></w:p>").Success);
             plain = s.Project().AnchorIndex.Keys.First();
             Assert.True(s.SetParagraphFormat(plain, new ParagraphFormatOp { LeftIndent = 1440, RightIndent = 0 }).Success);
             var xml = Xml(s, plain);
             Assert.Contains("w:start=\"1440\"", xml);
             Assert.Contains("w:end=\"0\"", xml);
             Assert.DoesNotContain("w:left=", xml);
+            Assert.DoesNotContain("Chars=", xml);
 
             var both = s.SetParagraphFormat(plain, new ParagraphFormatOp { LeftIndent = 0, IndentDelta = 360 });
             Assert.False(both.Success);

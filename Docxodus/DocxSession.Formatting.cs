@@ -379,16 +379,22 @@ public sealed partial class DocxSession
             }
 
             // Absolute left/right edges, in whichever spelling (left/start, right/end) the
-            // paragraph already uses, so the value written is the one every reader sees.
+            // paragraph already uses, so the value written is the one every reader sees. An indent
+            // in character units (leftChars/startChars, rightChars/endChars) wins over the twips one
+            // in Word, so it goes: otherwise the new value would not show.
             if (op.LeftIndent is { } left)
             {
                 var ind = GetOrCreatePPrChild(pPr, W.ind);
                 ind.SetAttributeValue(WordprocessingMLUtil.IndLeadingAttribute(ind)?.Name ?? W.left, left);
+                ind.SetAttributeValue(W.leftChars, null);
+                ind.SetAttributeValue(W.startChars, null);
             }
             if (op.RightIndent is { } right)
             {
                 var ind = GetOrCreatePPrChild(pPr, W.ind);
                 ind.SetAttributeValue(WordprocessingMLUtil.IndTrailingAttribute(ind)?.Name ?? W.right, right);
+                ind.SetAttributeValue(W.rightChars, null);
+                ind.SetAttributeValue(W.endChars, null);
             }
 
             if (op.KeepNext is { } keepNext) SetPPrToggle(element, pPr, W.keepNext, keepNext, false);
