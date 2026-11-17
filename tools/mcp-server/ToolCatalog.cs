@@ -359,6 +359,12 @@ internal static class ToolCatalog
                     "lineSpacing": { "type": "integer", "minimum": 0, "description": "Line spacing (w:spacing/@w:line). Units depend on lineSpacingRule: under \"auto\" (the default) it is 240ths of a line (240 = single, 360 = 1.5x, 480 = double); under \"exact\"/\"atLeast\" it is twips (20 = 1pt, so 480 = 24pt)." },
                     "lineSpacingRule": { "type": "string", "enum": ["auto", "exact", "atLeast"], "description": "How lineSpacing is measured (w:spacing/@w:lineRule). Requires lineSpacing in the same call." },
                     "pageBreakBefore": { "type": "boolean" },
+                    "leftIndent": { "type": "integer", "description": "Absolute left indent in twips (w:ind/@w:left; 1440 = 1 inch); may be negative. Mutually exclusive with indentDelta." },
+                    "rightIndent": { "type": "integer", "description": "Absolute right indent in twips (w:ind/@w:right); may be negative." },
+                    "keepNext": { "type": "boolean", "description": "Keep with next (w:keepNext)." },
+                    "keepLines": { "type": "boolean", "description": "Keep lines together (w:keepLines)." },
+                    "widowControl": { "type": "boolean", "description": "Widow/orphan control (w:widowControl); on unless a style turns it off." },
+                    "contextualSpacing": { "type": "boolean", "description": "Don't add space between paragraphs of the same style (w:contextualSpacing)." },
                     "topBorder": {
                       "type": "object",
                       "description": "Adds/replaces the paragraph's top border (w:pBdr/w:top).",
