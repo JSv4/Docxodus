@@ -6247,19 +6247,21 @@ internal static partial class IrMarkupRenderer
         ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
         StampResolvedNumberingChange(newPara, op.LeftAnchor, op.RightAnchor, state);
 
-        int cursor = 0;
+        // The two paragraphs are content-equal, so each run of the revision finds its original formatting at the
+        // same place in the original's run model: text by its offset, a symbol, tab or other run child by the same
+        // child at the same offset (issue #1784). A run inside a hyperlink is found the same way.
+        var rightRuns = new SourceRunModel(rightPara);
         foreach (var child in rightPara.Elements().Where(e => e.Name != W.pPr))
         {
             var clone = StripUnids(new XElement(child));
             state.RegisterMediaReferences(clone);
-            if (clone.Name == W.r)
+            foreach (var (source, copy) in child.DescendantsAndSelf(W.r).Zip(clone.DescendantsAndSelf(W.r)))
             {
-                // A run whose old formatting is its own (the paragraph changed only its paragraph or section
+                var original = leftRuns.RPrsAlignedWith(rightRuns, source);
+                // A run whose original formatting is its own (the paragraph changed only its paragraph or section
                 // properties, or other runs changed) carries no run-format revision (issue #1775).
-                var length = RunTextLength(clone);
-                if (!leftRuns.TextRangeHasRPr(cursor, cursor + length, clone.Element(W.rPr)))
-                    ApplyRPrChange(clone, leftRuns.RPrAtTextOffset(cursor), state);
-                cursor += length;
+                if (original.Count > 0 && !original.All(rPr => SourceRunModel.SameStampedRPr(rPr, copy.Element(W.rPr))))
+                    ApplyRPrChange(copy, original[0], state);
             }
             newPara.Add(clone);
         }
@@ -7759,9 +7761,6 @@ internal static partial class IrMarkupRenderer
 
     // ----------------------------------------------------------------- rPrChange (format change)
 
-    /// <summary>The number of <c>w:t</c> characters a rebuilt run carries (for advancing the char cursor).</summary>
-    private static int RunTextLength(XElement run) =>
-        run.Elements(W.t).Sum(t => t.Value.Length);
 
     /// <summary>The <c>w:r</c> elements that should receive a <c>w:rPrChange</c> stamp for a FormatChanged span,
     /// given an emitted run-level element: the element itself when it IS a run, otherwise its descendant runs (a
@@ -12188,15 +12187,34 @@ internal static partial class IrMarkupRenderer
 
         public XElement? RPrAtPosition(int at) => RPrAtPosition(at, textOffset: false);
 
-        /// <summary>Whether every source run covering the text offsets <c>[start, end)</c> would stamp the same
-        /// <c>w:rPrChange</c> inner as <paramref name="rPr"/> (an empty range reads the run at <paramref name="start"/>).</summary>
-        public bool TextRangeHasRPr(int start, int end, XElement? rPr)
+        /// <summary>
+        /// The run properties this paragraph has under each part of <paramref name="run"/>, a source run of
+        /// <paramref name="model"/>, a content-equal paragraph: for its text, those of every run here covering the
+        /// same text offsets; for any other run child (a symbol, tab, break, drawing, field character), those of the
+        /// run here holding the same child at the same offset, the nth such for the nth. Empty when the run is not
+        /// part of <paramref name="model"/> (a run inside a text box or an atomic container).
+        /// </summary>
+        public List<XElement?> RPrsAlignedWith(SourceRunModel model, XElement run)
         {
-            var covering = _segments.Where(segment => segment.Kind == SegmentKind.RunText &&
-                segment.TextStart < end && start < segment.TextEnd).ToList();
-            return covering.Count > 0
-                ? covering.All(segment => SameStampedRPr(segment.Element.Element(W.rPr), rPr))
-                : SameStampedRPr(RPrAtTextOffset(start), rPr);
+            var result = new List<XElement?>();
+            foreach (var segment in model._segments.Where(segment => ReferenceEquals(segment.Element, run)))
+            {
+                if (segment.Kind == SegmentKind.RunText)
+                {
+                    result.AddRange(_segments.Where(other => other.Kind == SegmentKind.RunText &&
+                        other.TextStart < segment.TextEnd && segment.TextStart < other.TextEnd)
+                        .Select(other => other.Element.Element(W.rPr)));
+                    continue;
+                }
+                int ordinal = model._segments.TakeWhile(other => other != segment).Count(other => SameSlot(other, segment));
+                var match = _segments.Where(other => SameSlot(other, segment)).ElementAtOrDefault(ordinal);
+                result.Add(match is not null ? match.Element.Element(W.rPr) : RPrAtTextOffset(segment.TextStart));
+            }
+            return result;
+
+            static bool SameSlot(Segment candidate, Segment segment) =>
+                candidate.Kind == segment.Kind && candidate.TextStart == segment.TextStart &&
+                candidate.OtherChild?.Name == segment.OtherChild?.Name;
         }
 
         private XElement? RPrAtPosition(int at, bool textOffset)
@@ -12242,7 +12260,7 @@ internal static partial class IrMarkupRenderer
 
         /// <summary>Whether two source-run <c>w:rPr</c> would stamp an IDENTICAL <c>w:rPrChange</c> inner —
         /// compared exactly as <c>ApplyRPrChange</c> builds it (StripUnids over a clone; absent ⇒ empty rPr).</summary>
-        private static bool SameStampedRPr(XElement? a, XElement? b) =>
+        internal static bool SameStampedRPr(XElement? a, XElement? b) =>
             XNode.DeepEquals(NormalizedStampedRPr(a), NormalizedStampedRPr(b));
 
         private static XElement NormalizedStampedRPr(XElement? rPr) =>

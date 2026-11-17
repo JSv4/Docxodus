@@ -1237,6 +1237,47 @@ public class BlockFormatChangeTests
         AssertNoSchemaErrors(result);
     }
 
+    // -------------------------------------- format-only paragraph: each run's own original formatting (#1784)
+
+    /// <summary>Each top-level run's formatting flags in the first body paragraph, in order, as "text:flags"
+    /// (a run inside a hyperlink is listed too).</summary>
+    private static string[] RunFormats(WmlDocument doc) =>
+        BodyOf(doc).Elements(W + "p").First().Descendants(W + "r").Select(r =>
+        {
+            var rPr = r.Element(W + "rPr");
+            var flags = string.Concat(new[] { "b", "u" }.Where(f => rPr?.Element(W + f) is not null));
+            var text = string.Concat(r.Elements().Select(e => e.Name == W + "t" ? e.Value
+                : e.Name == W + "sym" ? "[sym]" : e.Name == W + "tab" ? "[tab]" : ""));
+            return text + ":" + flags;
+        }).ToArray();
+
+    [Theory]
+    // A symbol counts as a character in the original's run model; the runs after it read their own formatting.
+    [InlineData("<w:r><w:t xml:space=\"preserve\">Lead </w:t></w:r><w:r><w:sym w:font=\"Symbol\" w:char=\"F0B7\"/></w:r>" +
+        "<w:r>{B}<w:t>bold</w:t></w:r><w:r><w:t xml:space=\"preserve\"> plain tail</w:t></w:r>")]
+    // A tab run carries its own formatting, not the next text run's.
+    [InlineData("<w:r><w:t>Lead</w:t></w:r><w:r>{U}<w:tab/></w:r><w:r>{B}<w:t>bold</w:t></w:r><w:r><w:t xml:space=\"preserve\"> plain tail</w:t></w:r>")]
+    // A run inside a hyperlink is marked, and its text advances the runs after it.
+    [InlineData("<w:r><w:t xml:space=\"preserve\">Lead </w:t></w:r><w:hyperlink w:anchor=\"Tide\"><w:r>{B}<w:t>linked</w:t></w:r></w:hyperlink>" +
+        "<w:r><w:t xml:space=\"preserve\"> plain tail</w:t></w:r>")]
+    public void Rejecting_a_format_only_paragraph_restores_each_runs_own_formatting(string runs)
+    {
+        // The original formats some runs; the revision removes that formatting and centres the paragraph.
+        var original = IrTestDocuments.FromBodyXml("<w:p>" + runs.Replace("{B}", "<w:rPr><w:b/></w:rPr>")
+            .Replace("{U}", "<w:rPr><w:u w:val=\"single\"/></w:rPr>") + "</w:p>");
+        var revised = IrTestDocuments.FromBodyXml("<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr>" +
+            runs.Replace("{B}", "").Replace("{U}", "") + "</w:p>");
+
+        var redline = DocxDiff.Compare(original, revised, ModeledOnly);
+        Assert.Equal(RunFormats(original), RunFormats(RevisionProcessor.RejectRevisions(redline)));
+        Assert.Equal(RunFormats(revised), RunFormats(RevisionProcessor.AcceptRevisions(redline)));
+        // Only the runs whose formatting changed are marked.
+        var marked = BodyOf(redline).Elements(W + "p").First().Descendants(W + "r")
+            .Count(r => r.Element(W + "rPr")?.Element(W + "rPrChange") is not null);
+        Assert.Equal(runs.Split("{").Length - 1, marked);
+        AssertNoSchemaErrors(redline);
+    }
+
     // Return a copy of <paramref name="doc"/> whose trailing sectPr has a w:pgMar with the given uniform margin.
     private static WmlDocument WithSectPrMargin(WmlDocument doc, string margin)
     {
