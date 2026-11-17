@@ -549,6 +549,74 @@ public sealed record TableBorderSpec
 }
 
 /// <summary>
+/// One level of a list's numbering definition (a <c>w:lvl</c> of its <c>w:abstractNum</c>), as
+/// <see cref="DocxSession.GetListLevels"/> reads it: what Word's <i>Define New Multilevel List</i>
+/// dialog shows for the level.
+/// </summary>
+public sealed record ListLevelInfo
+{
+    /// <summary>The level, 0 (the top) to 8.</summary>
+    public int Level { get; init; }
+
+    /// <summary>The number format as OOXML writes it (<c>w:numFmt</c>): <c>decimal</c>,
+    /// <c>lowerLetter</c>, <c>upperLetter</c>, <c>lowerRoman</c>, <c>upperRoman</c>,
+    /// <c>bullet</c>, <c>none</c>, or any other token a document carries.</summary>
+    public string Format { get; init; } = "decimal";
+
+    /// <summary>The number's text (<c>w:lvlText</c>): <c>%1.</c> is level 1's number and a
+    /// period, <c>%1.%2</c> a legal number, <c>(%3)</c> level 3's in parentheses; a bullet
+    /// level's glyph.</summary>
+    public string Text { get; init; } = "";
+
+    /// <summary>The level's first number (<c>w:start</c>).</summary>
+    public int Start { get; init; } = 1;
+
+    /// <summary>Where the number starts, in twips from the text margin: the level's
+    /// <c>w:ind</c> left edge less its hanging indent (plus a first-line indent).</summary>
+    public int NumberPositionTwips { get; init; }
+
+    /// <summary>Where the text (and every line after the first) starts, in twips: the level's
+    /// <c>w:ind</c> left edge.</summary>
+    public int TextPositionTwips { get; init; }
+
+    /// <summary>Legal numbering (<c>w:isLgl</c>): the higher levels' numbers in this level's
+    /// text are shown as arabic numbers, as in <c>1.1</c> under a roman <c>I.</c>.</summary>
+    public bool Legal { get; init; }
+}
+
+/// <summary>
+/// A change to one level of a list's numbering for <see cref="DocxSession.SetListLevels"/>.
+/// <see cref="Level"/> says which level; every other field is tri-state: null leaves it as it is.
+/// </summary>
+public sealed record ListLevelSpec
+{
+    /// <summary>The level to change, 0 (the top) to 8.</summary>
+    public int Level { get; init; }
+
+    /// <summary>The number format (<c>w:numFmt</c>): <c>decimal</c>, <c>lowerLetter</c>,
+    /// <c>upperLetter</c>, <c>lowerRoman</c>, <c>upperRoman</c>, <c>bullet</c> or <c>none</c>.</summary>
+    public string? Format { get; init; }
+
+    /// <summary>The number's text (<c>w:lvlText</c>), with <c>%1</c> to <c>%9</c> for the levels'
+    /// numbers: <c>%1.</c>, <c>%1.%2</c>, <c>(%2)</c>; a bullet level's glyph. A level may name only
+    /// itself and the levels above it.</summary>
+    public string? Text { get; init; }
+
+    /// <summary>The level's first number (<c>w:start</c>), 0 or more. Setting it also drops a
+    /// restart (<c>w:startOverride</c>) this list carries at the level, which would hide it.</summary>
+    public int? Start { get; init; }
+
+    /// <summary>Where the number starts, twips from the text margin.</summary>
+    public int? NumberPositionTwips { get; init; }
+
+    /// <summary>Where the text starts, twips from the text margin.</summary>
+    public int? TextPositionTwips { get; init; }
+
+    /// <summary>Legal numbering (<c>w:isLgl</c>).</summary>
+    public bool? Legal { get; init; }
+}
+
+/// <summary>
 /// List membership for <see cref="DocxSession.ApplyListFormat"/> /
 /// <see cref="DocxSession.ApplyListFormatRange"/>. The non-<see cref="None"/> members decompose
 /// (via <c>Internal.NumberFormats.FromListFormat</c>) into an underlying <see cref="NumberFormat"/>
