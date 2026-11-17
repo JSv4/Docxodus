@@ -1273,6 +1273,10 @@ internal static class DocxSessionOps
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId, s => s.ClearListStartOverride(anchorId));
 
+    public static string SetListMembership(int handle, string anchorId, int numId, int level,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetListMembership(anchorId, numId, level));
+
     // ─── Tier D: tables ─────────────────────────────────────────────────
 
     public static string GetTableMetadata(int handle, string tableAnchorId) =>

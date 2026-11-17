@@ -2007,6 +2007,7 @@ export interface DocxodusWasmExports {
     ApplyListFormatRange: (handle: number, firstAnchor: string, lastAnchor: string, kind: string) => string;
     SetListStartOverride: (handle: number, anchor: string, value: number) => string;
     ClearListStartOverride: (handle: number, anchor: string) => string;
+    SetListMembership: (handle: number, anchor: string, numId: number, level: number) => string;
     ReplaceCellContent: (handle: number, anchor: string, md: string) => string;
     RawGetXml: (handle: number, anchor: string) => string;
     RawInsertXml: (handle: number, anchor: string, pos: string, xml: string) => string;
