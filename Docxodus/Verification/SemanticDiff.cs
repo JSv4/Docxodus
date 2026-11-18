@@ -577,13 +577,13 @@ internal static class SemanticDiffEngine
 
                 if (op.Kind == IrEditOpKind.EqualBlock)
                 {
-                    // The edit script pairs blocks under its own format policy, which by default compares modeled
-                    // properties only. A pair it calls equal can still differ in a property it does not model (an
-                    // inline section break's title page or columns, an unmodeled paragraph or run property), and
-                    // the full format fingerprint says so; compare those pairs as format changes (issue #1785).
-                    if (Find(_left, op.LeftAnchor) is { } equalLeft && Find(_right, op.RightAnchor) is { } equalRight &&
-                        !equalLeft.FormatFingerprint.Equals(equalRight.FormatFingerprint))
-                        CompareBlocks(equalLeft, equalRight, op, partUri, leftScope, rightScope);
+                    // The edit script pairs paragraphs on their modeled properties, so a paragraph it calls
+                    // unchanged can still end a section whose unmodeled properties (w:titlePg, w:cols) changed.
+                    // The final section's own block reports that change, so an inline break does too (#1785).
+                    if (Find(_left, op.LeftAnchor) is IrParagraph equalLeft && Find(_right, op.RightAnchor) is IrParagraph equalRight &&
+                        InlineSectionDiffers(equalLeft, equalRight))
+                        CompareSection(equalLeft.InlineSectionFormat, equalRight.InlineSectionFormat, partUri,
+                            equalLeft.Anchor.ToString(), equalRight.Anchor.ToString(), equalLeft.Anchor.Scope, equalRight.Anchor.Scope);
                     continue;
                 }
 
@@ -2051,6 +2051,31 @@ internal static class SemanticDiffEngine
     /// <c>w:tblPrEx</c>, so a descendant search would attribute an inner value to the outer table or
     /// cell whose anchor the change record names.
     /// </summary>
+    /// <summary>Whether two paragraphs' inline section breaks hold different section properties, read from their
+    /// source XML: header and footer references (relationship ids differ between packages and their stories are
+    /// compared as stories), property history, bookkeeping attributes, insignificant whitespace and values that
+    /// only restate a default are left out.</summary>
+    private static bool InlineSectionDiffers(IrParagraph left, IrParagraph right)
+    {
+        if (left.InlineSectionFormat == right.InlineSectionFormat)
+            return false;
+        var leftSection = Child(Child(left.Source.Element, "pPr"), "sectPr");
+        var rightSection = Child(Child(right.Source.Element, "pPr"), "sectPr");
+        if (leftSection is null || rightSection is null)
+            return leftSection != rightSection;
+        return !XNode.DeepEquals(ComparableSection(leftSection), ComparableSection(rightSection));
+    }
+
+    private static XElement ComparableSection(XElement sectPr)
+    {
+        var copy = Docxodus.Internal.SectionPropertyDefaults.WithoutStatedDefaults(sectPr);
+        copy.Elements().Where(child => child.Name.LocalName is "headerReference" or "footerReference" or "sectPrChange").Remove();
+        copy.DescendantNodes().OfType<XText>().Where(text => string.IsNullOrWhiteSpace(text.Value)).Remove();
+        copy.DescendantsAndSelf().Attributes().Where(attribute => attribute.IsNamespaceDeclaration
+            || attribute.Name.Namespace == PtOpenXml.pt || attribute.Name.LocalName.StartsWith("rsid", StringComparison.Ordinal)).Remove();
+        return copy;
+    }
+
     private static XElement? Child(XElement? parent, string localName) =>
         parent?.Elements().FirstOrDefault(element => element.Name.LocalName == localName);
 
