@@ -1286,6 +1286,15 @@ public class BlockFormatChangeTests
         "<w:r><w:t>Harbor pilots</w:t></w:r>")]
     [InlineData("<w:r><w:rPr><w:i/></w:rPr><w:t xml:space=\"preserve\">Harbor </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>pilots</w:t></w:r>",
         "<w:r><w:rPr><w:i/></w:rPr><w:t>Harbor pilots</w:t></w:r>")]
+    // A rendered page break in the run rides with its text.
+    [InlineData("<w:r><w:lastRenderedPageBreak/><w:t xml:space=\"preserve\">Harbor </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>pilots</w:t></w:r>",
+        "<w:r><w:lastRenderedPageBreak/><w:t>Harbor pilots</w:t></w:r>")]
+    // A numbered heading's tab goes with the text it aligned to.
+    [InlineData("<w:r><w:rPr><w:b/></w:rPr><w:t>1.</w:t></w:r><w:r><w:tab/><w:t>Title</w:t></w:r>",
+        "<w:r><w:t>1.</w:t><w:tab/><w:t>Title</w:t></w:r>")]
+    // Two tabs in one revised run over a plain and a bold original tab.
+    [InlineData("<w:r><w:t>Lead</w:t></w:r><w:r><w:tab/></w:r><w:r><w:rPr><w:b/></w:rPr><w:tab/></w:r>",
+        "<w:r><w:t>Lead</w:t></w:r><w:r><w:tab/><w:tab/></w:r>")]
     public void A_revised_run_over_original_text_in_two_formats_rejects_to_both(string originalRuns, string revisedRuns)
     {
         var original = IrTestDocuments.FromBodyXml("<w:p>" + originalRuns + "</w:p>");
@@ -1296,19 +1305,6 @@ public class BlockFormatChangeTests
         Assert.Equal(CharacterFormats(revised), CharacterFormats(RevisionProcessor.AcceptRevisions(redline)));
         AssertNoNoOpRunChange(redline);
         AssertNoSchemaErrors(redline);
-    }
-
-    [Fact]
-    public void A_revised_run_that_cannot_be_split_carries_no_empty_run_change()
-    {
-        // Control: a run of two tabs (not text, so not split) over an original plain tab and bold tab archives the
-        // formatting that differs from its own, never its own.
-        var original = IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>Lead</w:t></w:r><w:r><w:tab/></w:r><w:r><w:rPr><w:b/></w:rPr><w:tab/></w:r></w:p>");
-        var revised = IrTestDocuments.FromBodyXml("<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:t>Lead</w:t></w:r><w:r><w:tab/><w:tab/></w:r></w:p>");
-
-        var redline = DocxDiff.Compare(original, revised, ModeledOnly);
-        AssertNoNoOpRunChange(redline);
-        Assert.Equal(CharacterFormats(revised), CharacterFormats(RevisionProcessor.AcceptRevisions(redline)));
     }
 
     /// <summary>The first paragraph's characters, each with its run's formatting flags ("b", "i", "u").</summary>
