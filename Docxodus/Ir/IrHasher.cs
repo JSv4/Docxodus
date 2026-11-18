@@ -147,8 +147,37 @@ internal static class IrHasher
                 d.Remove();
         }
 
+        RemoveInsignificantWhitespace(element);
+
         foreach (var el in element.DescendantsAndSelf())
             CleanAttributes(el, resolver, attributeRewrite);
+    }
+
+    /// <summary>
+    /// Drop whitespace-only text that sits between child elements (the indentation of a pretty-printed part), so
+    /// re-indenting a document is no change (issue #1793). Text in a text-only element, such as the spaces of a
+    /// <c>w:t</c>, is content and stays, as does any text under <c>xml:space="preserve"</c>.
+    /// </summary>
+    private static void RemoveInsignificantWhitespace(XElement element)
+    {
+        List<XText>? whitespace = null;
+        foreach (var node in element.DescendantNodes())
+        {
+            if (node is XText text && text is not XCData && string.IsNullOrWhiteSpace(text.Value) &&
+                text.Parent is { } parent && parent.HasElements && !PreservesSpace(parent))
+                (whitespace ??= new List<XText>()).Add(text);
+        }
+        if (whitespace is not null)
+            foreach (var text in whitespace)
+                text.Remove();
+    }
+
+    private static bool PreservesSpace(XElement element)
+    {
+        for (var current = element; current is not null; current = current.Parent)
+            if (current.Attribute(XNamespace.Xml + "space") is { } space)
+                return space.Value == "preserve";
+        return false;
     }
 
     private static void CleanAttributes(

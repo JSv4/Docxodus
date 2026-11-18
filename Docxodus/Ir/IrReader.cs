@@ -61,9 +61,11 @@ internal static class IrReader
         W + "shd",
     };
 
+    // Header and footer references are story references, not section format: their stories are compared as
+    // stories, and their relationship ids differ between packages that hold the same headers (issue #1793).
     private static readonly HashSet<XName> SectPrConsumed = new()
     {
-        W + "pgSz", W + "pgMar", W + "type",
+        W + "pgSz", W + "pgMar", W + "type", W + "headerReference", W + "footerReference",
     };
 
     /// <summary>
