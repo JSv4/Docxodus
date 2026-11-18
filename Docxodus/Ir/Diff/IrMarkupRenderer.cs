@@ -10374,7 +10374,7 @@ internal static partial class IrMarkupRenderer
     };
 
     private static bool StyleToggleOn(XElement? element) => element is not null &&
-        (string?)element.Attribute(W.val) is not ("0" or "false" or "off");
+        WordprocessingMLUtil.OnOffValue((string?)element.Attribute(W.val)) != false;
 
     /// <summary>The rFonts slot pairs: a concrete attribute and the theme reference that OUTRANKS it
     /// in the same slot. A layer declaring one member of a pair overrides the other from below.</summary>
