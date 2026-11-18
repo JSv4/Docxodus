@@ -114,10 +114,5 @@ internal static class SectionPropertyDefaults
 
     /// <summary>An on/off value, read without regard to case as Docxodus's readers read it; null when it is
     /// neither, so an unreadable value is never taken for a default.</summary>
-    private static bool? OnOff(string value) => value.ToLowerInvariant() switch
-    {
-        "1" or "true" or "on" => true,
-        "0" or "false" or "off" => false,
-        _ => null,
-    };
+    private static bool? OnOff(string value) => WordprocessingMLUtil.OnOffValue(value);
 }
