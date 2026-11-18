@@ -1278,6 +1278,59 @@ public class BlockFormatChangeTests
         AssertNoSchemaErrors(redline);
     }
 
+    [Theory]
+    // Word re-split the runs: one revised run covers original text in two formats.
+    [InlineData("<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">Harbor </w:t></w:r><w:r><w:t>pilots</w:t></w:r>",
+        "<w:r><w:t>Harbor pilots</w:t></w:r>")]
+    [InlineData("<w:r><w:t xml:space=\"preserve\">Harbor </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>pilots</w:t></w:r>",
+        "<w:r><w:t>Harbor pilots</w:t></w:r>")]
+    [InlineData("<w:r><w:rPr><w:i/></w:rPr><w:t xml:space=\"preserve\">Harbor </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>pilots</w:t></w:r>",
+        "<w:r><w:rPr><w:i/></w:rPr><w:t>Harbor pilots</w:t></w:r>")]
+    public void A_revised_run_over_original_text_in_two_formats_rejects_to_both(string originalRuns, string revisedRuns)
+    {
+        var original = IrTestDocuments.FromBodyXml("<w:p>" + originalRuns + "</w:p>");
+        var revised = IrTestDocuments.FromBodyXml("<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr>" + revisedRuns + "</w:p>");
+
+        var redline = DocxDiff.Compare(original, revised, ModeledOnly);
+        Assert.Equal(CharacterFormats(original), CharacterFormats(RevisionProcessor.RejectRevisions(redline)));
+        Assert.Equal(CharacterFormats(revised), CharacterFormats(RevisionProcessor.AcceptRevisions(redline)));
+        AssertNoNoOpRunChange(redline);
+        AssertNoSchemaErrors(redline);
+    }
+
+    [Fact]
+    public void A_revised_run_that_cannot_be_split_carries_no_empty_run_change()
+    {
+        // Control: a run of two tabs (not text, so not split) over an original plain tab and bold tab archives the
+        // formatting that differs from its own, never its own.
+        var original = IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>Lead</w:t></w:r><w:r><w:tab/></w:r><w:r><w:rPr><w:b/></w:rPr><w:tab/></w:r></w:p>");
+        var revised = IrTestDocuments.FromBodyXml("<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:t>Lead</w:t></w:r><w:r><w:tab/><w:tab/></w:r></w:p>");
+
+        var redline = DocxDiff.Compare(original, revised, ModeledOnly);
+        AssertNoNoOpRunChange(redline);
+        Assert.Equal(CharacterFormats(revised), CharacterFormats(RevisionProcessor.AcceptRevisions(redline)));
+    }
+
+    /// <summary>The first paragraph's characters, each with its run's formatting flags ("b", "i", "u").</summary>
+    private static string[] CharacterFormats(WmlDocument doc) =>
+        BodyOf(doc).Elements(W + "p").First().Descendants(W + "r").SelectMany(r =>
+        {
+            var rPr = r.Element(W + "rPr");
+            var flags = string.Concat(new[] { "b", "i", "u" }.Where(f => rPr?.Element(W + f) is not null));
+            return r.Elements().SelectMany(e => e.Name == W + "t" ? e.Value.Select(c => c + ":" + flags)
+                : e.Name == W + "tab" ? new[] { "\t:" + flags } : System.Array.Empty<string>());
+        }).ToArray();
+
+    /// <summary>No run's <c>w:rPrChange</c> archives the properties the run already has.</summary>
+    private static void AssertNoNoOpRunChange(WmlDocument redline)
+    {
+        foreach (var change in BodyOf(redline).Descendants(W + "rPrChange"))
+        {
+            var current = new XElement(W + "rPr", change.Parent!.Elements().Where(e => e.Name != W + "rPrChange"));
+            Assert.False(XNode.DeepEquals(current, change.Element(W + "rPr")), "a w:rPrChange archives the run's own properties");
+        }
+    }
+
     // Return a copy of <paramref name="doc"/> whose trailing sectPr has a w:pgMar with the given uniform margin.
     private static WmlDocument WithSectPrMargin(WmlDocument doc, string margin)
     {
