@@ -2045,16 +2045,10 @@ internal static class SemanticDiffEngine
             ("digest", Digest(table.TblGridDigest, "docxodus-ir-table-grid-v1")));
     }
 
-    /// <summary>
-    /// The first direct child with this local name. Property projection never sweeps arbitrary
-    /// descendants: a nested table carries its own <c>w:tblPr</c>/<c>w:tblGrid</c> and a row carries
-    /// <c>w:tblPrEx</c>, so a descendant search would attribute an inner value to the outer table or
-    /// cell whose anchor the change record names.
-    /// </summary>
     /// <summary>Whether two paragraphs' inline section breaks hold different section properties, read from their
     /// source XML: header and footer references (relationship ids differ between packages and their stories are
-    /// compared as stories), property history, bookkeeping attributes, insignificant whitespace and values that
-    /// only restate a default are left out.</summary>
+    /// compared as stories), property history, bookkeeping attributes, attribute order, insignificant whitespace
+    /// and values that only restate a default are left out.</summary>
     private static bool InlineSectionDiffers(IrParagraph left, IrParagraph right)
     {
         if (left.InlineSectionFormat == right.InlineSectionFormat)
@@ -2073,9 +2067,18 @@ internal static class SemanticDiffEngine
         copy.DescendantNodes().OfType<XText>().Where(text => string.IsNullOrWhiteSpace(text.Value)).Remove();
         copy.DescendantsAndSelf().Attributes().Where(attribute => attribute.IsNamespaceDeclaration
             || attribute.Name.Namespace == PtOpenXml.pt || attribute.Name.LocalName.StartsWith("rsid", StringComparison.Ordinal)).Remove();
+        // Attribute order carries no meaning.
+        foreach (var element in copy.DescendantsAndSelf())
+            element.ReplaceAttributes(element.Attributes().OrderBy(attribute => attribute.Name.ToString(), StringComparer.Ordinal).ToList());
         return copy;
     }
 
+    /// <summary>
+    /// The first direct child with this local name. Property projection never sweeps arbitrary
+    /// descendants: a nested table carries its own <c>w:tblPr</c>/<c>w:tblGrid</c> and a row carries
+    /// <c>w:tblPrEx</c>, so a descendant search would attribute an inner value to the outer table or
+    /// cell whose anchor the change record names.
+    /// </summary>
     private static XElement? Child(XElement? parent, string localName) =>
         parent?.Elements().FirstOrDefault(element => element.Name.LocalName == localName);
 

@@ -38,7 +38,13 @@ public class SemanticDiffUnmodeledPropertyTests
     // Indentation inside the section's properties.
     [InlineData(Page + "<w:cols w:num=\"2\" w:equalWidth=\"0\"><w:col w:w=\"4000\"/><w:col w:w=\"4000\"/></w:cols>",
         Page + "<w:cols w:num=\"2\" w:equalWidth=\"0\">\n  <w:col w:w=\"4000\"/>\n  <w:col w:w=\"4000\"/>\n</w:cols>", "")]
-    // A default stated on one side only.
+    // Reordered attributes beside indentation.
+    [InlineData(Page + "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/>" +
+        "<w:cols w:num=\"2\" w:equalWidth=\"0\"><w:col w:w=\"4000\"/><w:col w:w=\"4000\"/></w:cols>",
+        Page + "<w:pgMar w:left=\"1440\" w:right=\"1440\" w:top=\"1440\" w:bottom=\"1440\" w:gutter=\"0\" w:header=\"720\" w:footer=\"720\"/>" +
+        "<w:cols w:equalWidth=\"0\" w:num=\"2\">\n  <w:col w:w=\"4000\"/>\n  <w:col w:w=\"4000\"/>\n</w:cols>", "")]
+    // A default stated on one side only: the orientation (which the section format records) and a title page.
+    [InlineData("<w:pgSz w:w=\"12240\" w:h=\"15840\" w:orient=\"portrait\"/>", Page, "")]
     [InlineData(Page + "<w:titlePg w:val=\"0\"/>", Page, "")]
     // A paragraph-mark language, which the default comparison policy does not model.
     [InlineData(Page, Page, "<w:rPr><w:lang w:val=\"nb-NO\"/></w:rPr>")]
