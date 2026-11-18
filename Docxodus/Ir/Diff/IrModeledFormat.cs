@@ -132,6 +132,11 @@ internal static class IrModeledFormat
         {
             sb.Append('¶');
             sb.Append(ParaKey(paragraph.Format));
+            // The paragraph mark's modeled run properties (size, bold, colour, …): a mark-only change of how the
+            // paragraph looks classifies FormatOnly, and the renderer records it as w:pPr/w:rPr/w:rPrChange
+            // (issue #1794). Its unmodeled properties (w:lang) stay out, as they do for runs.
+            sb.Append('¤');
+            sb.Append(RunKey(paragraph.MarkFormat));
         }
         // A3: an inline (in-pPr) sectPr's modeled page setup participates too, so a mid-document
         // sectPr-only change classifies FormatOnly instead of Unchanged under ModeledOnly. Gated on the
