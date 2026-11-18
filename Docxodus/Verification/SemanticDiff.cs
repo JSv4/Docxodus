@@ -576,7 +576,16 @@ internal static class SemanticDiffEngine
                         RecordAlignment(op.LeftAnchor, splitRight);
 
                 if (op.Kind == IrEditOpKind.EqualBlock)
+                {
+                    // The edit script pairs paragraphs on their modeled properties, so a paragraph it calls
+                    // unchanged can still end a section whose unmodeled properties (w:titlePg, w:cols) changed.
+                    // The final section's own block reports that change, so an inline break does too (#1785).
+                    if (Find(_left, op.LeftAnchor) is IrParagraph equalLeft && Find(_right, op.RightAnchor) is IrParagraph equalRight &&
+                        InlineSectionDiffers(equalLeft, equalRight))
+                        CompareSection(equalLeft.InlineSectionFormat, equalRight.InlineSectionFormat, partUri,
+                            equalLeft.Anchor.ToString(), equalRight.Anchor.ToString(), equalLeft.Anchor.Scope, equalRight.Anchor.Scope);
                     continue;
+                }
 
                 if (op.Kind is IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock)
                 {
@@ -2034,6 +2043,34 @@ internal static class SemanticDiffEngine
         return Obj(
             ("columnsTwips", SemanticValue.Array(columns)),
             ("digest", Digest(table.TblGridDigest, "docxodus-ir-table-grid-v1")));
+    }
+
+    /// <summary>Whether two paragraphs' inline section breaks hold different section properties, read from their
+    /// source XML: header and footer references (relationship ids differ between packages and their stories are
+    /// compared as stories), property history, bookkeeping attributes, attribute order, insignificant whitespace
+    /// and values that only restate a default are left out.</summary>
+    private static bool InlineSectionDiffers(IrParagraph left, IrParagraph right)
+    {
+        if (left.InlineSectionFormat == right.InlineSectionFormat)
+            return false;
+        var leftSection = Child(Child(left.Source.Element, "pPr"), "sectPr");
+        var rightSection = Child(Child(right.Source.Element, "pPr"), "sectPr");
+        if (leftSection is null || rightSection is null)
+            return leftSection != rightSection;
+        return !XNode.DeepEquals(ComparableSection(leftSection), ComparableSection(rightSection));
+    }
+
+    private static XElement ComparableSection(XElement sectPr)
+    {
+        var copy = Docxodus.Internal.SectionPropertyDefaults.WithoutStatedDefaults(sectPr);
+        copy.Elements().Where(child => child.Name.LocalName is "headerReference" or "footerReference" or "sectPrChange").Remove();
+        copy.DescendantNodes().OfType<XText>().Where(text => string.IsNullOrWhiteSpace(text.Value)).Remove();
+        copy.DescendantsAndSelf().Attributes().Where(attribute => attribute.IsNamespaceDeclaration
+            || attribute.Name.Namespace == PtOpenXml.pt || attribute.Name.LocalName.StartsWith("rsid", StringComparison.Ordinal)).Remove();
+        // Attribute order carries no meaning.
+        foreach (var element in copy.DescendantsAndSelf())
+            element.ReplaceAttributes(element.Attributes().OrderBy(attribute => attribute.Name.ToString(), StringComparer.Ordinal).ToList());
+        return copy;
     }
 
     /// <summary>
