@@ -1307,6 +1307,43 @@ public class BlockFormatChangeTests
         AssertNoSchemaErrors(redline);
     }
 
+    [Fact]
+    public void A_split_run_holding_a_picture_keeps_the_picture_it_showed()
+    {
+        // The revision names the same picture by a relationship id that the original gives to another picture, so
+        // the redline must rewrite the split run's r:embed to the original's id for that picture.
+        static string Picture(string relId) =>
+            "<w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\"><wp:extent cx=\"95250\" cy=\"95250\"/>" +
+            "<wp:docPr id=\"1\" name=\"Figure\"/><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">" +
+            "<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:nvPicPr><pic:cNvPr id=\"1\" name=\"Figure\"/>" +
+            $"<pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed=\"{relId}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>" +
+            "<pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"95250\" cy=\"95250\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr>" +
+            "</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>";
+        var figure = IrTestDocuments.TinyPng.Concat(new byte[] { 1 }).ToArray();
+        var other = IrTestDocuments.TinyPng.Concat(new byte[] { 2 }).ToArray();
+        var original = IrTestDocuments.FromBodyXmlWithImageParts(
+            "<w:p><w:r><w:t xml:space=\"preserve\">Fig </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>1</w:t>" + Picture("rIdFigure") + "</w:r></w:p>",
+            ("rIdFigure", figure), ("rIdOther", other));
+        var revised = IrTestDocuments.FromBodyXmlWithImageParts(
+            "<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:t>Fig 1</w:t>" + Picture("rIdOther") + "</w:r></w:p>",
+            ("rIdOther", figure));
+
+        var redline = DocxDiff.Compare(original, revised, ModeledOnly);
+        foreach (var doc in new[] { redline, RevisionProcessor.AcceptRevisions(redline), RevisionProcessor.RejectRevisions(redline) })
+        {
+            using var stream = new MemoryStream(doc.DocumentByteArray);
+            using var package = WordprocessingDocument.Open(stream, false);
+            var main = package.MainDocumentPart!;
+            var embed = (string)main.GetXDocument().Descendants(XName.Get("blip", "http://schemas.openxmlformats.org/drawingml/2006/main"))
+                .Single().Attribute(XName.Get("embed", "http://schemas.openxmlformats.org/officeDocument/2006/relationships"))!;
+            using var image = main.GetPartById(embed).GetStream();
+            using var bytes = new MemoryStream();
+            image.CopyTo(bytes);
+            Assert.Equal(figure, bytes.ToArray());
+        }
+        Assert.Equal(CharacterFormats(original), CharacterFormats(RevisionProcessor.RejectRevisions(redline)));
+    }
+
     /// <summary>The first paragraph's characters, each with its run's formatting flags ("b", "i", "u").</summary>
     private static string[] CharacterFormats(WmlDocument doc) =>
         BodyOf(doc).Elements(W + "p").First().Descendants(W + "r").SelectMany(r =>

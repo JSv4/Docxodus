@@ -6254,7 +6254,6 @@ internal static partial class IrMarkupRenderer
         foreach (var child in rightPara.Elements().Where(e => e.Name != W.pPr))
         {
             var clone = StripUnids(new XElement(child));
-            state.RegisterMediaReferences(clone);
             var splits = new List<(XElement Run, List<XElement> Pieces)>();
             foreach (var (source, copy) in child.DescendantsAndSelf(W.r).Zip(clone.DescendantsAndSelf(W.r)).ToList())
             {
@@ -6273,10 +6272,14 @@ internal static partial class IrMarkupRenderer
                 else
                     ApplyRPrChange(copy, original.First(piece => !SourceRunModel.SameStampedRPr(piece.RPr, own)).RPr, state);
             }
-            var topLevel = splits.FirstOrDefault(split => split.Run == clone).Pieces;
             foreach (var (run, pieces) in splits.Where(split => split.Run != clone))
                 run.ReplaceWith(pieces);
-            newPara.Add(topLevel is not null ? topLevel : clone);
+            // Register what is emitted: a split top-level run is replaced by its pieces, and the media and note
+            // reference imports must rewrite the pieces' relationship ids, not the discarded clone's.
+            var emitted = splits.FirstOrDefault(split => split.Run == clone).Pieces ?? new List<XElement> { clone };
+            foreach (var node in emitted)
+                state.RegisterMediaReferences(node);
+            newPara.Add(emitted);
         }
         sink.Add(newPara);
     }
