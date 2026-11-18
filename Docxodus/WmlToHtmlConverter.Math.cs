@@ -159,12 +159,7 @@ public static partial class WmlToHtmlConverter
         if (property == null) return absent;
         var value = property.Name.Namespace == W.w ? W.val : M.val;
         if (property.HasElements || HasUnknownMathAttributes(property, value)) return null;
-        return (string?)property.Attribute(value) switch
-        {
-            null or "1" or "true" or "on" => true,
-            "0" or "false" or "off" => false,
-            _ => null,
-        };
+        return property.Attribute(value) is { } stated ? WordprocessingMLUtil.OnOffValue(stated.Value) : true;
     }
 
     /// <summary>The <c>m:val</c> of a property, <paramref name="absent"/> when the property is

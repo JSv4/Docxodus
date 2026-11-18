@@ -47,6 +47,7 @@ public class OnOffPropertyTests
     [InlineData("off", false)]
     [InlineData("OFF", false)]
     [InlineData("maybe", null)]
+    [InlineData("", null)]
     [InlineData(null, null)]
     public void OnOffValue_reads_the_six_spellings_in_any_case(string? value, bool? expected) =>
         Assert.Equal(expected, WordprocessingMLUtil.OnOffValue(value));
@@ -63,6 +64,24 @@ public class OnOffPropertyTests
         Assert.Contains(expected, markdown);
         if (!expected.StartsWith("**"))
             Assert.DoesNotContain("**", markdown);
+    }
+
+    [Theory]
+    [InlineData("True", true)]
+    [InlineData("ON", true)]
+    [InlineData("0", false)]
+    [InlineData("maybe", false)]
+    public void A_comment_resolved_flag_reads_every_spelling_of_on(string value, bool expected) =>
+        Assert.Equal(expected, Docxodus.Internal.CommentOps.ParseDone(value));
+
+    [Fact]
+    public void A_toggle_written_FALSE_and_one_written_false_are_the_same_formatting()
+    {
+        // The IR reads a run's toggles; two spellings of off are no formatting change.
+        static WmlDocument Bold(string value) => IrTestDocuments.FromBodyXml(
+            $"<w:p><w:r><w:rPr><w:b w:val=\"{value}\"/></w:rPr><w:t>Ferry timetable</w:t></w:r></w:p>");
+        Assert.Empty(DocxDiff.GetRevisions(Bold("FALSE"), Bold("false")));
+        Assert.NotEmpty(DocxDiff.GetRevisions(Bold("TRUE"), Bold("false")));
     }
 
     [Fact]
