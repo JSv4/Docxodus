@@ -1237,6 +1237,133 @@ public class BlockFormatChangeTests
         AssertNoSchemaErrors(result);
     }
 
+    // -------------------------------------- format-only paragraph: each run's own original formatting (#1784)
+
+    /// <summary>Each top-level run's formatting flags in the first body paragraph, in order, as "text:flags"
+    /// (a run inside a hyperlink is listed too).</summary>
+    private static string[] RunFormats(WmlDocument doc) =>
+        BodyOf(doc).Elements(W + "p").First().Descendants(W + "r").Select(r =>
+        {
+            var rPr = r.Element(W + "rPr");
+            var flags = string.Concat(new[] { "b", "u" }.Where(f => rPr?.Element(W + f) is not null));
+            var text = string.Concat(r.Elements().Select(e => e.Name == W + "t" ? e.Value
+                : e.Name == W + "sym" ? "[sym]" : e.Name == W + "tab" ? "[tab]" : ""));
+            return text + ":" + flags;
+        }).ToArray();
+
+    [Theory]
+    // A symbol counts as a character in the original's run model; the runs after it read their own formatting.
+    [InlineData("<w:r><w:t xml:space=\"preserve\">Lead </w:t></w:r><w:r><w:sym w:font=\"Symbol\" w:char=\"F0B7\"/></w:r>" +
+        "<w:r>{B}<w:t>bold</w:t></w:r><w:r><w:t xml:space=\"preserve\"> plain tail</w:t></w:r>")]
+    // A tab run carries its own formatting, not the next text run's.
+    [InlineData("<w:r><w:t>Lead</w:t></w:r><w:r>{U}<w:tab/></w:r><w:r>{B}<w:t>bold</w:t></w:r><w:r><w:t xml:space=\"preserve\"> plain tail</w:t></w:r>")]
+    // A run inside a hyperlink is marked, and its text advances the runs after it.
+    [InlineData("<w:r><w:t xml:space=\"preserve\">Lead </w:t></w:r><w:hyperlink w:anchor=\"Tide\"><w:r>{B}<w:t>linked</w:t></w:r></w:hyperlink>" +
+        "<w:r><w:t xml:space=\"preserve\"> plain tail</w:t></w:r>")]
+    public void Rejecting_a_format_only_paragraph_restores_each_runs_own_formatting(string runs)
+    {
+        // The original formats some runs; the revision removes that formatting and centres the paragraph.
+        var original = IrTestDocuments.FromBodyXml("<w:p>" + runs.Replace("{B}", "<w:rPr><w:b/></w:rPr>")
+            .Replace("{U}", "<w:rPr><w:u w:val=\"single\"/></w:rPr>") + "</w:p>");
+        var revised = IrTestDocuments.FromBodyXml("<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr>" +
+            runs.Replace("{B}", "").Replace("{U}", "") + "</w:p>");
+
+        var redline = DocxDiff.Compare(original, revised, ModeledOnly);
+        Assert.Equal(RunFormats(original), RunFormats(RevisionProcessor.RejectRevisions(redline)));
+        Assert.Equal(RunFormats(revised), RunFormats(RevisionProcessor.AcceptRevisions(redline)));
+        // Only the runs whose formatting changed are marked.
+        var marked = BodyOf(redline).Elements(W + "p").First().Descendants(W + "r")
+            .Count(r => r.Element(W + "rPr")?.Element(W + "rPrChange") is not null);
+        Assert.Equal(runs.Split("{").Length - 1, marked);
+        AssertNoSchemaErrors(redline);
+    }
+
+    [Theory]
+    // Word re-split the runs: one revised run covers original text in two formats.
+    [InlineData("<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">Harbor </w:t></w:r><w:r><w:t>pilots</w:t></w:r>",
+        "<w:r><w:t>Harbor pilots</w:t></w:r>")]
+    [InlineData("<w:r><w:t xml:space=\"preserve\">Harbor </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>pilots</w:t></w:r>",
+        "<w:r><w:t>Harbor pilots</w:t></w:r>")]
+    [InlineData("<w:r><w:rPr><w:i/></w:rPr><w:t xml:space=\"preserve\">Harbor </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>pilots</w:t></w:r>",
+        "<w:r><w:rPr><w:i/></w:rPr><w:t>Harbor pilots</w:t></w:r>")]
+    // A rendered page break in the run rides with its text.
+    [InlineData("<w:r><w:lastRenderedPageBreak/><w:t xml:space=\"preserve\">Harbor </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>pilots</w:t></w:r>",
+        "<w:r><w:lastRenderedPageBreak/><w:t>Harbor pilots</w:t></w:r>")]
+    // A numbered heading's tab goes with the text it aligned to.
+    [InlineData("<w:r><w:rPr><w:b/></w:rPr><w:t>1.</w:t></w:r><w:r><w:tab/><w:t>Title</w:t></w:r>",
+        "<w:r><w:t>1.</w:t><w:tab/><w:t>Title</w:t></w:r>")]
+    // Two tabs in one revised run over a plain and a bold original tab.
+    [InlineData("<w:r><w:t>Lead</w:t></w:r><w:r><w:tab/></w:r><w:r><w:rPr><w:b/></w:rPr><w:tab/></w:r>",
+        "<w:r><w:t>Lead</w:t></w:r><w:r><w:tab/><w:tab/></w:r>")]
+    public void A_revised_run_over_original_text_in_two_formats_rejects_to_both(string originalRuns, string revisedRuns)
+    {
+        var original = IrTestDocuments.FromBodyXml("<w:p>" + originalRuns + "</w:p>");
+        var revised = IrTestDocuments.FromBodyXml("<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr>" + revisedRuns + "</w:p>");
+
+        var redline = DocxDiff.Compare(original, revised, ModeledOnly);
+        Assert.Equal(CharacterFormats(original), CharacterFormats(RevisionProcessor.RejectRevisions(redline)));
+        Assert.Equal(CharacterFormats(revised), CharacterFormats(RevisionProcessor.AcceptRevisions(redline)));
+        AssertNoNoOpRunChange(redline);
+        AssertNoSchemaErrors(redline);
+    }
+
+    [Fact]
+    public void A_split_run_holding_a_picture_keeps_the_picture_it_showed()
+    {
+        // The revision names the same picture by a relationship id that the original gives to another picture, so
+        // the redline must rewrite the split run's r:embed to the original's id for that picture.
+        static string Picture(string relId) =>
+            "<w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\"><wp:extent cx=\"95250\" cy=\"95250\"/>" +
+            "<wp:docPr id=\"1\" name=\"Figure\"/><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">" +
+            "<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:nvPicPr><pic:cNvPr id=\"1\" name=\"Figure\"/>" +
+            $"<pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed=\"{relId}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>" +
+            "<pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"95250\" cy=\"95250\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr>" +
+            "</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>";
+        var figure = IrTestDocuments.TinyPng.Concat(new byte[] { 1 }).ToArray();
+        var other = IrTestDocuments.TinyPng.Concat(new byte[] { 2 }).ToArray();
+        var original = IrTestDocuments.FromBodyXmlWithImageParts(
+            "<w:p><w:r><w:t xml:space=\"preserve\">Fig </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>1</w:t>" + Picture("rIdFigure") + "</w:r></w:p>",
+            ("rIdFigure", figure), ("rIdOther", other));
+        var revised = IrTestDocuments.FromBodyXmlWithImageParts(
+            "<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:t>Fig 1</w:t>" + Picture("rIdOther") + "</w:r></w:p>",
+            ("rIdOther", figure));
+
+        var redline = DocxDiff.Compare(original, revised, ModeledOnly);
+        foreach (var doc in new[] { redline, RevisionProcessor.AcceptRevisions(redline), RevisionProcessor.RejectRevisions(redline) })
+        {
+            using var stream = new MemoryStream(doc.DocumentByteArray);
+            using var package = WordprocessingDocument.Open(stream, false);
+            var main = package.MainDocumentPart!;
+            var embed = (string)main.GetXDocument().Descendants(XName.Get("blip", "http://schemas.openxmlformats.org/drawingml/2006/main"))
+                .Single().Attribute(XName.Get("embed", "http://schemas.openxmlformats.org/officeDocument/2006/relationships"))!;
+            using var image = main.GetPartById(embed).GetStream();
+            using var bytes = new MemoryStream();
+            image.CopyTo(bytes);
+            Assert.Equal(figure, bytes.ToArray());
+        }
+        Assert.Equal(CharacterFormats(original), CharacterFormats(RevisionProcessor.RejectRevisions(redline)));
+    }
+
+    /// <summary>The first paragraph's characters, each with its run's formatting flags ("b", "i", "u").</summary>
+    private static string[] CharacterFormats(WmlDocument doc) =>
+        BodyOf(doc).Elements(W + "p").First().Descendants(W + "r").SelectMany(r =>
+        {
+            var rPr = r.Element(W + "rPr");
+            var flags = string.Concat(new[] { "b", "i", "u" }.Where(f => rPr?.Element(W + f) is not null));
+            return r.Elements().SelectMany(e => e.Name == W + "t" ? e.Value.Select(c => c + ":" + flags)
+                : e.Name == W + "tab" ? new[] { "\t:" + flags } : System.Array.Empty<string>());
+        }).ToArray();
+
+    /// <summary>No run's <c>w:rPrChange</c> archives the properties the run already has.</summary>
+    private static void AssertNoNoOpRunChange(WmlDocument redline)
+    {
+        foreach (var change in BodyOf(redline).Descendants(W + "rPrChange"))
+        {
+            var current = new XElement(W + "rPr", change.Parent!.Elements().Where(e => e.Name != W + "rPrChange"));
+            Assert.False(XNode.DeepEquals(current, change.Element(W + "rPr")), "a w:rPrChange archives the run's own properties");
+        }
+    }
+
     // Return a copy of <paramref name="doc"/> whose trailing sectPr has a w:pgMar with the given uniform margin.
     private static WmlDocument WithSectPrMargin(WmlDocument doc, string margin)
     {

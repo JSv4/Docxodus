@@ -6247,21 +6247,39 @@ internal static partial class IrMarkupRenderer
         ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
         StampResolvedNumberingChange(newPara, op.LeftAnchor, op.RightAnchor, state);
 
-        int cursor = 0;
+        // The two paragraphs are content-equal, so each run of the revision finds its original formatting at the
+        // same place in the original's run model: text by its offset, a symbol, tab or other run child by the same
+        // child at the same offset (issue #1784). A run inside a hyperlink is found the same way.
+        var alignment = leftRuns.AlignRunsOf(new SourceRunModel(rightPara));
         foreach (var child in rightPara.Elements().Where(e => e.Name != W.pPr))
         {
             var clone = StripUnids(new XElement(child));
-            state.RegisterMediaReferences(clone);
-            if (clone.Name == W.r)
+            var splits = new List<(XElement Run, List<XElement> Pieces)>();
+            foreach (var (source, copy) in child.DescendantsAndSelf(W.r).Zip(clone.DescendantsAndSelf(W.r)).ToList())
             {
-                // A run whose old formatting is its own (the paragraph changed only its paragraph or section
+                if (!alignment.TryGetValue(source, out var original) || original.Count == 0)
+                    continue;
+                // A run whose original formatting is its own (the paragraph changed only its paragraph or section
                 // properties, or other runs changed) carries no run-format revision (issue #1775).
-                var length = RunTextLength(clone);
-                if (!leftRuns.TextRangeHasRPr(cursor, cursor + length, clone.Element(W.rPr)))
-                    ApplyRPrChange(clone, leftRuns.RPrAtTextOffset(cursor), state);
-                cursor += length;
+                var own = copy.Element(W.rPr);
+                if (original.All(piece => SourceRunModel.SameStampedRPr(piece.RPr, own)))
+                    continue;
+                // A run whose content the original holds in several formats (Word re-split the runs) is split where
+                // the original formatting changes, so reject restores each part's own; a run whose content cannot be
+                // placed exactly archives the first original formatting that differs from its own.
+                if (SplitAtOriginalFormats(source, copy, original, state) is { } pieces)
+                    splits.Add((copy, pieces));
+                else
+                    ApplyRPrChange(copy, original.First(piece => !SourceRunModel.SameStampedRPr(piece.RPr, own)).RPr, state);
             }
-            newPara.Add(clone);
+            foreach (var (run, pieces) in splits.Where(split => split.Run != clone))
+                run.ReplaceWith(pieces);
+            // Register what is emitted: a split top-level run is replaced by its pieces, and the media and note
+            // reference imports must rewrite the pieces' relationship ids, not the discarded clone's.
+            var emitted = splits.FirstOrDefault(split => split.Run == clone).Pieces ?? new List<XElement> { clone };
+            foreach (var node in emitted)
+                state.RegisterMediaReferences(node);
+            newPara.Add(emitted);
         }
         sink.Add(newPara);
     }
@@ -7759,10 +7777,6 @@ internal static partial class IrMarkupRenderer
 
     // ----------------------------------------------------------------- rPrChange (format change)
 
-    /// <summary>The number of <c>w:t</c> characters a rebuilt run carries (for advancing the char cursor).</summary>
-    private static int RunTextLength(XElement run) =>
-        run.Elements(W.t).Sum(t => t.Value.Length);
-
     /// <summary>The <c>w:r</c> elements that should receive a <c>w:rPrChange</c> stamp for a FormatChanged span,
     /// given an emitted run-level element: the element itself when it IS a run, otherwise its descendant runs (a
     /// <c>w:hyperlink</c> wrapper holds its run(s) one level down). Non-run, run-less elements (bookmarks,
@@ -7808,6 +7822,87 @@ internal static partial class IrMarkupRenderer
             subStart = subEnd;
         }
         return runs;
+    }
+
+    /// <summary>
+    /// <paramref name="run"/> (the copy of the revised run <paramref name="source"/>), whose content the original holds
+    /// in more than one format, as one run per original format: each holds the revised run's attributes and own
+    /// properties, its part of the content in order, and a <c>w:rPrChange</c> with that part's original properties
+    /// where they differ (issue #1784). Text is cut at the offsets where the original formatting changes; any other
+    /// child goes with the format it aligned to, and a <c>w:lastRenderedPageBreak</c> rides with its neighbour. Null
+    /// when the content cannot be placed exactly or the original formats it one way, so the caller marks it whole.
+    /// </summary>
+    private static List<XElement>? SplitAtOriginalFormats(XElement source, XElement run, IReadOnlyList<AlignedPiece> original, RenderState state)
+    {
+        var sourceChildren = source.Elements().Where(e => e.Name != W.rPr).ToList();
+        var children = run.Elements().Where(e => e.Name != W.rPr).ToList();
+        if (children.Count == 0 || children.Count != sourceChildren.Count)
+            return null;
+
+        var units = new List<(XElement Content, XElement? RPr, bool Rides)>();
+        for (int i = 0; i < children.Count; i++)
+        {
+            var parts = original.Where(piece => ReferenceEquals(piece.Child, sourceChildren[i])).ToList();
+            var child = children[i];
+            if (child.Name == W.t)
+            {
+                var text = child.Value;
+                if (parts.Count == 0)
+                {
+                    if (text.Length > 0) return null;
+                    continue;
+                }
+                int start = parts[0].TextStart;
+                if (parts[^1].TextEnd - start != text.Length || parts.Zip(parts.Skip(1)).Any(pair => pair.First.TextEnd != pair.Second.TextStart))
+                    return null;
+                foreach (var part in parts)
+                {
+                    var slice = text.Substring(part.TextStart - start, part.TextEnd - part.TextStart);
+                    var t = new XElement(W.t, slice);
+                    if (child.Attribute(XNamespace.Xml + "space") is { } space)
+                        t.Add(new XAttribute(space));
+                    else if (SourceRunModel.PreserveSpace(slice))
+                        t.Add(new XAttribute(XNamespace.Xml + "space", "preserve"));
+                    units.Add((t, part.RPr, false));
+                }
+            }
+            else
+            {
+                if (parts.Count != 1) return null;
+                units.Add((child, parts[0].RPr, child.Name == W.lastRenderedPageBreak));
+            }
+        }
+        // A rendered page break has no formatting of its own to restore: it goes with the content after it, or before.
+        for (int i = 0; i < units.Count; i++)
+        {
+            if (!units[i].Rides) continue;
+            var neighbour = units.Skip(i + 1).Concat(units.Take(i).Reverse()).FirstOrDefault(unit => !unit.Rides);
+            if (neighbour.Content is not null)
+                units[i] = units[i] with { RPr = neighbour.RPr };
+        }
+
+        var groups = new List<(XElement? RPr, List<XElement> Content)>();
+        foreach (var unit in units)
+        {
+            if (groups.Count > 0 && SourceRunModel.SameStampedRPr(groups[^1].RPr, unit.RPr))
+                groups[^1].Content.Add(unit.Content);
+            else
+                groups.Add((unit.RPr, new List<XElement> { unit.Content }));
+        }
+        if (groups.Count < 2)
+            return null;
+
+        var own = run.Element(W.rPr);
+        var pieces = new List<XElement>();
+        foreach (var (rPr, content) in groups)
+        {
+            var piece = new XElement(W.r, run.Attributes(), own is null ? null : new XElement(own),
+                content.Select(element => new XElement(element)));
+            if (!SourceRunModel.SameStampedRPr(rPr, own))
+                ApplyRPrChange(piece, rPr, state);
+            pieces.Add(piece);
+        }
+        return pieces;
     }
 
     /// <summary>
@@ -11453,6 +11548,10 @@ internal static partial class IrMarkupRenderer
         }
     }
 
+    /// <summary>A stretch of a revised run, in text offsets, the run child it belongs to (its <c>w:t</c> or other
+    /// child), and the original run properties under it.</summary>
+    private readonly record struct AlignedPiece(int TextStart, int TextEnd, XElement? Child, XElement? RPr);
+
     /// <summary>
     /// Slice retained source XML using the reader's committed text and atomic contributions. Rendering
     /// positions give every atom one unit; public text offsets omit them. Splittable text retains its run
@@ -12188,15 +12287,52 @@ internal static partial class IrMarkupRenderer
 
         public XElement? RPrAtPosition(int at) => RPrAtPosition(at, textOffset: false);
 
-        /// <summary>Whether every source run covering the text offsets <c>[start, end)</c> would stamp the same
-        /// <c>w:rPrChange</c> inner as <paramref name="rPr"/> (an empty range reads the run at <paramref name="start"/>).</summary>
-        public bool TextRangeHasRPr(int start, int end, XElement? rPr)
+        /// <summary>
+        /// For each source run of <paramref name="model"/>, a content-equal paragraph, the run properties this
+        /// paragraph has under each of its parts, in order: for its text, those of every run here covering the same
+        /// text offsets (clipped to them); for any other run child (a symbol, tab, break, drawing, field character),
+        /// those of the run here holding the same child at the same offset, the nth such for the nth. A run inside a
+        /// text box or an atomic container is not part of <paramref name="model"/> and has no entry (issue #1784).
+        /// </summary>
+        public Dictionary<XElement, List<AlignedPiece>> AlignRunsOf(SourceRunModel model)
         {
-            var covering = _segments.Where(segment => segment.Kind == SegmentKind.RunText &&
-                segment.TextStart < end && start < segment.TextEnd).ToList();
-            return covering.Count > 0
-                ? covering.All(segment => SameStampedRPr(segment.Element.Element(W.rPr), rPr))
-                : SameStampedRPr(RPrAtTextOffset(start), rPr);
+            var result = new Dictionary<XElement, List<AlignedPiece>>(ReferenceEqualityComparer.Instance);
+            var texts = _segments.Where(segment => segment.Kind == SegmentKind.RunText).ToList();
+            var slots = new Dictionary<(SegmentKind, int, XName?), List<Segment>>();
+            foreach (var segment in _segments.Where(segment => segment.Kind != SegmentKind.RunText))
+            {
+                var key = (segment.Kind, segment.TextStart, segment.OtherChild?.Name);
+                if (!slots.TryGetValue(key, out var list))
+                    slots[key] = list = new List<Segment>();
+                list.Add(segment);
+            }
+            var seen = new Dictionary<(SegmentKind, int, XName?), int>();
+            foreach (var segment in model._segments)
+            {
+                if (!result.TryGetValue(segment.Element, out var pieces))
+                    result[segment.Element] = pieces = new List<AlignedPiece>();
+                if (segment.Kind == SegmentKind.RunText)
+                {
+                    // Text segments are in offset order: start at the first one ending after this segment starts.
+                    int low = 0, high = texts.Count;
+                    while (low < high)
+                    {
+                        int middle = (low + high) / 2;
+                        if (texts[middle].TextEnd <= segment.TextStart) low = middle + 1; else high = middle;
+                    }
+                    for (int i = low; i < texts.Count && texts[i].TextStart < segment.TextEnd; i++)
+                        pieces.Add(new AlignedPiece(Math.Max(texts[i].TextStart, segment.TextStart),
+                            Math.Min(texts[i].TextEnd, segment.TextEnd), segment.TextChild, texts[i].Element.Element(W.rPr)));
+                    continue;
+                }
+                var slot = (segment.Kind, segment.TextStart, segment.OtherChild?.Name);
+                seen.TryGetValue(slot, out var ordinal);
+                seen[slot] = ordinal + 1;
+                var match = slots.TryGetValue(slot, out var candidates) && ordinal < candidates.Count ? candidates[ordinal] : null;
+                pieces.Add(new AlignedPiece(segment.TextStart, segment.TextEnd, segment.OtherChild,
+                    match is not null ? match.Element.Element(W.rPr) : RPrAtTextOffset(segment.TextStart)));
+            }
+            return result;
         }
 
         private XElement? RPrAtPosition(int at, bool textOffset)
@@ -12242,7 +12378,7 @@ internal static partial class IrMarkupRenderer
 
         /// <summary>Whether two source-run <c>w:rPr</c> would stamp an IDENTICAL <c>w:rPrChange</c> inner —
         /// compared exactly as <c>ApplyRPrChange</c> builds it (StripUnids over a clone; absent ⇒ empty rPr).</summary>
-        private static bool SameStampedRPr(XElement? a, XElement? b) =>
+        internal static bool SameStampedRPr(XElement? a, XElement? b) =>
             XNode.DeepEquals(NormalizedStampedRPr(a), NormalizedStampedRPr(b));
 
         private static XElement NormalizedStampedRPr(XElement? rPr) =>
@@ -12250,7 +12386,7 @@ internal static partial class IrMarkupRenderer
                 ? StripUnids(new XElement(W.rPr, rPr.Attributes(), rPr.Elements()))
                 : new XElement(W.rPr);
 
-        private static bool PreserveSpace(string s) =>
+        internal static bool PreserveSpace(string s) =>
             s.Length > 0 && (char.IsWhiteSpace(s[0]) || char.IsWhiteSpace(s[^1]));
 
         private enum SegmentKind { RunText, RunOther, ZeroWidth, Container }
