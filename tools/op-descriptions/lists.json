@@ -94,9 +94,9 @@
       "transports": {
         "wasm": { "method": "SetListMembership" },
         "npm": { "method": "setListMembership" },
-        "python": { "absent": "not exposed yet: a new op (Word's Format Painter on a numbered paragraph) that wasm and npm carry first" },
-        "stdio": { "absent": "not exposed yet: a new op (Word's Format Painter on a numbered paragraph) that wasm and npm carry first" },
-        "mcp": { "absent": "not exposed yet: a new op (Word's Format Painter on a numbered paragraph) that wasm and npm carry first" }
+        "python": { "method": "set_list_membership" },
+        "stdio": { "op": "set_list_membership" },
+        "mcp": { "tool": "docxodus_list", "action": "set_membership" }
       }
     },
     {

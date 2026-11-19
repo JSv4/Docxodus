@@ -460,20 +460,22 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_list",
-            "Manage list membership: promote a paragraph (or a whole contiguous run of paragraphs) to a real auto-numbered Word list, renumber/indent, restart numbering, or drop membership. apply_format_range keeps every member in ONE shared w:num instance so the sequence numbers stay intact — use it instead of per-item apply_format when converting an existing list. set_start is Word's 'Set Numbering Value…': restart (or seed) the item's numbering at startValue — a mid-list restart splits the sequence like Word does; clear_start removes the restart from the item's whole sequence.",
+            "Manage list membership: promote a paragraph (or a whole contiguous run of paragraphs) to a real auto-numbered Word list, renumber/indent, restart numbering, or drop membership. apply_format_range keeps every member in ONE shared w:num instance so the sequence numbers stay intact — use it instead of per-item apply_format when converting an existing list. set_start is Word's 'Set Numbering Value…': restart (or seed) the item's numbering at startValue — a mid-list restart splits the sequence like Word does; clear_start removes the restart from the item's whole sequence. set_membership makes the paragraph an item of an existing list (numId from get_membership on one of its items) at level 0-8, so it numbers on in that list, as Word's Format Painter does; a level the list does not define is defined first.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
-                "action": { "type": "string", "enum": ["apply_format", "apply_format_range", "set_level", "set_start", "clear_start", "remove", "get_membership"] },
+                "action": { "type": "string", "enum": ["apply_format", "apply_format_range", "set_level", "set_start", "clear_start", "remove", "get_membership", "set_membership"] },
                 "anchorId": { "type": "string", "description": "Target paragraph for every action except apply_format_range. remove accepts paragraph, heading, or list-item anchors and overrides style-inherited numbering when necessary." },
                 "startValue": { "type": "integer", "description": "set_start: the number the item restarts at (>= 0), e.g. 5 to make this item render as '5.'" },
                 "firstAnchorId": { "type": "string", "description": "apply_format_range: first paragraph of the contiguous sibling run (inclusive)." },
                 "lastAnchorId": { "type": "string", "description": "apply_format_range: last paragraph of the run (inclusive; either document order)." },
                 "listFormat": { "type": "string", "enum": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"], "description": "apply_format / apply_format_range: creates real w:numPr numbering. Plain numbered formats render '1.'/'a.'/'i.'; *Parenthesis variants render '(1)'/'(a)'/'(i)' (legal-drafting presets). 'none' strips membership." },
-                "levelDelta": { "type": "integer", "description": "set_level: +1 indents, -1 outdents." }
+                "levelDelta": { "type": "integer", "description": "set_level: +1 indents, -1 outdents." },
+                "numId": { "type": "integer", "description": "set_membership: the list to join, as get_membership reports it for one of its items." },
+                "level": { "type": "integer", "description": "set_membership: the list level, 0-8." }
               },
               "required": ["sessionId", "action"]
             }

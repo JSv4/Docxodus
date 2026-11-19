@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `SetListMembership` makes a paragraph an item of an existing list at a level, so it numbers on in that list, as Word's Format Painter does when it copies a numbered paragraph's formatting (#1791). A level the list does not define is defined first, as `SetListLevel` does; under tracked changes that is refused, since the change to the numbering part cannot be tracked, while joining a defined level is recorded as a tracked numbering change. On the .NET API, WASM, npm (`setListMembership`), Python (`set_list_membership`), the stdio host (`set_list_membership`) and MCP (`docxodus_list` action `set_membership`).
+
 ### Fixed
 
 - An on/off property is now read the same way by every reader: `1`, `true` and `on` are on and `0`, `false` and `off` are off, in any letter case (#1786). `WordprocessingMLUtil.GetBoolProp`, and a private copy of it in the HTML converter, read `on` as off, although the specification's `ST_OnOff` allows it. In HTML output, a run whose bold, italic, strike, caps, small caps or hidden text was written `w:val="on"` lost that formatting, and a paragraph mark hidden that way did not join its paragraph to the next; a section's title page written that way was read as off by the editing session and the comparison, and the even-and-odd-headers setting by the editing session. The markdown projection, and the editing session's format signatures, read `w:val="off"` as on, so `<w:b w:val="off"/>` projected as bold. Other readers, including a comment's resolved flag (`w15:done`) and Office Math's on/off properties, matched only some letter cases. These readers now share one parser, `WordprocessingMLUtil.OnOffValue`; each keeps its own reading of a value that is none of the six.

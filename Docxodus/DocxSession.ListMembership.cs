@@ -14,8 +14,10 @@ public sealed partial class DocxSession
     /// <paramref name="numId"/> (a <see cref="ListMembership.NumId"/> read from another item) at
     /// <paramref name="level"/> (0-8). The paragraph then numbers on in that list, as Word's Format
     /// Painter does when it copies a numbered paragraph's formatting. A plain paragraph becomes a
-    /// list item; a list item moves to that list. Refused when the document has no such
-    /// <c>w:num</c> or the level is outside 0-8. One undo step.
+    /// list item; a list item moves to that list. A level the list does not define is defined
+    /// first, as <see cref="SetListLevel"/> does (refused under tracked changes, since that
+    /// numbering change cannot be tracked). Refused when the document has no such <c>w:num</c> or
+    /// the level is outside 0-8. One undo step.
     /// </summary>
     public EditResult SetListMembership(string anchorId, int numId, int level)
     {
@@ -41,10 +43,19 @@ public sealed partial class DocxSession
         if ((int?)oldNumPr?.Element(W.numId)?.Attribute(W.val) == numId
             && ((int?)oldNumPr?.Element(W.ilvl)?.Attribute(W.val) ?? 0) == level)
             return new EditResult { Success = true, Modified = new[] { target.Anchor } };
+        // A level the list does not define is created first (as SetListLevel does); that change to
+        // the numbering part cannot be tracked, so tracked mode refuses it.
+        if (_trackedChanges == TrackedChangeMode.RenderInline
+            && Internal.NumberingFactory.WouldEnsureLevelDefinedMutate(_doc!, numId, level))
+            return TrackedStructureUnsupported(
+                $"SetListMembership requiring numbering level {level} synthesis", anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try
         {
+            // Without the level in the list's definition the paragraph would point at a level
+            // with no number: define any missing levels up to it first.
+            Internal.NumberingFactory.EnsureLevelDefined(_doc!, numId, level);
             var pPr = element.Element(W.pPr);
             if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
             pPr.Element(W.numPr)?.Remove();
@@ -52,6 +63,9 @@ public sealed partial class DocxSession
                 new XElement(W.ilvl, new XAttribute(W.val, level)),
                 new XElement(W.numId, new XAttribute(W.val, numId))));
             TrackListPropertyMutation(element, oldPPr, insertedNumPr: oldNumPr is null);
+            // Flush to the part stream, as SetListLevel does: under WASM a later Save() would
+            // otherwise serialize the un-flushed state.
+            _doc!.MainDocumentPart!.PutXDocument();
             InvalidateProjectionCache();
             _ = AnchorIndex();
             var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;

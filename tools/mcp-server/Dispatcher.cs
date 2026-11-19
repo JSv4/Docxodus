@@ -692,6 +692,8 @@ internal static partial class Dispatcher
             session.Handle, Str(args, "anchorId"), Int(args, "startValue")),
         "clear_start" => DocxSessionOps.ClearListStartOverride(session.Handle, Str(args, "anchorId")),
         "remove" => DocxSessionOps.RemoveListMembership(session.Handle, Str(args, "anchorId")),
+        "set_membership" => DocxSessionOps.SetListMembership(
+            session.Handle, Str(args, "anchorId"), Int(args, "numId"), Int(args, "level")),
         _ => throw new McpToolException($"unknown docxodus_list action: {action}"),
         });
     }
@@ -1469,7 +1471,7 @@ internal static partial class Dispatcher
                 or "unmerge_cells" or "set_column_widths" or "set_borders" or "set_shading"
                 or "set_repeat_header_row" or "set_row_options" or "set_style",
             "docxodus_list" => action is "apply_format" or "apply_format_range" or "set_level"
-                or "set_start" or "clear_start" or "remove",
+                or "set_start" or "clear_start" or "remove" or "set_membership",
             "docxodus_comment" => action is "add" or "reply" or "resolve" or "update" or "remove",
             "docxodus_links" => action is "add_hyperlink" or "update_hyperlink" or "remove_hyperlink"
                 or "add_bookmark" or "move_bookmark" or "rename_bookmark" or "remove_bookmark"
@@ -1741,6 +1743,10 @@ internal static partial class Dispatcher
             case ("docxodus_list", "clear_start"):
             case ("docxodus_list", "remove"):
                 RequireStrings(args, "anchorId");
+                break;
+            case ("docxodus_list", "set_membership"):
+                RequireStrings(args, "anchorId");
+                RequireNumbers(args, "numId", "level");
                 break;
 
             case ("docxodus_comment", _):
