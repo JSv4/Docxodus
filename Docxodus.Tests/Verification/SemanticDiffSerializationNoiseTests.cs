@@ -78,4 +78,14 @@ public class SemanticDiffSerializationNoiseTests
             new Dictionary<string, string[]> { ["rIdHeader1"] = new[] { "Tide table" } }, titlePg: true);
         Assert.Contains(SemanticChangeFamily.Header, Families(Saved("default"), Saved("first")));
     }
+
+    [Theory]
+    // Whitespace that is content in foreign XML: under xml:space="preserve", and beside other text.
+    [InlineData("<v:note xmlns:v=\"urn:vendor\" xml:space=\"preserve\"><v:a>Net</v:a> <v:b>30</v:b></v:note>",
+        "<v:note xmlns:v=\"urn:vendor\" xml:space=\"preserve\"><v:a>Net</v:a><v:b>30</v:b></v:note>")]
+    [InlineData("<v:note xmlns:v=\"urn:vendor\">Net<!--c--> <v:b>30</v:b></v:note>",
+        "<v:note xmlns:v=\"urn:vendor\">Net<!--c--><v:b>30</v:b></v:note>")]
+    public void Whitespace_that_is_content_in_foreign_xml_is_still_a_change(string left, string right) =>
+        // Control: only indentation between child elements is dropped.
+        Assert.NotEmpty(Families($"<w:p><w:r><w:t>Before.</w:t></w:r>{left}</w:p>", $"<w:p><w:r><w:t>Before.</w:t></w:r>{right}</w:p>"));
 }
