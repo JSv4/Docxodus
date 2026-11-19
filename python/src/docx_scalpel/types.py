@@ -4440,7 +4440,8 @@ class DocxDiffFormatChange:
 
     ``scope`` names the property container the change describes: ``"run"`` (the default,
     an rPr-grade report) or one of the block-format-change family scopes ``"paragraph"``
-    (pPr), ``"tableCell"``/``"tableRow"``/``"table"`` (tcPr/trPr/tblPr+tblGrid), ``"section"``
+    (pPr, or the paragraph mark's run properties with ``mark``-prefixed names such as
+    ``markFontSize``), ``"tableCell"``/``"tableRow"``/``"table"`` (tcPr/trPr/tblPr+tblGrid), ``"section"``
     (sectPr). Non-run scopes are reported only under Fine revision granularity."""
 
     old_properties: Mapping[str, str]

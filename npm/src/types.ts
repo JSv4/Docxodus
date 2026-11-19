@@ -364,7 +364,8 @@ export interface CompareOptions {
 /**
  * Which property container a FormatChanged revision describes.
  * `run` (the default) is an rPr-grade report (bold/italic/fontSize/…); the others are the
- * block-and-above scopes tracked by the block-format-change family: `paragraph` (pPr),
+ * block-and-above scopes tracked by the block-format-change family: `paragraph` (pPr, or the paragraph
+ * mark's run properties with `mark`-prefixed names such as `markFontSize`),
  * `tableCell`/`tableRow`/`table` (tcPr/trPr/tblPr+tblGrid), and `section` (sectPr).
  * Non-`run` scopes are only reported under Fine revision granularity.
  */

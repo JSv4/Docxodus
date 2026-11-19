@@ -57,7 +57,7 @@ internal static class IrCompositeRevisionRenderer
         // EmitTrailingSectionRevision OFF: the per-op mini-scripts must NOT each append the document-level
         // trailing-sectPr revision (a section-changing reviewer with N ops would emit it N times). It is
         // emitted ONCE below from script.TrailingSectPr, attributed to the section winner.
-        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true, TrackSectionFormatChanges = true, EmitTrailingSectionRevision = false };
+        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackParagraphMarkFormatChanges = false, TrackTableFormatChanges = true, TrackSectionFormatChanges = true, EmitTrailingSectionRevision = false };
 
         // Move-source pre-pass over the WHOLE composite script. Single-source ops are each rendered in
         // their own one-op mini-script (so IrRevisionRenderer honours per-op granularity/author), but a
