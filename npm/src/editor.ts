@@ -1412,7 +1412,6 @@ function inBorderWrapper(el: HTMLElement): boolean {
   return /border-(top|bottom|left|right):\s*(?!none)[^;]+/i.test(style);
 }
 
-/** Whether the current selection's start already carries `key`, read from computed style. */
 /**
  * Where a selection's format is read: the first character it covers. A range that starts at the
  * end of a text node (as the selection the editor restores after formatting part of a paragraph
@@ -1434,6 +1433,7 @@ function selectionFormatNode(range: Range): Node {
   return range.startContainer;
 }
 
+/** Whether the current selection's start already carries `key`, read from computed style. */
 function selectionHasFormat(key: FormatKey, fallback: HTMLElement): boolean {
   const sel = typeof window !== "undefined" ? window.getSelection() : null;
   let el: HTMLElement | null = fallback;
