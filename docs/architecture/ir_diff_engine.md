@@ -421,7 +421,7 @@ Word's Compare tracks *paragraph-and-above* property changes, not just run forma
 
 | Scope | Markup | Detection substrate | Round-trip |
 |---|---|---|---|
-| Paragraph | `w:pPrChange` (+ `w:pPr/w:rPr/w:rPrChange` for a changed paragraph mark) | modeled `IrParaFormat` (incl. direct `w:numPr` numId/ilvl) under `ModeledOnly`; the stored fingerprint under `Full` | inner = OLD (left) pPr, minus `w:rPr`/`w:sectPr`/`w:pPrChange` (CT_PPrBase) |
+| Paragraph | `w:pPrChange` (+ `w:pPr/w:rPr/w:rPrChange` for a changed paragraph mark) | modeled `IrParaFormat` (incl. direct `w:numPr` numId/ilvl) plus the paragraph mark's modeled run fields (`IrParagraph.MarkFormat`, issue #1794; off in the N-way composite) under `ModeledOnly`; the stored fingerprint under `Full` | inner = OLD (left) pPr, minus `w:rPr`/`w:sectPr`/`w:pPrChange` (CT_PPrBase) |
 | Table cell | `w:tcPrChange` | `IrCell.ShellDigest` (whole `w:tcPr`, folded into cell `ContentHash` → a shell edit makes the table *Modified*) | inner = OLD tcPr, minus cellIns/cellDel/cellMerge/tcPrChange (CT_TcPrInner) |
 | Table row | `w:trPrChange` | `IrRow.TrPrShellDigest` (trPr-only) for attribution; `TrPrDigest` (row shell incl tblPrEx) folds into the *fingerprint* → *FormatOnly* | inner = OLD trPr, minus ins/del/trPrChange (CT_TrPrBase) |
 | Table row (exceptions) | `w:tblPrExChange` | `IrRow.TrPrExDigest` (tblPrEx-only flattened) | inner = OLD tblPrEx (CT_TblPrExBase); a `TableRow` revision with changed-name `"tblPrEx"` |

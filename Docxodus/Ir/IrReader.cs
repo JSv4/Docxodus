@@ -927,6 +927,7 @@ internal static class IrReader
             InlineSectionBreakAnchor = inlineSectAnchor,
             InlineSectionFormat = inlineSectionFormat,
             PPrDigest = pPrDigest,
+            MarkFormat = pPr?.Element(W + "rPr") is { } markRPr ? MapRunFormat(markRPr) : null,
             InlineEnvelopeDigest = inlineEnvelopeDigest,
             FieldEnvelopeDigest = fieldEnvelopeDigest,
             ResolvedListMarker = resolvedMarker,

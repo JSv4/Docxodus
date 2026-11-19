@@ -380,6 +380,14 @@ internal sealed record IrDiffSettings
     public bool TrackParagraphFormatChanges { get; init; } = true;
 
     /// <summary>
+    /// Whether a paragraph mark's modeled run properties (<c>w:pPr/w:rPr</c>) take part in pairing and are reported
+    /// as their own Paragraph-scope revision (issue #1794). On for every two-way comparison; the N-way composite
+    /// turns it off, so a reviewer's mark-only change neither conflicts with nor cancels another reviewer's text
+    /// edit in the same paragraph (the mark then follows the base, as before).
+    /// </summary>
+    public bool TrackParagraphMarkFormatChanges { get; init; } = true;
+
+    /// <summary>
     /// DIFF-TIME setting (Consolidate sub-project B2). The TABLE-SHELL slice of
     /// <see cref="TrackBlockFormatChanges"/>: gates the table-shell property-revision markup
     /// (<c>w:tcPrChange</c>/<c>w:trPrChange</c>/<c>w:tblPrChange</c>/<c>w:tblGridChange</c>/<c>w:tblPrExChange</c>),
