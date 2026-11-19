@@ -28,9 +28,9 @@ public class SemanticDiffSerializationNoiseTests
     // The final section's column definitions, indented.
     [InlineData("<w:p><w:r><w:t>Only.</w:t></w:r></w:p><w:sectPr>" + Page + Columns + "</w:sectPr>",
         "<w:p><w:r><w:t>Only.</w:t></w:r></w:p><w:sectPr>" + Page + IndentedColumns + "</w:sectPr>")]
-    // A paragraph's tab stops, indented.
-    [InlineData("<w:p><w:pPr><w:tabs><w:tab w:val=\"left\" w:pos=\"720\"/><w:tab w:val=\"left\" w:pos=\"1440\"/></w:tabs></w:pPr><w:r><w:t>Tabs.</w:t></w:r></w:p>",
-        "<w:p><w:pPr><w:tabs>\n  <w:tab w:val=\"left\" w:pos=\"720\"/>\n  <w:tab w:val=\"left\" w:pos=\"1440\"/>\n</w:tabs></w:pPr><w:r><w:t>Tabs.</w:t></w:r></w:p>")]
+    // A field result whose run properties hold only w:noProof, indented: the noise element and the indentation both go.
+    [InlineData("<w:p><w:fldSimple w:instr=\" PAGE \"><w:r><w:rPr><w:noProof/></w:rPr><w:t>1</w:t></w:r></w:fldSimple></w:p>",
+        "<w:p><w:fldSimple w:instr=\" PAGE \"><w:r><w:rPr>\n  <w:noProof/>\n</w:rPr><w:t>1</w:t></w:r></w:fldSimple></w:p>")]
     // A table's borders, indented.
     [InlineData("<w:tbl><w:tblPr><w:tblBorders><w:top w:val=\"single\" w:sz=\"4\"/><w:bottom w:val=\"single\" w:sz=\"4\"/></w:tblBorders></w:tblPr>" +
         "<w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>Cell.</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>",
@@ -38,6 +38,16 @@ public class SemanticDiffSerializationNoiseTests
         "<w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>Cell.</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>")]
     public void Indentation_between_property_elements_is_no_change(string left, string right) =>
         Assert.Empty(Families(left, right));
+
+    [Fact]
+    public void An_indented_style_is_no_change()
+    {
+        static WmlDocument Styled(string paragraphProperties) => IrTestDocuments.FromBodyAndStylesXml(
+            "<w:p><w:pPr><w:pStyle w:val=\"Body\"/></w:pPr><w:r><w:t>Styled.</w:t></w:r></w:p>",
+            "<w:style w:type=\"paragraph\" w:styleId=\"Body\"><w:name w:val=\"Body\"/>" + paragraphProperties + "</w:style>");
+        Assert.Empty(Families(Styled("<w:pPr><w:spacing w:after=\"120\"/><w:jc w:val=\"both\"/></w:pPr>"),
+            Styled("<w:pPr>\n  <w:spacing w:after=\"120\"/>\n  <w:jc w:val=\"both\"/>\n</w:pPr>")));
+    }
 
     [Fact]
     public void A_header_renumbered_on_the_final_section_is_no_change()
@@ -53,8 +63,19 @@ public class SemanticDiffSerializationNoiseTests
     // Controls: real changes are still reported.
     [InlineData("<w:p><w:r><w:t>Only.</w:t></w:r></w:p><w:sectPr>" + Page + Columns + "</w:sectPr>",
         "<w:p><w:r><w:t>Only.</w:t></w:r></w:p><w:sectPr>" + Page + "<w:cols w:num=\"3\"/></w:sectPr>", SemanticChangeFamily.Section)]
-    [InlineData("<w:p><w:r><w:t xml:space=\"preserve\">Two  spaces.</w:t></w:r></w:p>",
-        "<w:p><w:r><w:t xml:space=\"preserve\">Two spaces.</w:t></w:r></w:p>", SemanticChangeFamily.Text)]
+    // A space that is the whole text of a run is content, not indentation.
+    [InlineData("<w:p><w:r><w:t>Two</w:t></w:r><w:r><w:t xml:space=\"preserve\"> </w:t></w:r><w:r><w:t>words.</w:t></w:r></w:p>",
+        "<w:p><w:r><w:t>Two</w:t></w:r><w:r><w:t>words.</w:t></w:r></w:p>", SemanticChangeFamily.Text)]
     public void A_real_change_beside_the_noise_is_still_reported(string left, string right, SemanticChangeFamily family) =>
         Assert.Contains(family, Families(left, right));
+
+    [Fact]
+    public void A_header_reference_changing_kind_is_still_reported()
+    {
+        // Control: references left the section format, but their stories are still compared as stories.
+        static WmlDocument Saved(string kind) => HeaderFooterFixtures.Build(
+            new[] { new HeaderFooterFixtures.Section(new[] { "Harbor pilots log the tide charts." }, Headers: new[] { (kind, "rIdHeader1") }) },
+            new Dictionary<string, string[]> { ["rIdHeader1"] = new[] { "Tide table" } }, titlePg: true);
+        Assert.Contains(SemanticChangeFamily.Header, Families(Saved("default"), Saved("first")));
+    }
 }

@@ -2192,7 +2192,8 @@ internal static class SemanticDiffEngine
                     XName.Get(attribute.Name.LocalName, attribute.Name.NamespaceName), attribute.Value)),
             element.Nodes().Select(node => node is XElement child
                 ? (XNode?)XElement.Parse(CanonicalXml(child), LoadOptions.PreserveWhitespace)
-                : node is XText text ? new XText(text.Value) : null))
+                // Indentation between child elements is not content (issue #1793), as in the IR's hashes.
+                : node is XText text && !(element.HasElements && IrHasher.IsXmlWhitespace(text.Value)) ? new XText(text.Value) : null))
             .ToXmlString(SaveOptions.DisableFormatting);
     }
 

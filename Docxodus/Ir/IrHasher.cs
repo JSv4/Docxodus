@@ -132,6 +132,10 @@ internal static class IrHasher
         XElement element, IrRelResolver? resolver,
         Func<XAttribute, XAttribute>? attributeRewrite = null)
     {
+        // Indentation goes before the noise elements, so an indented property element left empty by their
+        // removal (<w:rPr> holding only <w:noProof/>) reads as the compact one (issue #1793).
+        RemoveInsignificantWhitespace(element);
+
         // Remove noise child elements first (proofErr/noProof, anywhere in the subtree). Most subtrees
         // carry none, so the removal list is allocated only once one is actually found.
         List<XElement>? toRemove = null;
@@ -147,8 +151,6 @@ internal static class IrHasher
                 d.Remove();
         }
 
-        RemoveInsignificantWhitespace(element);
-
         foreach (var el in element.DescendantsAndSelf())
             CleanAttributes(el, resolver, attributeRewrite);
     }
@@ -156,15 +158,16 @@ internal static class IrHasher
     /// <summary>
     /// Drop whitespace-only text that sits between child elements (the indentation of a pretty-printed part), so
     /// re-indenting a document is no change (issue #1793). Text in a text-only element, such as the spaces of a
-    /// <c>w:t</c>, is content and stays, as does any text under <c>xml:space="preserve"</c>.
+    /// <c>w:t</c>, is content and stays: WordprocessingML gives text meaning only where an element holds no
+    /// child elements. Whitespace is XML's: space, tab, carriage return and line feed.
     /// </summary>
-    private static void RemoveInsignificantWhitespace(XElement element)
+    internal static void RemoveInsignificantWhitespace(XElement element)
     {
         List<XText>? whitespace = null;
         foreach (var node in element.DescendantNodes())
         {
-            if (node is XText text && text is not XCData && string.IsNullOrWhiteSpace(text.Value) &&
-                text.Parent is { } parent && parent.HasElements && !PreservesSpace(parent))
+            if (node is XText text && text is not XCData && IsXmlWhitespace(text.Value) &&
+                text.Parent is { } parent && parent.HasElements)
                 (whitespace ??= new List<XText>()).Add(text);
         }
         if (whitespace is not null)
@@ -172,12 +175,12 @@ internal static class IrHasher
                 text.Remove();
     }
 
-    private static bool PreservesSpace(XElement element)
+    internal static bool IsXmlWhitespace(string value)
     {
-        for (var current = element; current is not null; current = current.Parent)
-            if (current.Attribute(XNamespace.Xml + "space") is { } space)
-                return space.Value == "preserve";
-        return false;
+        foreach (var c in value)
+            if (c is not (' ' or '\t' or '\r' or '\n'))
+                return false;
+        return true;
     }
 
     private static void CleanAttributes(
