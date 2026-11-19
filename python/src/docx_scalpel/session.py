@@ -2397,6 +2397,12 @@ class DocxSession:
         ``op.clear_borders=True`` removes the whole ``w:pBdr`` before either is applied in the
         same call. An (often empty) paragraph with only a bottom border is what an S-1-style
         horizontal rule is.
+
+        The rest of Word's Paragraph dialog: ``op.left_indent``/``op.right_indent`` set absolute
+        indents (may be negative; ``left_indent`` excludes ``indent_delta``), and
+        ``op.keep_next``, ``op.keep_lines``, ``op.widow_control`` and ``op.contextual_spacing``
+        turn those on or off. A toggle is written explicitly only where it differs from what the
+        paragraph's style gives; otherwise the direct setting is removed.
         """
         return EditResult._from_wire(
             self._call(
