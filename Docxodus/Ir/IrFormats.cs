@@ -38,7 +38,8 @@ internal enum IrVMerge { None, Restart, Continue }
 
 /// <summary>
 /// Direct section properties (`w:sectPr`): page size, margins, orientation, and type.
-/// Any unmodeled `w:sectPr` child is folded into <see cref="UnmodeledDigest"/>.
+/// Any other `w:sectPr` child is folded into <see cref="UnmodeledDigest"/>, except the header and footer
+/// references, whose stories are compared as stories (issue #1793).
 /// </summary>
 internal sealed record IrSectionFormat
 {

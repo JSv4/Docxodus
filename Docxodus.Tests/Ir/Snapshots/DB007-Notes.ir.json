@@ -53,7 +53,7 @@
           "anchor": "p:body:c0a06e2cff28989c9e613008f28a3e77",
           "type": "paragraph",
           "contentHash": "58c551376be06e02b9893d5c3eb2fc782d5bf6832f22d6729ce39c104ae5f5a7",
-          "formatFingerprint": "4df17a1b4772cf840d1a1b53583aedb44be72260a1542e1c4c12bf462352d42f",
+          "formatFingerprint": "a76e1efef1280f0ebb0a9f17fb1ca0e151267f72c647c3e60577a14733d2aeb9",
           "format": {
             "styleId": "Note"
           },
@@ -75,8 +75,8 @@
         {
           "anchor": "p:body:6e7a5b86548a916d758b6db36852edf1",
           "type": "paragraph",
-          "contentHash": "ec4c64742b2ad183442230191882c534126e26c395fbe8794378db0f04aeadca",
-          "formatFingerprint": "f09c741a16fc4821f139ec1724eee5bae819533ffa8cba102be6dd9d25120f1f",
+          "contentHash": "d38939b317722aa72ffdaf84f8a3ec4781fbd51049f5245baaa4ed6befe48d7c",
+          "formatFingerprint": "025cdaa86ad0bdea7e82be9606896037044edcf6bc951452e8bd5e5b6cf83415",
           "format": {
             "styleId": "Note"
           },
@@ -85,7 +85,7 @@
               "kind": "image",
               "partUri": "/word/media/image1.tmp",
               "imageBytesHash": "cf08418a918d1ff7fd4fa6e7fdf4db044e2801b8ec6ee37530ed6d953d5033f8",
-              "drawingDigest": "dae25c14e55f7127de4bbb7613d14fa51ce2d55e7408dcfccfab4d8ceb5dbdc5",
+              "drawingDigest": "b0d2e7babbd322a2ab8f0c9632db3dbcdd0cb49e853eb731f2f76755d201ca81",
               "widthEmu": 3019425,
               "heightEmu": 1625522,
               "altText": "Picture 4",
@@ -187,7 +187,7 @@
           "anchor": "p:body:c58a695748745379ca385c4568c0b3bf",
           "type": "paragraph",
           "contentHash": "5e888a1ecf9c914f0555882ae7ffdf6c0147c4bcb8bac6350f151754637fa908",
-          "formatFingerprint": "22cb36ca3cb695831557cd189df2db18e63e8f4f5f465e48c78467096629688e",
+          "formatFingerprint": "a76e1efef1280f0ebb0a9f17fb1ca0e151267f72c647c3e60577a14733d2aeb9",
           "format": {
             "styleId": "Note"
           },
@@ -239,7 +239,7 @@
         {
           "anchor": "p:body:db39746482d68145ed0965effe660cc6",
           "type": "paragraph",
-          "contentHash": "cd4b9046bfc66cd8bf84ab80c6efffc7edff69dbf636e56141bc4f71a624f780",
+          "contentHash": "f7531cf57ca64659b2fc6d3c707cd3c5e27a198bcc9e70c3de415924e98bef55",
           "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
           "format": {},
           "inlines": [
@@ -247,7 +247,7 @@
               "kind": "image",
               "partUri": "/word/media/image2.tmp",
               "imageBytesHash": "f2a9310b0715ed7d3cab2386cef9af09e4ff955efa436901f0405f06f2426d8e",
-              "drawingDigest": "ed42187d2cc968bee2cb308adfefd9de97e26f06d836c8746bce19e743f9a8aa",
+              "drawingDigest": "e9ffdc0f930f64018c263db5be6f1efed0587c8e125f9881114f9b544d8e7bc5",
               "widthEmu": 899160,
               "heightEmu": 2247900,
               "altText": "Picture 5",
@@ -288,7 +288,7 @@
         {
           "anchor": "sec:body:05042b17662bdf691f11e7ffac876855",
           "type": "sectionBreak",
-          "contentHash": "c8a82d618fc4ede01c0e9c36898debe3139f383dde0eb5bce97a272ee5729fdb",
+          "contentHash": "87688e82547fb01ee9ab48d4739fb0f1dab9d22ab3009c0c8fa49a9504d06999",
           "formatFingerprint": "e05907240f700491233fd61ff4a8239fe8d9caf71b69e617a962b0b790365221",
           "format": {
             "pageWidthTwips": 12240,
