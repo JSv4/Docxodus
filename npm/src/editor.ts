@@ -80,6 +80,8 @@ export interface DocxEditorExports {
     ) => string;
     SplitParagraph: (handle: number, anchor: string, offset: number) => string;
     MergeParagraphs: (handle: number, first: string, second: string) => string;
+    /** An anchor's live facts (`AnchorInfo` JSON); its visibleText checks a merge's join. */
+    GetAnchorInfo?: (handle: number, anchorId: string) => string;
     DeleteBlock: (handle: number, anchor: string) => string;
     /** Delete the sibling blocks from `fromAnchor` up to (not including) `toAnchorExclusive`. */
     DeleteRange?: (handle: number, fromAnchor: string, toAnchorExclusive: string) => string;
@@ -3984,14 +3986,13 @@ export class DocxEditor {
    * Replace a selection that spans blocks with `text` (empty: just delete it), as Word does: the
    * first block keeps its start and takes the text, the blocks between go, the last block's
    * selected start goes and what is left of it joins the first. Lines of `text` after the first
-   * become paragraphs of their own. One engine transaction, so one undo step. A selection reaching
-   * into a table is left alone (cells are not merged into paragraphs). Returns true when the
-   * selection spanned blocks, whether or not the edit could be made (the caller then drops the key).
+   * become paragraphs of their own. One engine transaction, so one undo step. Returns false, with
+   * nothing changed, when the selection does not span blocks or is one {@link crossBlockEditable}
+   * leaves to the browser; true when it took the edit, whether or not the engine could make it.
    */
   private replaceCrossBlockSelection(text: string): boolean {
     const blocks = this.crossBlockSelection();
-    if (!blocks) return false;
-    if (blocks.some((b) => b.closest("table")) || this.isBandBlock(blocks[0])) return true;
+    if (!blocks || !this.crossBlockEditable(blocks)) return false;
     const bridge = this.exports.DocxSessionBridge;
     const targets = this.multiBlockTargets(blocks);
     const first = targets[0], last = targets[targets.length - 1];
@@ -4025,10 +4026,13 @@ export class DocxEditor {
       // MergeParagraphs puts a space between the two when neither side has one (right for
       // Backspace joining two paragraphs, which Word does the same way); deleting a selection
       // joins its two ends as they are. (Tracked, the merge is only recorded: nothing to take out.)
+      // The space is taken out only where the merged paragraph has one: an engine that joins
+      // without it leaves the text as it is.
       const tracked = this.options.trackedChanges === TrackedChangeMode.RenderInline;
       const kept = blockContentText(first.block).slice(0, firstSpan.start) + lines[0];
       const rest = blockContentText(last.block).slice(lastSpan.start + lastSpan.length);
-      if (!tracked && kept && rest && !/\s$/.test(kept) && !/^\s/.test(rest)) {
+      if (!tracked && kept && rest && !/\s$/.test(kept) && !/^\s/.test(rest)
+        && this.sessionTextOf(current)?.[kept.length] === " ") {
         current = step(bridge.ReplaceTextAtSpan(this.handle, current, kept.length, 1, "", "")).modified?.[0]?.id ?? current;
       }
       for (const line of lines.slice(1)) {
@@ -4057,6 +4061,28 @@ export class DocxEditor {
     return true;
   }
 
+  /**
+   * Whether {@link replaceCrossBlockSelection} edits this selection. Not one reaching into a table
+   * (cells are not merged into paragraphs) nor one in a header or footer (a band repaints on its
+   * own, not through the body's remount): over those the browser's own editing runs, so a key is
+   * never dropped.
+   */
+  private crossBlockEditable(blocks: HTMLElement[]): boolean {
+    return !blocks.some((b) => b.closest("table") || this.isBandBlock(b));
+  }
+
+  /** The session's text of block `fullId` (`GetAnchorInfo`'s visibleText), or null. */
+  private sessionTextOf(fullId: string): string | null {
+    try {
+      const raw = this.exports.DocxSessionBridge.GetAnchorInfo?.(this.handle, fullId);
+      if (raw === undefined) return null;
+      const info = JSON.parse(raw) as { visibleText?: unknown };
+      return typeof info.visibleText === "string" ? info.visibleText : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** The selected text of a selection spanning blocks, a line for each block. */
   private crossBlockText(blocks: HTMLElement[]): string {
     return this.multiBlockTargets(blocks).map((t) => {
@@ -4070,7 +4096,7 @@ export class DocxEditor {
   private readonly onCut = (ev: ClipboardEvent): void => {
     if (this.closed || ev.defaultPrevented || !ev.clipboardData) return;
     const blocks = this.crossBlockSelection();
-    if (!blocks) return;
+    if (!blocks || !this.crossBlockEditable(blocks)) return;
     ev.preventDefault();
     const range = window.getSelection()!.getRangeAt(0);
     const holder = document.createElement("div");
@@ -4083,7 +4109,9 @@ export class DocxEditor {
   /** Paste over a selection spanning blocks: the selection goes, and the clipboard's text takes
    *  its place, a paragraph for each line. */
   private readonly onPasteOverBlocks = (ev: ClipboardEvent): void => {
-    if (this.closed || ev.defaultPrevented || !ev.clipboardData || !this.crossBlockSelection()) return;
+    if (this.closed || ev.defaultPrevented || !ev.clipboardData) return;
+    const blocks = this.crossBlockSelection();
+    if (!blocks || !this.crossBlockEditable(blocks)) return;
     ev.preventDefault();
     this.replaceCrossBlockSelection(ev.clipboardData.getData("text/plain"));
   };
@@ -4097,12 +4125,15 @@ export class DocxEditor {
     if (this.extendSelectionByKey(el, ev)) return true;
     const ctrl = ev.ctrlKey || ev.metaKey;
     if (ctrl && !ev.altKey && !ev.shiftKey && (ev.key ?? "").toLowerCase() === "a") {
-      if (this.storyBlocks(el).length < 2) return false;
+      // (a story whose selection could not be typed over keeps the browser's own select-all)
+      const story = this.storyBlocks(el);
+      if (story.length < 2 || !this.crossBlockEditable(story)) return false;
       ev.preventDefault();
       this.selectStory(el);
       return true;
     }
-    if (!this.crossBlockSelection()) return false;
+    const blocks = this.crossBlockSelection();
+    if (!blocks || !this.crossBlockEditable(blocks)) return false;
     const printable = !ctrl && !ev.altKey && typeof ev.key === "string" && [...ev.key].length === 1;
     let text: string | null = null;
     if (printable) text = ev.key;
