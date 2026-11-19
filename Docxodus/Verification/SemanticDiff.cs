@@ -2179,9 +2179,12 @@ internal static class SemanticDiffEngine
     private static string NormalizePartUri(string partUri) =>
         partUri.StartsWith("/", StringComparison.Ordinal) ? partUri : "/" + partUri;
 
-    private static string CanonicalXml(XElement? element)
+    private static string CanonicalXml(XElement? element, bool preserve = false)
     {
         if (element is null) return string.Empty;
+        // Indentation between child elements is not content (issue #1793), by the IR hash's rule.
+        preserve = IrHasher.PreservesSpace(element, preserve);
+        bool dropWhitespace = IrHasher.DropsIndentation(element, preserve);
         return new XElement(
             XName.Get(element.Name.LocalName, element.Name.NamespaceName),
             element.Attributes()
@@ -2191,9 +2194,8 @@ internal static class SemanticDiffEngine
                 .Select(attribute => new XAttribute(
                     XName.Get(attribute.Name.LocalName, attribute.Name.NamespaceName), attribute.Value)),
             element.Nodes().Select(node => node is XElement child
-                ? (XNode?)XElement.Parse(CanonicalXml(child), LoadOptions.PreserveWhitespace)
-                // Indentation between child elements is not content (issue #1793), as in the IR's hashes.
-                : node is XText text && !IrHasher.IsInsignificantWhitespace(text) ? new XText(text.Value) : null))
+                ? (XNode?)XElement.Parse(CanonicalXml(child, preserve), LoadOptions.PreserveWhitespace)
+                : node is XText text && !dropWhitespace ? new XText(text.Value) : null))
             .ToXmlString(SaveOptions.DisableFormatting);
     }
 

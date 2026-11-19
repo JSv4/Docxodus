@@ -88,4 +88,27 @@ public class SemanticDiffSerializationNoiseTests
     public void Whitespace_that_is_content_in_foreign_xml_is_still_a_change(string left, string right) =>
         // Control: only indentation between child elements is dropped.
         Assert.NotEmpty(Families($"<w:p><w:r><w:t>Before.</w:t></w:r>{left}</w:p>", $"<w:p><w:r><w:t>Before.</w:t></w:r>{right}</w:p>"));
+
+    [Fact]
+    public void Hashing_an_indented_element_with_many_children_is_linear()
+    {
+        // One pass per element: 16,000 indented children hash in a moment (a per-node scan took tens of seconds).
+        static System.Xml.Linq.XElement Content(string indentation)
+        {
+            System.Xml.Linq.XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            var content = new System.Xml.Linq.XElement(w + "sdtContent");
+            for (int i = 0; i < 16_000; i++)
+            {
+                if (indentation.Length > 0) content.Add(new System.Xml.Linq.XText(indentation));
+                content.Add(new System.Xml.Linq.XElement(w + "p", new System.Xml.Linq.XElement(w + "r", new System.Xml.Linq.XElement(w + "t", "Line " + i))));
+            }
+            return content;
+        }
+        var compact = Docxodus.Ir.IrHasher.CanonicalHash(Content(""));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var indented = Docxodus.Ir.IrHasher.CanonicalHash(Content("\n  "));
+        watch.Stop();
+        Assert.Equal(compact, indented);
+        Assert.True(watch.Elapsed < System.TimeSpan.FromSeconds(5), $"hashing took {watch.Elapsed}");
+    }
 }

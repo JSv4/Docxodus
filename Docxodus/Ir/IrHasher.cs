@@ -156,40 +156,42 @@ internal static class IrHasher
     }
 
     /// <summary>
-    /// Drop the indentation of a pretty-printed part, so re-indenting a document is no change (issue #1793). See
-    /// <see cref="IsInsignificantWhitespace"/> for which text that is.
+    /// Drop the indentation of a pretty-printed part, so re-indenting a document is no change (issue #1793): in one
+    /// pass, each element that <see cref="DropsIndentation"/> loses its whitespace text, rebuilt in one step.
     /// </summary>
-    private static void RemoveInsignificantWhitespace(XElement element)
+    private static void RemoveInsignificantWhitespace(XElement element, bool preserve = false)
     {
-        List<XText>? whitespace = null;
-        foreach (var node in element.DescendantNodes())
-        {
-            if (node is XText text && IsInsignificantWhitespace(text))
-                (whitespace ??= new List<XText>()).Add(text);
-        }
-        if (whitespace is not null)
-            foreach (var text in whitespace)
-                text.Remove();
+        preserve = PreservesSpace(element, preserve);
+        if (DropsIndentation(element, preserve))
+            element.ReplaceNodes(element.Nodes().Where(node => node is not XText || node is XCData).ToList());
+        foreach (var child in element.Elements())
+            RemoveInsignificantWhitespace(child, preserve);
     }
 
     /// <summary>
-    /// Whether <paramref name="text"/> is indentation: XML whitespace (not CDATA) in an element that holds child
-    /// elements and no other text, outside any <c>xml:space="preserve"</c> scope (the nearest <c>xml:space</c>
-    /// decides; <c>default</c> resets it). Text in a text-only element, such as the spaces of a <c>w:t</c>, is
-    /// content, as is whitespace in mixed content or under <c>preserve</c> (SVG and other foreign XML).
+    /// Whether <paramref name="element"/>'s whitespace text is indentation: it holds child elements and no text but
+    /// XML whitespace (no CDATA), outside an <c>xml:space="preserve"</c> scope (<paramref name="preserve"/>, the
+    /// state <see cref="PreservesSpace"/> gives it). Text in a text-only element, such as the spaces of a
+    /// <c>w:t</c>, is content, as is whitespace in mixed content or under <c>preserve</c> (SVG, foreign XML).
     /// </summary>
-    internal static bool IsInsignificantWhitespace(XText text)
+    internal static bool DropsIndentation(XElement element, bool preserve)
     {
-        if (text is XCData || !IsXmlWhitespace(text.Value) || text.Parent is not { HasElements: true } parent)
+        if (preserve || !element.HasElements)
             return false;
-        foreach (var sibling in parent.Nodes())
-            if (sibling is XText other && !IsXmlWhitespace(other.Value))
+        bool whitespace = false;
+        foreach (var node in element.Nodes())
+        {
+            if (node is XCData || node is XText text && !IsXmlWhitespace(text.Value))
                 return false;
-        for (var current = parent; current is not null; current = current.Parent)
-            if (current.Attribute(XNamespace.Xml + "space") is { } space)
-                return space.Value != "preserve";
-        return true;
+            whitespace |= node is XText;
+        }
+        return whitespace;
     }
+
+    /// <summary>Whether <paramref name="element"/> is in an <c>xml:space="preserve"</c> scope: its own
+    /// <c>xml:space</c> decides (<c>default</c> resets it), else the scope it inherits.</summary>
+    internal static bool PreservesSpace(XElement element, bool inherited) =>
+        element.Attribute(XNamespace.Xml + "space") is { } space ? space.Value == "preserve" : inherited;
 
     internal static bool IsXmlWhitespace(string value)
     {
