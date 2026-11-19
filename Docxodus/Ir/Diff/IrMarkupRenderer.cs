@@ -1430,8 +1430,18 @@ internal static partial class IrMarkupRenderer
                       ?? Enumerable.Empty<XElement>()))
             : null;
 
+        // The shared mark is the next side's: where the base side's mark differs, record it as the mark's own
+        // run-property change, as every other surviving-pilcrow path does (issue #1794).
+        bool markDiffers = state.Settings.TrackParagraphFormatChanges && state.Settings.TrackParagraphMarkFormatChanges &&
+            !IrHasher.CanonicalHash(MarkRPrForCompare(basePPr)).Equals(IrHasher.CanonicalHash(MarkRPrForCompare(nextPPr)));
+
         basePPr?.Remove();
         XElement? pPr = nextPPr is null ? null : new XElement(nextPPr);
+        if (markDiffers)
+        {
+            pPr ??= new XElement(W.pPr);
+            StampMarkRPrChange(pPr, basePPr, state);
+        }
         if (archived is not null)
         {
             pPr ??= new XElement(W.pPr);
@@ -7927,6 +7937,29 @@ internal static partial class IrMarkupRenderer
         rPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), inner));
     }
 
+    /// <summary>Record the paragraph mark's original run properties (<paramref name="leftPPr"/>'s <c>w:rPr</c>) as
+    /// a <c>w:pPr/w:rPr/w:rPrChange</c> on <paramref name="pPr"/>, creating the mark <c>w:rPr</c> in its schema slot.
+    /// The mark is outside <c>w:pPrChange</c> by schema; Word tracks it this way.</summary>
+    private static void StampMarkRPrChange(XElement pPr, XElement? leftPPr, RenderState state)
+    {
+        var markRPr = pPr.Element(W.rPr);
+        if (markRPr == null)
+        {
+            markRPr = new XElement(W.rPr);
+            // Schema position: the mark rPr follows every pPr property child, before sectPr/pPrChange.
+            var before = pPr.Elements().FirstOrDefault(e => e.Name == W.sectPr || e.Name == W.pPrChange);
+            if (before != null) before.AddBeforeSelf(markRPr);
+            else pPr.Add(markRPr);
+        }
+        markRPr.Elements(W.rPrChange).Remove();
+        var leftMark = leftPPr?.Element(W.rPr);
+        var markInner = leftMark != null
+            ? StripUnids(new XElement(W.rPr, leftMark.Attributes(),
+                  leftMark.Elements().Where(e => e.Name != W.rPrChange)))
+            : new XElement(W.rPr);
+        markRPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), markInner));
+    }
+
     /// <summary>
     /// Stamp native PARAGRAPH-property revision markup (block-format-change family, 2026-07-03) on an
     /// emitted right-sourced paragraph: a <c>w:pPrChange</c> as the LAST child of the paragraph's pPr when
@@ -7982,24 +8015,7 @@ internal static partial class IrMarkupRenderer
         }
 
         if (markDiffers)
-        {
-            var markRPr = pPr.Element(W.rPr);
-            if (markRPr == null)
-            {
-                markRPr = new XElement(W.rPr);
-                // Schema position: the mark rPr follows every pPr property child, before sectPr/pPrChange.
-                var before = pPr.Elements().FirstOrDefault(e => e.Name == W.sectPr || e.Name == W.pPrChange);
-                if (before != null) before.AddBeforeSelf(markRPr);
-                else pPr.Add(markRPr);
-            }
-            markRPr.Elements(W.rPrChange).Remove();
-            var leftMark = leftPPr?.Element(W.rPr);
-            var markInner = leftMark != null
-                ? StripUnids(new XElement(W.rPr, leftMark.Attributes(),
-                      leftMark.Elements().Where(e => e.Name != W.rPrChange)))
-                : new XElement(W.rPr);
-            markRPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), markInner));
-        }
+            StampMarkRPrChange(pPr, leftPPr, state);
 
         if (pPrDiffers)
         {

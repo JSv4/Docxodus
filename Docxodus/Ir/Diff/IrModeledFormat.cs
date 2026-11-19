@@ -135,8 +135,11 @@ internal static class IrModeledFormat
             // The paragraph mark's modeled run properties (size, bold, colour, …): a mark-only change of how the
             // paragraph looks classifies FormatOnly, and the renderer records it as w:pPr/w:rPr/w:rPrChange
             // (issue #1794). Its unmodeled properties (w:lang) stay out, as they do for runs.
-            sb.Append('¤');
-            sb.Append(RunKey(paragraph.MarkFormat));
+            if (settings.TrackParagraphMarkFormatChanges)
+            {
+                sb.Append('¤');
+                sb.Append(RunKey(paragraph.MarkFormat));
+            }
         }
         // A3: an inline (in-pPr) sectPr's modeled page setup participates too, so a mid-document
         // sectPr-only change classifies FormatOnly instead of Unchanged under ModeledOnly. Gated on the
@@ -266,6 +269,19 @@ internal static class IrModeledFormat
     /// present-on-one-side-or-differing rule as <see cref="FormatChangeDetails"/>. An unmodeled-only delta
     /// (detected under Full) yields empty changed names, mirroring the run-level empty-details convention.
     /// </summary>
+    /// <summary>The Paragraph-scope details of a paragraph mark's run-property change (issue #1794): the run
+    /// properties' names prefixed with <c>mark</c> (<c>markFontSize</c>, <c>markBold</c>, <c>markStyle</c>), so they
+    /// never read as the paragraph's own properties of the same name (<c>style</c>, <c>shading</c>).</summary>
+    public static IrFormatChangeDetails MarkFormatChangeDetails(IrRunFormat? left, IrRunFormat? right)
+    {
+        var details = FormatChangeDetails(left, right);
+        static string Mark(string name) => "mark" + char.ToUpperInvariant(name[0]) + name.Substring(1);
+        static IReadOnlyDictionary<string, string> Prefix(IReadOnlyDictionary<string, string> properties) =>
+            properties.ToDictionary(pair => Mark(pair.Key), pair => pair.Value);
+        return new IrFormatChangeDetails(Prefix(details.OldProperties), Prefix(details.NewProperties),
+            details.ChangedPropertyNames.Select(Mark).ToList(), IrFormatChangeScope.Paragraph);
+    }
+
     public static IrFormatChangeDetails ParaFormatChangeDetails(IrParaFormat? left, IrParaFormat? right)
     {
         var oldProps = ModeledParaProperties(left);

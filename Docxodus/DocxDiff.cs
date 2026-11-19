@@ -1065,7 +1065,9 @@ public sealed class DocxDiffFormatChange
     /// <see cref="DocxDiffFormatChangeScope.Run"/> (the default and the pre-existing behavior) is an
     /// rPr-grade report whose dictionaries carry run fields (bold, italic, fontSize, …);
     /// <see cref="DocxDiffFormatChangeScope.Paragraph"/> is a <c>w:pPrChange</c>-grade report whose
-    /// dictionaries carry paragraph fields (style, justification, indentLeft, …, numId, numLevel).
+    /// dictionaries carry paragraph fields (style, justification, indentLeft, …, numId, numLevel), or, for a
+    /// change to the paragraph mark's own run properties (<c>w:pPr/w:rPr</c>), the run fields prefixed with
+    /// <c>mark</c> (markBold, markFontSize, markStyle, …).
     /// Non-Run scopes appear only under <see cref="DocxDiffRevisionGranularity.Fine"/> —
     /// <see cref="DocxDiffRevisionGranularity.WmlComparerCompatible"/> excludes them by construction
     /// (the legacy comparer cannot produce them).

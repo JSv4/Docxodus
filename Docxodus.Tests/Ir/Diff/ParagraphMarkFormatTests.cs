@@ -68,4 +68,52 @@ public class ParagraphMarkFormatTests
         using var package = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, false);
         Assert.Empty(package.MainDocumentPart!.GetXDocument().Descendants(W + "rPrChange"));
     }
+
+    [Fact]
+    public void A_run_of_blank_paragraphs_whose_marks_change_rejects_to_the_original()
+    {
+        // Blank paragraphs at the start of the document whose marks change size: the redline keeps one shared
+        // mark per blank, and it must record the original's.
+        static WmlDocument Blanks(string mark) => IrTestDocuments.FromBodyXml(
+            string.Concat(Enumerable.Repeat($"<w:p>{(mark.Length == 0 ? "" : $"<w:pPr><w:rPr>{mark}</w:rPr></w:pPr>")}</w:p>", 3)) +
+            "<w:p><w:r><w:t>After the blanks.</w:t></w:r></w:p>");
+        static string?[] Sizes(WmlDocument doc)
+        {
+            using var stream = new System.IO.MemoryStream(doc.DocumentByteArray);
+            using var package = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, false);
+            return package.MainDocumentPart!.GetXDocument().Root!.Element(W + "body")!.Elements(W + "p")
+                .Select(p => (string?)p.Element(W + "pPr")?.Element(W + "rPr")?.Element(W + "sz")?.Attribute(W + "val")).ToArray();
+        }
+        var (left, right) = (Blanks(""), Blanks("<w:sz w:val=\"72\"/>"));
+        var redline = DocxCompare.Compare(left, right);
+        Assert.Equal(Sizes(left), Sizes(RevisionProcessor.RejectRevisions(redline)));
+        Assert.Equal(Sizes(right), Sizes(RevisionProcessor.AcceptRevisions(redline)));
+    }
+
+    [Fact]
+    public void A_mark_change_reports_mark_prefixed_property_names()
+    {
+        // A mark's run properties never read as the paragraph's own properties of the same name.
+        var revision = Assert.Single(DocxDiff.GetRevisions(Document(""), Document("<w:rStyle w:val=\"Strong\"/><w:sz w:val=\"72\"/>")));
+        Assert.All(revision.FormatChange!.ChangedPropertyNames, name => Assert.StartsWith("mark", name));
+        Assert.DoesNotContain("style", revision.FormatChange.ChangedPropertyNames);
+    }
+
+    [Fact]
+    public void Consolidating_a_mark_change_beside_another_reviewers_text_edit_keeps_the_text_edit()
+    {
+        // The composite leaves marks out of its pairing, so one reviewer's mark change cannot conflict with and
+        // cancel another reviewer's text edit in the same paragraph.
+        static WmlDocument Paragraph(string text, string mark) => IrTestDocuments.FromBodyXml(
+            $"<w:p>{(mark.Length == 0 ? "" : $"<w:pPr><w:rPr>{mark}</w:rPr></w:pPr>")}<w:r><w:t>{text}</w:t></w:r></w:p>");
+        var original = Paragraph("Hello world here.", "");
+        var merged = DocxDiff.Consolidate(original, new[]
+        {
+            new DocxDiffReviewer { Document = Paragraph("Hello world here.", "<w:sz w:val=\"72\"/>"), Author = "Reviewer A" },
+            new DocxDiffReviewer { Document = Paragraph("Hello there here.", ""), Author = "Reviewer B" },
+        });
+        using var stream = new System.IO.MemoryStream(RevisionProcessor.AcceptRevisions(merged).DocumentByteArray);
+        using var package = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, false);
+        Assert.Equal("Hello there here.", package.MainDocumentPart!.GetXDocument().Root!.Element(W + "body")!.Value);
+    }
 }

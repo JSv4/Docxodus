@@ -1551,7 +1551,7 @@ internal static class IrRevisionRenderer
         // Paragraph-scope revision carrying the mark's run-property delta, as the redline's mark w:rPrChange is.
         if (mark)
             sink.Add(new IrRevision(IrRevisionType.FormatChanged, text, ctx.Author, ctx.Date,
-                FormatChange: IrModeledFormat.FormatChangeDetails(lp.MarkFormat, rp.MarkFormat) with { Scope = IrFormatChangeScope.Paragraph },
+                FormatChange: IrModeledFormat.MarkFormatChangeDetails(lp.MarkFormat, rp.MarkFormat),
                 LeftAnchor: op.LeftAnchor, RightAnchor: op.RightAnchor));
         return true;
     }
@@ -1560,7 +1560,7 @@ internal static class IrRevisionRenderer
     /// policy: their modeled run fields under ModeledOnly (issue #1794), the whole mapped format under Full.</summary>
     private static bool MarkFormatDiffers(IrParagraph left, IrParagraph right, IrDiffSettings settings)
     {
-        if (!settings.TrackParagraphFormatChanges)
+        if (!settings.TrackParagraphFormatChanges || !settings.TrackParagraphMarkFormatChanges)
             return false;
         return settings.FormatComparison == IrFormatComparison.ModeledOnly
             ? IrModeledFormat.RunKey(left.MarkFormat) != IrModeledFormat.RunKey(right.MarkFormat)
