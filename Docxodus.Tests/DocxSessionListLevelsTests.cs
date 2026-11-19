@@ -199,6 +199,53 @@ public class DocxSessionListLevelsTests
     }
 
     [Fact]
+    public void LL009_ContinueNumbering_PassesOverAListThatDoesNotMatch()
+    {
+        // Word: numbered, bullets, numbered - Continue Numbering on the second numbered list joins
+        // the first and leaves the bullets between them alone.
+        var (s, a) = Open("A1", "A2", "Bullet1", "Bullet2", "N1", "N2");
+        using (s)
+        {
+            Assert.True(s.ApplyListFormatRange(a[0], a[1], ListFormat.Decimal).Success);
+            Assert.True(s.ApplyListFormatRange(AnchorOf(s, "Bullet1"), AnchorOf(s, "Bullet2"), ListFormat.Bullet).Success);
+            Assert.True(s.ApplyListFormatRange(AnchorOf(s, "N1"), AnchorOf(s, "N2"), ListFormat.Decimal).Success);
+            Assert.True(s.SetListStartOverride(AnchorOf(s, "N1"), 1).Success);
+            Assert.Equal("1.", Label(s, "N1"));
+            var bullets = s.GetListMembership(AnchorOf(s, "Bullet1"))!.NumId;
+
+            var r = s.ContinueNumbering(AnchorOf(s, "N1"));
+
+            Assert.True(r.Success, r.Error?.Message);
+            Assert.Equal(("3.", "4."), (Label(s, "N1"), Label(s, "N2")));
+            Assert.Equal(bullets, s.GetListMembership(AnchorOf(s, "Bullet1"))!.NumId);
+            Assert.Equal(bullets, s.GetListMembership(AnchorOf(s, "Bullet2"))!.NumId);
+        }
+    }
+
+    [Theory]
+    [InlineData(ListFormat.Bullet)]
+    [InlineData(ListFormat.UpperLetter)]
+    public void LL010_ContinueNumbering_IsRefused_WhenOnlyADifferentListComesBefore(ListFormat before)
+    {
+        // Word disables Continue Numbering for a "1." list after a bullet list or an "A." list:
+        // it would otherwise turn the numbers into bullets or letters.
+        var (s, a) = Open("P1", "P2", "N1", "N2");
+        using (s)
+        {
+            Assert.True(s.ApplyListFormatRange(a[0], a[1], before).Success);
+            Assert.True(s.ApplyListFormatRange(AnchorOf(s, "N1"), AnchorOf(s, "N2"), ListFormat.Decimal).Success);
+            var numId = s.GetListMembership(AnchorOf(s, "N1"))!.NumId;
+
+            var r = s.ContinueNumbering(AnchorOf(s, "N1"));
+
+            Assert.False(r.Success);
+            Assert.Equal(EditErrorCode.AnchorWrongKind, r.Error!.Code);
+            Assert.Equal(numId, s.GetListMembership(AnchorOf(s, "N1"))!.NumId);
+            Assert.Equal(("1.", "2."), (Label(s, "N1"), Label(s, "N2")));
+        }
+    }
+
+    [Fact]
     public void LL008_Json_RoundTrip()
     {
         var specs = Docxodus.Internal.DocxSessionJson.ParseListLevelSpecs(

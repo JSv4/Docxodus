@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- A list's levels and Word's Continue Numbering (#1790). `GetListLevels` reads the levels of an item's list (number format, number text such as `%1.%2`, start, positions, legal numbering) and `SetListLevels` changes them, as Word's Define New Multilevel List does: only that list changes (a definition other lists share is copied first). `ContinueNumbering` makes an item, and the rest of its list after it, join the nearest earlier list with the same number format and text at the item's level, passing over other lists between them, as Word does; it is refused when no matching list comes before it. On the .NET API, WASM, npm (`getListLevels`, `setListLevels`, `continueNumbering`), Python (`get_list_levels`, `set_list_levels`, `continue_numbering`, with `ListLevelInfo` and `ListLevelSpec`), the stdio host and MCP (`docxodus_list` actions `get_levels`, `set_levels`, `continue`).
+
 ### Fixed
 
 - An on/off property is now read the same way by every reader: `1`, `true` and `on` are on and `0`, `false` and `off` are off, in any letter case (#1786). `WordprocessingMLUtil.GetBoolProp`, and a private copy of it in the HTML converter, read `on` as off, although the specification's `ST_OnOff` allows it. In HTML output, a run whose bold, italic, strike, caps, small caps or hidden text was written `w:val="on"` lost that formatting, and a paragraph mark hidden that way did not join its paragraph to the next; a section's title page written that way was read as off by the editing session and the comparison, and the even-and-odd-headers setting by the editing session. The markdown projection, and the editing session's format signatures, read `w:val="off"` as on, so `<w:b w:val="off"/>` projected as bold. Other readers, including a comment's resolved flag (`w15:done`) and Office Math's on/off properties, matched only some letter cases. These readers now share one parser, `WordprocessingMLUtil.OnOffValue`; each keeps its own reading of a value that is none of the six.

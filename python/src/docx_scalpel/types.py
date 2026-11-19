@@ -1966,6 +1966,62 @@ class NumberFormat(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class ListLevelInfo:
+    """One level of a list, as Word's Define New Multilevel List dialog shows it
+    (``DocxSession.get_list_levels``). ``format`` is the ``w:numFmt`` token (``decimal``,
+    ``upperRoman``, ``bullet``, ...); ``text`` the number text, ``%1``-``%9`` naming this level and
+    the ones above it (``%1.%2.``); positions are in twips."""
+
+    level: int
+    format: str = "decimal"
+    text: str = ""
+    start: int = 1
+    number_position_twips: int = 0
+    text_position_twips: int = 0
+    legal: bool = False
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ListLevelInfo":
+        return cls(
+            level=int(d["level"]),
+            format=d.get("format", "decimal"),
+            text=d.get("text", ""),
+            start=int(d.get("start", 1)),
+            number_position_twips=int(d.get("numberPositionTwips", 0)),
+            text_position_twips=int(d.get("textPositionTwips", 0)),
+            legal=bool(d.get("legal", False)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ListLevelSpec:
+    """A change to one level of a list (``DocxSession.set_list_levels``): ``level`` (0-8) names
+    it, and each field that is not ``None`` is written there. ``format`` is a ``w:numFmt`` token
+    (``decimal``, ``decimalZero``, ``lowerLetter``, ``upperLetter``, ``lowerRoman``,
+    ``upperRoman``, ``bullet``, ``none``, ``ordinal``, ``cardinalText``, ``ordinalText``); ``text``
+    may name only this level and the ones above it (``%3`` on level 2 is refused); ``start`` must
+    be >= 0."""
+
+    level: int
+    format: str | None = None
+    text: str | None = None
+    legal: bool | None = None
+    start: int | None = None
+    number_position_twips: int | None = None
+    text_position_twips: int | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"level": self.level}
+        if self.format is not None: out["format"] = self.format
+        if self.text is not None: out["text"] = self.text
+        if self.legal is not None: out["legal"] = self.legal
+        if self.start is not None: out["start"] = self.start
+        if self.number_position_twips is not None: out["numberPositionTwips"] = self.number_position_twips
+        if self.text_position_twips is not None: out["textPositionTwips"] = self.text_position_twips
+        return out
+
+
+@dataclass(frozen=True, slots=True)
 class ListMembership:
     """Numbering facts for a list-item paragraph."""
 

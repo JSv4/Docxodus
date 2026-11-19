@@ -122,9 +122,9 @@
       "transports": {
         "wasm": { "method": "GetListLevels" },
         "npm": { "method": "getListLevels" },
-        "python": { "absent": "not exposed yet: a new op (Word's Define New Multilevel List / Continue Numbering) that wasm and npm carry first" },
-        "stdio": { "absent": "not exposed yet: a new op (Word's Define New Multilevel List / Continue Numbering) that wasm and npm carry first" },
-        "mcp": { "absent": "not exposed yet: a new op (Word's Define New Multilevel List / Continue Numbering) that wasm and npm carry first" }
+        "python": { "method": "get_list_levels" },
+        "stdio": { "op": "get_list_levels" },
+        "mcp": { "tool": "docxodus_list", "action": "get_levels" }
       }
     },
     {
@@ -138,9 +138,9 @@
       "transports": {
         "wasm": { "method": "SetListLevels" },
         "npm": { "method": "setListLevels" },
-        "python": { "absent": "not exposed yet: a new op (Word's Define New Multilevel List / Continue Numbering) that wasm and npm carry first" },
-        "stdio": { "absent": "not exposed yet: a new op (Word's Define New Multilevel List / Continue Numbering) that wasm and npm carry first" },
-        "mcp": { "absent": "not exposed yet: a new op (Word's Define New Multilevel List / Continue Numbering) that wasm and npm carry first" }
+        "python": { "method": "set_list_levels" },
+        "stdio": { "op": "set_list_levels" },
+        "mcp": { "tool": "docxodus_list", "action": "set_levels" }
       }
     },
     {
@@ -153,9 +153,9 @@
       "transports": {
         "wasm": { "method": "ContinueNumbering" },
         "npm": { "method": "continueNumbering" },
-        "python": { "absent": "not exposed yet: a new op (Word's Define New Multilevel List / Continue Numbering) that wasm and npm carry first" },
-        "stdio": { "absent": "not exposed yet: a new op (Word's Define New Multilevel List / Continue Numbering) that wasm and npm carry first" },
-        "mcp": { "absent": "not exposed yet: a new op (Word's Define New Multilevel List / Continue Numbering) that wasm and npm carry first" }
+        "python": { "method": "continue_numbering" },
+        "stdio": { "op": "continue_numbering" },
+        "mcp": { "tool": "docxodus_list", "action": "continue" }
       }
     }
   ]

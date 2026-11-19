@@ -94,6 +94,8 @@ from .types import (
     ImageInsertOptions,
     ImageOccurrence,
     InlineSpan,
+    ListLevelInfo,
+    ListLevelSpec,
     ListMembership,
     MarkdownProjection,
     MutationBatchResult,
@@ -1558,6 +1560,12 @@ class DocxSession:
         result = self._call("get_list_membership", {"anchorId": anchor_id})
         return ListMembership._from_wire(result) if result else None
 
+    def get_list_levels(self, anchor_id: str) -> tuple[ListLevelInfo, ...] | None:
+        """The levels of the list the paragraph is an item of (directly or through its style),
+        as Word's Define New Multilevel List shows them. None when the anchor is no list item."""
+        result = self._call("get_list_levels", {"anchorId": anchor_id})
+        return tuple(ListLevelInfo._from_wire(level) for level in result) if result is not None else None
+
     def get_section_info(self, anchor_id: str) -> SectionInfo | None:
         """Resolve page-layout info for the w:sectPr that governs an anchor.
         Returns None for anchors outside the body part."""
@@ -2416,6 +2424,27 @@ class DocxSession:
     def remove_list_membership(self, anchor_id: str) -> EditResult:
         return EditResult._from_wire(
             self._call("remove_list_membership", {"anchorId": anchor_id})
+        )
+
+    def set_list_levels(self, anchor_id: str, levels: Sequence[ListLevelSpec]) -> EditResult:
+        """Change levels of the list the paragraph is an item of, as Word's Define New
+        Multilevel List does: each ``ListLevelSpec`` names a level and the fields to write. Only
+        that list changes (a definition other lists share is copied first). Refused under
+        tracked changes, since numbering definitions cannot carry them. One undo step."""
+        return EditResult._from_wire(
+            self._call(
+                "set_list_levels",
+                {"anchorId": anchor_id, "levels": [level.to_wire() for level in levels]},
+            )
+        )
+
+    def continue_numbering(self, anchor_id: str) -> EditResult:
+        """Word's Continue Numbering: the item, and the items of its list after it, join the
+        nearest earlier list whose number format and text at the item's level match (lists in
+        between that do not match are passed over), and number on from it. Refused when no
+        matching list comes before it, and under tracked changes."""
+        return EditResult._from_wire(
+            self._call("continue_numbering", {"anchorId": anchor_id})
         )
 
     def apply_list_format(

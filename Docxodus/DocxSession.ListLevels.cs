@@ -98,9 +98,12 @@ public sealed partial class DocxSession
 
     /// <summary>
     /// Word's <i>Continue Numbering</i>: the anchored item, and the items of its list after it,
-    /// join the list before it (the nearest earlier list item of another list in the same story),
-    /// keeping their levels; their numbers go on from that list's. Items of its list before the
-    /// anchor stay as they are. Refused when no list comes before it.
+    /// join the list before it, keeping their levels; their numbers go on from that list's. Items
+    /// of its list before the anchor stay as they are. As in Word, only a matching list is
+    /// continued: the nearest earlier list in the same story whose definition at the item's level
+    /// has the same number format and number text (a numbered list does not continue a bullet
+    /// list, nor <c>1.</c> an <c>A.</c> list); other lists between them are passed over. Refused
+    /// when no matching list comes before it.
     /// </summary>
     public EditResult ContinueNumbering(string anchorId)
     {
@@ -113,9 +116,24 @@ public sealed partial class DocxSession
         var element = target.Resolve(_doc!);
         if (element is null || element.Name != W.p)
             return EditResult.Fail(EditErrorCode.AnchorWrongKind, "ContinueNumbering requires a list item", anchorId);
-        var (numId, _) = EffectiveNumberingOf(element);
+        var (numId, level) = EffectiveNumberingOf(element);
         if (numId is null or 0)
             return EditResult.Fail(EditErrorCode.AnchorWrongKind, "no numbering on this paragraph or its style", anchorId);
+
+        // A list's number format and text at the item's level: what must match for Word to
+        // continue a list (Word disables Continue Numbering for a bullet list, or an "A." list,
+        // before a "1." one).
+        var looks = new Dictionary<int, (string Format, string Text)?>();
+        (string Format, string Text)? LookOf(int id)
+        {
+            if (!looks.TryGetValue(id, out var look))
+            {
+                var info = Internal.NumberingFactory.ReadLevels(_doc!, id).FirstOrDefault(l => l.Level == level);
+                looks[id] = look = info is null ? null : (info.Format, info.Text);
+            }
+            return look;
+        }
+        var own = LookOf(numId.Value);
 
         var paragraphs = element.AncestorsAndSelf().Last().Descendants(W.p).ToList();
         int at = paragraphs.IndexOf(element);
@@ -123,10 +141,11 @@ public sealed partial class DocxSession
         for (int i = at - 1; i >= 0 && previous is null; i--)
         {
             var (other, _) = EffectiveNumberingOf(paragraphs[i]);
-            if (other is not null and not 0 && other != numId) previous = other;
+            if (other is not null and not 0 && other != numId && own is not null && LookOf(other.Value) == own)
+                previous = other;
         }
         if (previous is null)
-            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "there is no list before this one to continue", anchorId);
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "there is no matching list before this one to continue", anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try

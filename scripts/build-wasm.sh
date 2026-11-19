@@ -186,7 +186,13 @@ du -sh "$WASM_DIST"
 # merged, CI runners measured the payload at 6,069,718 to 6,072,589 bytes, up to 2,317 over
 # 5928 KiB. 8 KiB more covers that spread between runners. Assembly roots, dependencies and
 # the AOT profile are unchanged.
-WIRE_BUDGET_BYTES=$((5936 * 1024))
+# A list's levels and Continue Numbering (#1790: GetListLevels, SetListLevels, ContinueNumbering,
+# their JSON and the numbering-definition code behind them) add 6,440 bytes, measured by two local
+# builds of main 4d94dc32 and the branch that differ only in that change (6,057,148 -> 6,063,588).
+# CI measured the branch at 6,078,467 bytes before its rebase, 3 over 5936 KiB. 8 KiB more covers
+# the change with the spread between runners; assembly roots, dependencies and the AOT profile are
+# unchanged.
+WIRE_BUDGET_BYTES=$((5944 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""

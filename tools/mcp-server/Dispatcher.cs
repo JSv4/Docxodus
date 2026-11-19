@@ -680,6 +680,8 @@ internal static partial class Dispatcher
     {
         if (action == "get_membership")
             return DocxSessionOps.GetListMembership(session.Handle, Str(args, "anchorId"));
+        if (action == "get_levels")
+            return DocxSessionOps.GetListLevels(session.Handle, Str(args, "anchorId"));
         return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () => action switch
         {
         "apply_format" => DocxSessionOps.ApplyListFormat(
@@ -692,11 +694,23 @@ internal static partial class Dispatcher
             session.Handle, Str(args, "anchorId"), Int(args, "startValue")),
         "clear_start" => DocxSessionOps.ClearListStartOverride(session.Handle, Str(args, "anchorId")),
         "remove" => DocxSessionOps.RemoveListMembership(session.Handle, Str(args, "anchorId")),
+        "set_levels" => DocxSessionOps.SetListLevels(session.Handle, Str(args, "anchorId"), ListLevelSpecs(args)),
+        "continue" => DocxSessionOps.ContinueNumbering(session.Handle, Str(args, "anchorId")),
         _ => throw new McpToolException($"unknown docxodus_list action: {action}"),
         });
     }
 
-    private static bool IsMutatingListAction(string action) => action != "get_membership";
+    private static bool IsMutatingListAction(string action) => action is not ("get_membership" or "get_levels");
+
+    /// <summary>The <c>levels</c> argument: an array of list level objects.</summary>
+    private static IReadOnlyList<ListLevelSpec> ListLevelSpecs(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty("levels", out var v) || v.ValueKind != JsonValueKind.Array)
+            throw new McpToolException("missing required array argument \"levels\"");
+        try { return DocxSessionJson.ParseListLevelSpecs(v.GetRawText()); }
+        catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException or JsonException)
+        { throw new McpToolException($"invalid \"levels\": {ex.Message}"); }
+    }
 
     // ─── Comment (native Word comments, issue #300) ────────────────────
 
@@ -1469,7 +1483,7 @@ internal static partial class Dispatcher
                 or "unmerge_cells" or "set_column_widths" or "set_borders" or "set_shading"
                 or "set_repeat_header_row" or "set_row_options" or "set_style",
             "docxodus_list" => action is "apply_format" or "apply_format_range" or "set_level"
-                or "set_start" or "clear_start" or "remove",
+                or "set_start" or "clear_start" or "remove" or "set_levels" or "continue",
             "docxodus_comment" => action is "add" or "reply" or "resolve" or "update" or "remove",
             "docxodus_links" => action is "add_hyperlink" or "update_hyperlink" or "remove_hyperlink"
                 or "add_bookmark" or "move_bookmark" or "rename_bookmark" or "remove_bookmark"
@@ -1740,7 +1754,13 @@ internal static partial class Dispatcher
                 break;
             case ("docxodus_list", "clear_start"):
             case ("docxodus_list", "remove"):
+            case ("docxodus_list", "continue"):
+            case ("docxodus_list", "get_levels"):
                 RequireStrings(args, "anchorId");
+                break;
+            case ("docxodus_list", "set_levels"):
+                RequireStrings(args, "anchorId");
+                _ = ListLevelSpecs(args);
                 break;
 
             case ("docxodus_comment", _):

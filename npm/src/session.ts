@@ -1722,8 +1722,9 @@ export class DocxSession {
     return JSON.parse(this.wasm.SetListLevels(this.handle, anchorId, JSON.stringify(levels))) as EditResult;
   }
 
-  /** Word's *Continue Numbering*: the anchored item and the rest of its list join the list
-   * before it, keeping their levels. */
+  /** Word's *Continue Numbering*: the anchored item and the rest of its list join the nearest
+   * earlier list with the same number format and text at the item's level (other lists between
+   * them are passed over), keeping their levels. Refused when no matching list comes before it. */
   continueNumbering(anchorId: string): EditResult {
     return JSON.parse(this.wasm.ContinueNumbering(this.handle, anchorId)) as EditResult;
   }
