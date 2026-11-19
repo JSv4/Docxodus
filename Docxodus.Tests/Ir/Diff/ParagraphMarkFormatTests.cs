@@ -116,4 +116,19 @@ public class ParagraphMarkFormatTests
         using var package = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, false);
         Assert.Equal("Hello there here.", package.MainDocumentPart!.GetXDocument().Root!.Element(W + "body")!.Value);
     }
+
+    [Theory]
+    [InlineData("WC007-Unmodified.docx", "WC007-Longest-At-End.docx")]
+    [InlineData("WC007-Longest-At-End.docx", "WC007-Unmodified.docx")]
+    public void A_replaced_paragraph_whose_marks_never_change_gets_no_mark_change(string left, string right)
+    {
+        // A deleted paragraph's mark carries the deletion marker, not formatting; no mark run-property change may
+        // be invented from it where neither document's mark has any properties.
+        var redline = DocxDiff.Compare(new WmlDocument(System.IO.Path.Combine(System.AppContext.BaseDirectory, "../../../../TestFiles", "WC", left)),
+            new WmlDocument(System.IO.Path.Combine(System.AppContext.BaseDirectory, "../../../../TestFiles", "WC", right)));
+        using var stream = new System.IO.MemoryStream(redline.DocumentByteArray);
+        using var package = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, false);
+        Assert.DoesNotContain(package.MainDocumentPart!.GetXDocument().Descendants(W + "rPrChange"),
+            change => change.Parent!.Parent!.Name == W + "pPr");
+    }
 }

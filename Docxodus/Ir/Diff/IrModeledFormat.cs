@@ -263,12 +263,6 @@ internal static class IrModeledFormat
         return dict;
     }
 
-    /// <summary>
-    /// Build the Paragraph-scope <see cref="IrFormatChangeDetails"/> for a (left, right) paragraph-format
-    /// pair: modeled property dictionaries + changed names in the fixed field order — the same
-    /// present-on-one-side-or-differing rule as <see cref="FormatChangeDetails"/>. An unmodeled-only delta
-    /// (detected under Full) yields empty changed names, mirroring the run-level empty-details convention.
-    /// </summary>
     /// <summary>The Paragraph-scope details of a paragraph mark's run-property change (issue #1794): the run
     /// properties' names prefixed with <c>mark</c> (<c>markFontSize</c>, <c>markBold</c>, <c>markStyle</c>), so they
     /// never read as the paragraph's own properties of the same name (<c>style</c>, <c>shading</c>).</summary>
@@ -282,6 +276,12 @@ internal static class IrModeledFormat
             details.ChangedPropertyNames.Select(Mark).ToList(), IrFormatChangeScope.Paragraph);
     }
 
+    /// <summary>
+    /// Build the Paragraph-scope <see cref="IrFormatChangeDetails"/> for a (left, right) paragraph-format
+    /// pair: modeled property dictionaries + changed names in the fixed field order — the same
+    /// present-on-one-side-or-differing rule as <see cref="FormatChangeDetails"/>. An unmodeled-only delta
+    /// (detected under Full) yields empty changed names, mirroring the run-level empty-details convention.
+    /// </summary>
     public static IrFormatChangeDetails ParaFormatChangeDetails(IrParaFormat? left, IrParaFormat? right)
     {
         var oldProps = ModeledParaProperties(left);

@@ -7954,8 +7954,7 @@ internal static partial class IrMarkupRenderer
         markRPr.Elements(W.rPrChange).Remove();
         var leftMark = leftPPr?.Element(W.rPr);
         var markInner = leftMark != null
-            ? StripUnids(new XElement(W.rPr, leftMark.Attributes(),
-                  leftMark.Elements().Where(e => e.Name != W.rPrChange)))
+            ? StripUnids(new XElement(W.rPr, leftMark.Attributes(), leftMark.Elements().Where(IsMarkFormat)))
             : new XElement(W.rPr);
         markRPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), markInner));
     }
@@ -8074,8 +8073,13 @@ internal static partial class IrMarkupRenderer
         var rPr = pPr?.Element(W.rPr);
         return rPr == null
             ? new XElement(W.rPr)
-            : new XElement(W.rPr, rPr.Attributes(), rPr.Elements().Where(e => e.Name != W.rPrChange));
+            : new XElement(W.rPr, rPr.Attributes(), rPr.Elements().Where(IsMarkFormat));
     }
+
+    /// <summary>A paragraph mark's formatting, as opposed to the revision markers a redline puts on the mark (its
+    /// inserted, deleted or moved flags and its own property change).</summary>
+    private static bool IsMarkFormat(XElement e) =>
+        e.Name != W.rPrChange && e.Name != W.ins && e.Name != W.del && e.Name != W.moveFrom && e.Name != W.moveTo;
 
     // ----------------------------------------------- table-shell property revisions (block-format family)
 
