@@ -192,7 +192,11 @@ du -sh "$WASM_DIST"
 # CI measured the branch at 6,078,467 bytes before its rebase, 3 over 5936 KiB. 8 KiB more covers
 # the change with the spread between runners; assembly roots, dependencies and the AOT profile are
 # unchanged.
-WIRE_BUDGET_BYTES=$((5944 * 1024))
+# Table Properties (#1802: SetTableProperties, SetCellProperties, GetTableProperties, their JSON and
+# bridge exports) put CI's build at 6,088,414 bytes, 1,758 over 5944 KiB (a local build measured
+# 6,074,144: runners build larger). 8 KiB more covers it with the spread between runners; assembly
+# roots, dependencies and the AOT profile are unchanged.
+WIRE_BUDGET_BYTES=$((5952 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""
