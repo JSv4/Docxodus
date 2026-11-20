@@ -68,6 +68,8 @@ locally or re-add the opt-out. Debug builds don't fail on warnings, so check wit
 `rules.ruleset` turns off two StyleCop rules that contradict the codebase's conventions, each with
 its reason inline: `SA1206` (the code writes `public required`) and `SA1633` (new files may have no
 header — see the copyright-attribution rule above; `SourceFileCopyrightTests` enforces attribution).
+It also turns off four rules added after StyleCop.Analyzers 1.1.118, `SA1143`, `SA1315`, `SA1316` and
+`SA1414`, which hundreds of existing lines (tests among them) break; their reasons are inline too.
 
 ### Line endings
 
