@@ -3329,14 +3329,22 @@ export class DocxEditor {
       this.splitAtCaret(el);
     } else if (ev.key === "Backspace") {
       const sel = typeof window !== "undefined" ? window.getSelection() : null;
-      if (sel && sel.isCollapsed && caretOffsetIn(el) === 0 && !inTableCell) {
+      // An empty paragraph shows a placeholder space the caret can sit after: it is at its start.
+      const atStart = caretOffsetIn(el) === 0 || /^[\s\u00a0]*$/.test(blockContentText(el));
+      if (sel && sel.isCollapsed && atStart) {
         // A paginated note's first paragraph opens with its number, which is not run text, and
         // the note is its own story: there is nothing before the text to delete or merge into.
         if (el.querySelector(NOTE_NUMBER_SELECTOR)) {
           ev.preventDefault();
           return;
         }
-        const prev = this.previousEditable(el);
+        // In a table cell the paragraph joins the one before it in the same cell; at the cell's
+        // first paragraph there is nothing to join (as in Word, the cell boundary stays).
+        const prev = this.joinableNeighbour(el, -1);
+        if (inTableCell && !prev) {
+          ev.preventDefault();
+          return;
+        }
         if (prev) {
           ev.preventDefault();
           // The previous paragraph's mark is already a pending deletion (a tracked join waiting
@@ -3350,7 +3358,38 @@ export class DocxEditor {
           this.mergeWithPrevious(prev, el);
         }
       }
+    } else if (ev.key === "Delete" && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.shiftKey) {
+      // Delete at a paragraph's end joins the next paragraph to it, as in Word (in a table cell,
+      // only the next paragraph of the same cell). Anywhere else the browser deletes as usual.
+      const sel = typeof window !== "undefined" ? window.getSelection() : null;
+      const at = sel?.isCollapsed ? caretOffsetIn(el) : null;
+      if (at === null || /[^\s\u00a0]/.test(blockContentText(el).slice(at))) return;
+      const next = this.joinableNeighbour(el, 1);
+      if (!next || next.querySelector(NOTE_NUMBER_SELECTOR)) {
+        if (inTableCell) ev.preventDefault();
+        return;
+      }
+      // A pending deletion of either paragraph mark (a tracked join) is left to the browser's own
+      // editing, as Backspace leaves the struck pilcrow.
+      if (el.querySelector(DELETED_PARAGRAPH_MARK_SELECTOR) || next.querySelector(DELETED_PARAGRAPH_MARK_SELECTOR)) return;
+      // So is a paragraph with a shown deletion: the caret may sit before deleted text, which is not
+      // the paragraph's end.
+      if (el.querySelector(RENDERED_TEXT_DELETION_SELECTOR)) return;
+      ev.preventDefault();
+      this.mergeWithPrevious(el, next);
     }
+  }
+
+  /** The editable paragraph before (`step` -1) or after (+1) `el` that Backspace or Delete may join
+   *  it with: inside a table cell only one of the same cell, and never a table cell's paragraph
+   *  from outside the table. */
+  private joinableNeighbour(el: HTMLElement, step: -1 | 1): HTMLElement | null {
+    const all = Array.from(this.ownerRoot(el).querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'));
+    const i = all.indexOf(el);
+    const other = i < 0 ? null : all[i + step] ?? null;
+    if (!other) return null;
+    const cell = el.closest("td, th");
+    return cell ? (other.closest("td, th") === cell ? other : null) : (other.closest("td, th") ? null : other);
   }
 
   /** Editable cells in visual document order, excluding cells from any nested table. */
