@@ -215,6 +215,25 @@ public sealed partial class DocxSession
         }
     }
 
+    /// <summary>
+    /// Set an on/off paragraph property the way Word's Paragraph dialog does: drop the direct
+    /// element, see what the style chain (and document defaults) now give, and write an explicit
+    /// element only when <paramref name="value"/> differs — <c>&lt;w:x/&gt;</c> for on,
+    /// <c>w:val="0"</c> for off. <paramref name="silentDefault"/> is the value when nothing in the
+    /// chain mentions the property (true for widow control, false for the rest).
+    /// </summary>
+    private void SetPPrToggle(XElement paragraph, XElement pPr, XName name, bool value, bool silentDefault)
+    {
+        pPr.Elements(name).Remove();
+        var inheritedElement = FormattingAssembler.ResolveEffectiveParagraphProperties(_doc!, paragraph).Element(name);
+        var inheritedVal = inheritedElement?.Attribute(W.val);
+        bool inherited = inheritedElement is null
+            ? silentDefault
+            : inheritedVal is null || inheritedVal.ToBoolean() == true;
+        if (inherited == value) return;
+        SetPPrChildInOrder(pPr, value ? new XElement(name) : new XElement(name, new XAttribute(W.val, "0")));
+    }
+
     /// <summary>Return the existing w:pPr child of <paramref name="name"/> (attributes intact),
     /// or slot a new empty one in at its correct CT_PPr position.</summary>
     private static XElement GetOrCreatePPrChild(XElement pPr, XName name)
@@ -308,6 +327,9 @@ public sealed partial class DocxSession
         if (op.LineSpacingRule is not null && op.LineSpacing is null)
             return EditResult.Fail(EditErrorCode.InvalidParagraphFormat,
                 "lineSpacingRule requires lineSpacing (w:lineRule qualifies w:line)", anchorId);
+        if (op.LeftIndent is not null && op.IndentDelta is not null)
+            return EditResult.Fail(EditErrorCode.InvalidParagraphFormat,
+                "leftIndent and indentDelta are mutually exclusive (both set w:ind/@w:left)", anchorId);
 
         var oldPPr = new XElement(element.Element(W.pPr) ?? new XElement(W.pPr));
         _history.RecordPreOp(TakeSnapshot());
@@ -355,6 +377,31 @@ public sealed partial class DocxSession
                 }
                 ind.SetAttributeValue(leading?.Name ?? W.left, next);
             }
+
+            // Absolute left/right edges, in whichever spelling (left/start, right/end) the
+            // paragraph already uses, so the value written is the one every reader sees. An indent
+            // in character units (leftChars/startChars, rightChars/endChars) wins over the twips one
+            // in Word, so it goes: otherwise the new value would not show.
+            if (op.LeftIndent is { } left)
+            {
+                var ind = GetOrCreatePPrChild(pPr, W.ind);
+                ind.SetAttributeValue(WordprocessingMLUtil.IndLeadingAttribute(ind)?.Name ?? W.left, left);
+                ind.SetAttributeValue(W.leftChars, null);
+                ind.SetAttributeValue(W.startChars, null);
+            }
+            if (op.RightIndent is { } right)
+            {
+                var ind = GetOrCreatePPrChild(pPr, W.ind);
+                ind.SetAttributeValue(WordprocessingMLUtil.IndTrailingAttribute(ind)?.Name ?? W.right, right);
+                ind.SetAttributeValue(W.rightChars, null);
+                ind.SetAttributeValue(W.endChars, null);
+            }
+
+            if (op.KeepNext is { } keepNext) SetPPrToggle(element, pPr, W.keepNext, keepNext, false);
+            if (op.KeepLines is { } keepLines) SetPPrToggle(element, pPr, W.keepLines, keepLines, false);
+            if (op.WidowControl is { } widow) SetPPrToggle(element, pPr, W.widowControl, widow, true);
+            if (op.ContextualSpacing is { } contextual)
+                SetPPrToggle(element, pPr, W.contextualSpacing, contextual, false);
 
             // firstLine/hanging share one w:ind slot in Word: writing either evicts the other
             // (validation above already rejected an op carrying both).

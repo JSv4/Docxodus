@@ -2850,6 +2850,19 @@ export interface ParagraphFormatOp {
    * starts this far right of the paragraph's left edge. Mutually exclusive with
    * `firstLineIndent`; setting this removes any first-line indent. Negatives are invalid. */
   hangingIndent?: number;
+  /** Absolute left indent in twips (`w:ind/@w:left`, or `@w:start` when the paragraph uses that
+   * spelling); may be negative, as in Word. Mutually exclusive with `indentDelta`. */
+  leftIndent?: number;
+  /** Absolute right indent in twips (`w:ind/@w:right`, or `@w:end`); may be negative. */
+  rightIndent?: number;
+  /** Keep with next (`w:keepNext`). Written explicitly only when it differs from the style's value. */
+  keepNext?: boolean;
+  /** Keep lines together (`w:keepLines`). */
+  keepLines?: boolean;
+  /** Widow/orphan control (`w:widowControl`); on unless a style turns it off. */
+  widowControl?: boolean;
+  /** Don't add space between paragraphs of the same style (`w:contextualSpacing`). */
+  contextualSpacing?: boolean;
   /** Space above the paragraph in twips (`w:spacing/@w:before`; 20 twips = 1pt, so 240 = 12pt).
    * Absolute; negatives are invalid. */
   spacingBefore?: number;
@@ -3827,6 +3840,8 @@ export interface ParagraphFormatting {
   keepNext?: boolean;
   keepLines?: boolean;
   pageBreakBefore?: boolean;
+  widowControl?: boolean;
+  contextualSpacing?: boolean;
   outlineLevel?: number;
   shadingFill?: string;
   topBorder?: ParagraphBorderEdge;

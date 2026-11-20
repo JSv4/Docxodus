@@ -198,6 +198,8 @@ internal static class FormattingIntrospectionOps
             KeepNext = ReadOnOffElement(pPr?.Element(W.keepNext)),
             KeepLines = ReadOnOffElement(pPr?.Element(W.keepLines)),
             PageBreakBefore = ReadOnOffElement(pPr?.Element(W.pageBreakBefore)),
+            WidowControl = ReadOnOffElement(pPr?.Element(W.widowControl)),
+            ContextualSpacing = ReadOnOffElement(pPr?.Element(W.contextualSpacing)),
             OutlineLevel = ReadIntAttribute(pPr?.Element(W.outlineLvl)?.Attribute(W.val)),
             ShadingFill = (string?)pPr?.Element(W.shd)?.Attribute(W.fill),
             TopBorder = ParseBorder(pPr?.Element(W.pBdr)?.Element(W.top)),
@@ -219,6 +221,8 @@ internal static class FormattingIntrospectionOps
             KeepNext = value.KeepNext ?? false,
             KeepLines = value.KeepLines ?? false,
             PageBreakBefore = value.PageBreakBefore ?? false,
+            WidowControl = value.WidowControl ?? true,
+            ContextualSpacing = value.ContextualSpacing ?? false,
         };
     }
 
