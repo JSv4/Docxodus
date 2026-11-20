@@ -138,8 +138,8 @@ public sealed partial class DocxSession
         var originalLink = control.Element.Ancestors(W.hyperlink).FirstOrDefault();
         var href = RewriteHref(originalLink, OwnedPartRelationships.FindOwner(_doc!, control.Element)?.Part);
         var parent = originalLink is null ? replacement : pieces.Count > 0
-            ? pieces[0].Item1.Run.Ancestors(W.hyperlink).FirstOrDefault(link =>
-                pieces[^1].Item1.Run.Ancestors().Contains(link)) ?? replacement
+            ? pieces[0].Segment.Run.Ancestors(W.hyperlink).FirstOrDefault(link =>
+                pieces[^1].Segment.Run.Ancestors().Contains(link)) ?? replacement
             : map.Segments.Where(s => s.StartOffsetInBlock == control.Start || s.EndOffsetInBlock == control.Start)
                 .Select(s => s.Run.Ancestors(W.hyperlink).FirstOrDefault())
                 .FirstOrDefault(link => link is not null && RewriteHref(link, null) == href) ?? replacement;
