@@ -884,17 +884,23 @@ function moveAcrossTab(block: HTMLElement, ev: KeyboardEvent): void {
   const rtl = block.ownerDocument.defaultView!.getComputedStyle(source).direction === "rtl";
   const step = order < 0 ? 1 : order > 0 ? -1 : (ev.key === "ArrowRight") !== rtl ? 1 : -1;
   const crossed = after === at && text[step > 0 ? at : at - 1] === "\t";
-  let { node, offset } = contentPositionIn(block, crossed ? at + step : after);
+  collapseAtContentOffset(block, selection, crossed ? at + step : after);
+}
+
+/** Collapse `selection` at content offset `offset` of `block` so that typing lands there, also
+ *  just after a tab, whose empty box Chromium would otherwise type before. */
+function collapseAtContentOffset(block: HTMLElement, selection: Selection, offset: number): void {
+  let { node, offset: at } = contentPositionIn(block, offset);
   // A DOM point after the empty tab still types before it in Chromium while inside the flex
   // wrapper. Lift an end boundary out of its trailing wrappers into the surrounding content.
-  while (node !== block && node.nodeType === 1 && offset === node.childNodes.length && node.parentNode) {
-    offset = Array.prototype.indexOf.call(node.parentNode.childNodes, node) + 1;
+  while (node !== block && node.nodeType === 1 && at === node.childNodes.length && node.parentNode) {
+    at = Array.prototype.indexOf.call(node.parentNode.childNodes, node) + 1;
     node = node.parentNode;
   }
   // A terminal empty box has no native caret stop after it. The same unstamped BR Chromium
   // uses for an empty line supplies one; atomText excludes this placeholder from saved text.
-  if (node === block && offset === block.childNodes.length) block.append(block.ownerDocument.createElement("br"));
-  selection.collapse(node, offset);
+  if (node === block && at === block.childNodes.length) block.append(block.ownerDocument.createElement("br"));
+  selection.collapse(node, at);
 }
 
 /**
@@ -3307,12 +3313,21 @@ export class DocxEditor {
         this.navigateTableCell(el, ev.shiftKey);
         return;
       }
-      if (isListBlock(el)) {
+      // In a list item, as in Word: Tab at the item's start (or over a selection) and Shift+Tab
+      // change the level; Tab with the caret inside the text types a tab.
+      const sel = el.ownerDocument.defaultView?.getSelection();
+      const caretInText = !!sel?.isCollapsed && (caretOffsetIn(el) ?? 0) > 0;
+      if (isListBlock(el) && (ev.shiftKey || !caretInText)) {
         ev.preventDefault();
         this.activeBlock = el;
         this.setListLevel(ev.shiftKey ? -1 : 1);
         return;
       }
+      // Anywhere else Tab types a tab character (Word's), instead of moving the focus out of
+      // the document. Shift+Tab has nothing to do outside a list and a table.
+      ev.preventDefault();
+      if (!ev.shiftKey) this.insertTabAtCaret(el);
+      return;
     }
     // Shift+Enter inserts an intra-paragraph line break (a real w:br on commit),
     // not a paragraph split. Deterministic across browsers and allowed in cells
@@ -3756,6 +3771,44 @@ export class DocxEditor {
     );
     const i = all.indexOf(el);
     return i > 0 ? all[i - 1] : null;
+  }
+
+  /**
+   * Tab: a tab character (a real `w:tab`) at the caret, or in place of the selected text within
+   * this block. Typing not yet committed goes first; the block is then re-rendered from the session
+   * with the caret after the tab. One edit, one undo step.
+   */
+  private insertTabAtCaret(el: HTMLElement): void {
+    if (this.closed || !el.isConnected) return;
+    const unid = el.getAttribute("data-anchor");
+    let fullId = this.anchorIdOf(el);
+    if (!unid || !fullId) return;
+    const sel = el.ownerDocument.defaultView?.getSelection();
+    const range = sel?.rangeCount ? sel.getRangeAt(0) : null;
+    if (!range || !el.contains(range.startContainer) || !el.contains(range.endContainer)) return;
+    const from = contentOffsetOf(el, range.startContainer, range.startOffset);
+    const to = contentOffsetOf(el, range.endContainer, range.endOffset);
+    const span = trimmedSpan(el, { start: from, length: to - from });
+    fullId = this.syncBlock(el, fullId);
+    if (!fullId) return;
+    const bridge = this.exports.DocxSessionBridge;
+    let res = this.parseEdit(
+      bridge.ReplaceTextAtSpan(this.handle, fullId, span.start, span.length, "\t"),
+      { expectRejection: true },
+    );
+    // An empty paragraph has no run to insert into: give it the tab as its whole text.
+    if (!res.success && trimSpaces(blockContentText(el)).length === 0) {
+      res = this.parseEdit(bridge.ReplaceText(this.handle, fullId, "\t"), { expectRejection: true });
+    }
+    if (!res.success) {
+      this.reportEditFailure(res.error);
+      return;
+    }
+    const fresh = this.swapBlock(el, unid, res.modified?.[0]);
+    if (!fresh?.isConnected) return;
+    fresh.focus();
+    const after = fresh.ownerDocument.defaultView?.getSelection();
+    if (after) collapseAtContentOffset(fresh, after, span.start + 1);
   }
 
   /**
