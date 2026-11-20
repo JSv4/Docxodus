@@ -66,6 +66,8 @@ import type {
   TableShadingScope,
   ListFormat,
   GrepOptions,
+  ListLevelInfo,
+  ListLevelSpec,
   ListMembership,
   MutationBatchFailure,
   MutationBatchChangeSet,
@@ -1706,6 +1708,25 @@ export class DocxSession {
    * sequence with no override at the item's level is a successful no-op. */
   clearListStartOverride(anchorId: string): EditResult {
     return JSON.parse(this.wasm.ClearListStartOverride(this.handle, anchorId)) as EditResult;
+  }
+
+  /** The levels of the list the anchored paragraph is an item of (format, number text such as
+   * `%1.%2`, start, positions, legal flag), or null when it is not a list item. */
+  getListLevels(anchorId: string): ListLevelInfo[] | null {
+    return JSON.parse(this.wasm.GetListLevels(this.handle, anchorId)) as ListLevelInfo[] | null;
+  }
+
+  /** Change levels of the anchored item's list — Word's *Define New Multilevel List*. Only that
+   * list changes (a definition other lists share is copied for it first). One undo step. */
+  setListLevels(anchorId: string, levels: ListLevelSpec[]): EditResult {
+    return JSON.parse(this.wasm.SetListLevels(this.handle, anchorId, JSON.stringify(levels))) as EditResult;
+  }
+
+  /** Word's *Continue Numbering*: the anchored item and the rest of its list join the nearest
+   * earlier list with the same number format and text at the item's level (other lists between
+   * them are passed over), keeping their levels. Refused when no matching list comes before it. */
+  continueNumbering(anchorId: string): EditResult {
+    return JSON.parse(this.wasm.ContinueNumbering(this.handle, anchorId)) as EditResult;
   }
 
   /** Make the anchored paragraph an item of an existing list (`numId`, as

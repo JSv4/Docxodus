@@ -349,6 +349,35 @@ public sealed record ParagraphFormatOp
     /// </summary>
     public int? HangingIndent { get; init; }
 
+    /// <summary>
+    /// Left (leading) indent in twips, absolute (<c>w:ind/@w:left</c>, or <c>@w:start</c> when the
+    /// paragraph already uses that spelling) — the Paragraph dialog's "Left". May be negative
+    /// (text in the left margin), as in Word. Mutually exclusive with <see cref="IndentDelta"/>
+    /// (<see cref="EditErrorCode.InvalidParagraphFormat"/>).
+    /// </summary>
+    public int? LeftIndent { get; init; }
+
+    /// <summary>
+    /// Right (trailing) indent in twips, absolute (<c>w:ind/@w:right</c>, or <c>@w:end</c> when
+    /// the paragraph already uses that spelling). May be negative, as in Word.
+    /// </summary>
+    public int? RightIndent { get; init; }
+
+    /// <summary>Keep with next (<c>w:keepNext</c>). The explicit element is written only when the
+    /// value differs from what the paragraph's style gives; otherwise the direct one is removed.</summary>
+    public bool? KeepNext { get; init; }
+
+    /// <summary>Keep lines together (<c>w:keepLines</c>); written like <see cref="KeepNext"/>.</summary>
+    public bool? KeepLines { get; init; }
+
+    /// <summary>Widow/orphan control (<c>w:widowControl</c>); written like <see cref="KeepNext"/>.
+    /// Word applies widow control when nothing in the style chain says otherwise.</summary>
+    public bool? WidowControl { get; init; }
+
+    /// <summary>"Don't add space between paragraphs of the same style" (<c>w:contextualSpacing</c>);
+    /// written like <see cref="KeepNext"/>.</summary>
+    public bool? ContextualSpacing { get; init; }
+
     /// <summary>Space above the paragraph in twips (<c>w:spacing/@w:before</c>; 20 twips = 1pt,
     /// so 240 = 12pt). Absolute; 0 writes an explicit zero; negatives are invalid.</summary>
     public int? SpacingBefore { get; init; }
@@ -549,6 +578,74 @@ public sealed record TableBorderSpec
 }
 
 /// <summary>
+/// One level of a list's numbering definition (a <c>w:lvl</c> of its <c>w:abstractNum</c>), as
+/// <see cref="DocxSession.GetListLevels"/> reads it: what Word's <i>Define New Multilevel List</i>
+/// dialog shows for the level.
+/// </summary>
+public sealed record ListLevelInfo
+{
+    /// <summary>The level, 0 (the top) to 8.</summary>
+    public int Level { get; init; }
+
+    /// <summary>The number format as OOXML writes it (<c>w:numFmt</c>): <c>decimal</c>,
+    /// <c>lowerLetter</c>, <c>upperLetter</c>, <c>lowerRoman</c>, <c>upperRoman</c>,
+    /// <c>bullet</c>, <c>none</c>, or any other token a document carries.</summary>
+    public string Format { get; init; } = "decimal";
+
+    /// <summary>The number's text (<c>w:lvlText</c>): <c>%1.</c> is level 1's number and a
+    /// period, <c>%1.%2</c> a legal number, <c>(%3)</c> level 3's in parentheses; a bullet
+    /// level's glyph.</summary>
+    public string Text { get; init; } = "";
+
+    /// <summary>The level's first number (<c>w:start</c>).</summary>
+    public int Start { get; init; } = 1;
+
+    /// <summary>Where the number starts, in twips from the text margin: the level's
+    /// <c>w:ind</c> left edge less its hanging indent (plus a first-line indent).</summary>
+    public int NumberPositionTwips { get; init; }
+
+    /// <summary>Where the text (and every line after the first) starts, in twips: the level's
+    /// <c>w:ind</c> left edge.</summary>
+    public int TextPositionTwips { get; init; }
+
+    /// <summary>Legal numbering (<c>w:isLgl</c>): the higher levels' numbers in this level's
+    /// text are shown as arabic numbers, as in <c>1.1</c> under a roman <c>I.</c>.</summary>
+    public bool Legal { get; init; }
+}
+
+/// <summary>
+/// A change to one level of a list's numbering for <see cref="DocxSession.SetListLevels"/>.
+/// <see cref="Level"/> says which level; every other field is tri-state: null leaves it as it is.
+/// </summary>
+public sealed record ListLevelSpec
+{
+    /// <summary>The level to change, 0 (the top) to 8.</summary>
+    public int Level { get; init; }
+
+    /// <summary>The number format (<c>w:numFmt</c>): <c>decimal</c>, <c>lowerLetter</c>,
+    /// <c>upperLetter</c>, <c>lowerRoman</c>, <c>upperRoman</c>, <c>bullet</c> or <c>none</c>.</summary>
+    public string? Format { get; init; }
+
+    /// <summary>The number's text (<c>w:lvlText</c>), with <c>%1</c> to <c>%9</c> for the levels'
+    /// numbers: <c>%1.</c>, <c>%1.%2</c>, <c>(%2)</c>; a bullet level's glyph. A level may name only
+    /// itself and the levels above it.</summary>
+    public string? Text { get; init; }
+
+    /// <summary>The level's first number (<c>w:start</c>), 0 or more. Setting it also drops a
+    /// restart (<c>w:startOverride</c>) this list carries at the level, which would hide it.</summary>
+    public int? Start { get; init; }
+
+    /// <summary>Where the number starts, twips from the text margin.</summary>
+    public int? NumberPositionTwips { get; init; }
+
+    /// <summary>Where the text starts, twips from the text margin.</summary>
+    public int? TextPositionTwips { get; init; }
+
+    /// <summary>Legal numbering (<c>w:isLgl</c>).</summary>
+    public bool? Legal { get; init; }
+}
+
+/// <summary>
 /// List membership for <see cref="DocxSession.ApplyListFormat"/> /
 /// <see cref="DocxSession.ApplyListFormatRange"/>. The non-<see cref="None"/> members decompose
 /// (via <c>Internal.NumberFormats.FromListFormat</c>) into an underlying <see cref="NumberFormat"/>
@@ -615,6 +712,11 @@ public sealed record ParagraphFormatting
     public bool? KeepNext { get; init; }
     public bool? KeepLines { get; init; }
     public bool? PageBreakBefore { get; init; }
+    /// <summary><c>w:widowControl</c>. Effective snapshots fill true when the style chain is
+    /// silent (Word's behavior).</summary>
+    public bool? WidowControl { get; init; }
+    /// <summary><c>w:contextualSpacing</c>: no space between paragraphs of the same style.</summary>
+    public bool? ContextualSpacing { get; init; }
     public int? OutlineLevel { get; init; }
     public string? ShadingFill { get; init; }
     public ParagraphBorderEdge? TopBorder { get; init; }

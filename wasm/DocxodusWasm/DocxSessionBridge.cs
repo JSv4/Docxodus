@@ -1088,6 +1088,23 @@ public static partial class DocxSessionBridge
     public static string ClearListStartOverride(int h, string anchor) =>
         DocxSessionOps.ClearListStartOverride(h, anchor);
 
+    /// <summary>Bridge for <see cref="DocxSession.GetListLevels"/>: the anchored item's list
+    /// levels as a JSON array, or <c>null</c>.</summary>
+    [JSExport]
+    public static string GetListLevels(int h, string anchor) =>
+        DocxSessionOps.GetListLevels(h, anchor);
+
+    /// <summary>Bridge for <see cref="DocxSession.SetListLevels"/>; <paramref name="levelsJson"/> is
+    /// a JSON array of level changes (see <c>DocxSessionJson.ParseListLevelSpecs</c>).</summary>
+    [JSExport]
+    public static string SetListLevels(int h, string anchor, string levelsJson) =>
+        DocxSessionOps.SetListLevels(h, anchor, DocxSessionJson.ParseListLevelSpecs(levelsJson));
+
+    /// <summary>Bridge for <see cref="DocxSession.ContinueNumbering"/>.</summary>
+    [JSExport]
+    public static string ContinueNumbering(int h, string anchor) =>
+        DocxSessionOps.ContinueNumbering(h, anchor);
+
     /// <summary>Bridge for <see cref="DocxSession.SetListMembership"/>.</summary>
     [JSExport]
     public static string SetListMembership(int h, string anchor, int numId, int level) =>
