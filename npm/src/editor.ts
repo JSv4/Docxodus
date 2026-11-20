@@ -4071,13 +4071,19 @@ export class DocxEditor {
     return !blocks.some((b) => b.closest("table") || this.isBandBlock(b));
   }
 
-  /** The session's text of block `fullId` (`GetAnchorInfo`'s visibleText), or null. */
+  /** The session's text of block `fullId` (`GetAnchorInfo`'s visibleText without the list number
+   *  and the space that visibleText puts before a numbered paragraph's text), or null. */
   private sessionTextOf(fullId: string): string | null {
     try {
       const raw = this.exports.DocxSessionBridge.GetAnchorInfo?.(this.handle, fullId);
       if (raw === undefined) return null;
-      const info = JSON.parse(raw) as { visibleText?: unknown };
-      return typeof info.visibleText === "string" ? info.visibleText : null;
+      const info = JSON.parse(raw) as { visibleText?: unknown; autoNumberPrefix?: unknown };
+      const text = info.visibleText;
+      if (typeof text !== "string") return null;
+      const prefix = typeof info.autoNumberPrefix === "string" ? info.autoNumberPrefix : "";
+      if (!prefix) return text;
+      if (text === prefix) return "";
+      return text.startsWith(prefix + " ") ? text.slice(prefix.length + 1) : null;
     } catch {
       return null;
     }
