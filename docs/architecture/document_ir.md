@@ -189,8 +189,11 @@ change; different → content change.**
   in an unmodeled property still flips the fingerprint instead of silently
   reading as equal. Lossy-tolerance applied to formatting.
 - **Opaque canonicalization** (§6.3) gives `IrOpaqueBlock`/`IrOpaqueInline` a
-  `CanonicalHash` stable across attribute reordering and rsid churn, so unmodeled
-  content still diffs as unchanged/changed/moved without being understood.
+  `CanonicalHash` stable across attribute reordering, rsid churn and indentation
+  (whitespace-only text between child elements; a `w:t`'s text is kept, issue #1793),
+  so unmodeled content still diffs as unchanged/changed/moved without being understood.
+  A section's header and footer references are not part of its format fingerprint:
+  their stories are compared as stories.
 
 ## Registries
 

@@ -80,7 +80,14 @@ export interface DocxEditorExports {
     ) => string;
     SplitParagraph: (handle: number, anchor: string, offset: number) => string;
     MergeParagraphs: (handle: number, first: string, second: string) => string;
+    /** An anchor's live facts (`AnchorInfo` JSON); its visibleText checks a merge's join. */
+    GetAnchorInfo?: (handle: number, anchorId: string) => string;
     DeleteBlock: (handle: number, anchor: string) => string;
+    /** Delete the sibling blocks from `fromAnchor` up to (not including) `toAnchorExclusive`. */
+    DeleteRange?: (handle: number, fromAnchor: string, toAnchorExclusive: string) => string;
+    BeginTransaction?: (handle: number) => number;
+    CommitTransaction?: (transactionHandle: number) => void;
+    RollbackTransaction?: (transactionHandle: number) => void;
     MoveBlock?: (handle: number, sourceAnchor: string, targetAnchor: string, pos: string) => string;
     /** JSON `{anchorId, before, after}[]`: where a block may legally move, per side. Optional —
      *  without it the drag UI offers every block and lets the engine refuse, as it did before. */
@@ -1265,6 +1272,28 @@ function setSelectionBetween(anchor: DomSelectionPoint, focus: DomSelectionPoint
   }
 }
 
+/** The viewport box of a caret at `p` (an empty element's own box when it draws no caret). */
+function caretRect(p: DomSelectionPoint): DOMRect | null {
+  try {
+    const range = document.createRange();
+    range.setStart(p.node, p.offset);
+    range.collapse(true);
+    const rect = range.getClientRects()[0];
+    if (rect) return rect;
+    const el = p.node.nodeType === 1 ? (p.node as Element) : p.node.parentElement;
+    return el?.getBoundingClientRect() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when carets at `a` and `b` sit on the same line (their boxes overlap vertically). */
+function sameLine(a: DomSelectionPoint, b: DomSelectionPoint): boolean {
+  const ra = caretRect(a), rb = caretRect(b);
+  if (!ra || !rb) return false;
+  return Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top) > Math.min(ra.height, rb.height) / 2;
+}
+
 /** Place the caret at content offset `offset` within `el`, skipping marker text. */
 function placeCaretAtOffset(el: HTMLElement, offset: number): void {
   const sel = typeof window !== "undefined" ? window.getSelection() : null;
@@ -1412,12 +1441,33 @@ function inBorderWrapper(el: HTMLElement): boolean {
   return /border-(top|bottom|left|right):\s*(?!none)[^;]+/i.test(style);
 }
 
+/**
+ * Where a selection's format is read: the first character it covers. A range that starts at the
+ * end of a text node (as the selection the editor restores after formatting part of a paragraph
+ * does: "Hello from |" .. "world|"), or between elements, begins in the next text node, not the
+ * one before. A collapsed caret stays where it is: it takes the format of the text before it.
+ */
+function selectionFormatNode(range: Range): Node {
+  if (range.collapsed) return range.startContainer;
+  const root = range.commonAncestorContainer;
+  const scope = root.nodeType === 3 ? root.parentNode : root;
+  if (!scope) return range.startContainer;
+  const walker = (scope.ownerDocument ?? document).createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+  for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+    if (!range.intersectsNode(t)) continue;
+    const from = t === range.startContainer ? range.startOffset : 0;
+    const to = t === range.endContainer ? range.endOffset : (t.textContent ?? "").length;
+    if (to > from) return t;
+  }
+  return range.startContainer;
+}
+
 /** Whether the current selection's start already carries `key`, read from computed style. */
 function selectionHasFormat(key: FormatKey, fallback: HTMLElement): boolean {
   const sel = typeof window !== "undefined" ? window.getSelection() : null;
   let el: HTMLElement | null = fallback;
   if (sel && sel.rangeCount > 0) {
-    const n = sel.getRangeAt(0).startContainer;
+    const n = selectionFormatNode(sel.getRangeAt(0));
     el = n.nodeType === 3 ? n.parentElement : (n as HTMLElement);
   }
   if (!el || typeof getComputedStyle !== "function") return false;
@@ -1549,6 +1599,14 @@ export class DocxEditor {
   /** State for the mouse-selection bridge between independent contenteditable block hosts. */
   private dragSelection: CrossBlockDragSelection | null = null;
 
+  /**
+   * Which end of a selection the editor made across blocks (drag, Shift+click, Shift+arrows,
+   * Ctrl+A) is fixed and which moves. Such a selection is set with addRange, which forgets its
+   * direction, so Shift+arrow keys would otherwise always move its end. Valid only while the live
+   * range still spans exactly these two points (see {@link selectionEnds}).
+   */
+  private extendedSelection: { anchor: DomSelectionPoint; focus: DomSelectionPoint } | null = null;
+
   /** The docked header/footer bands, when `options.headerFooter` is on. */
   private region: HeaderFooterRegion | null = null;
 
@@ -1577,6 +1635,8 @@ export class DocxEditor {
     this.options = options;
     this.editRoot = container;
     container.addEventListener("copy", this.onCopy);
+    container.addEventListener("cut", this.onCut);
+    container.addEventListener("paste", this.onPasteOverBlocks);
     this.viewport = new DocumentViewport(container, {
       columnWidth: options.columnWidth,
       fitToWidth: options.fitToWidth,
@@ -1692,6 +1752,7 @@ export class DocxEditor {
   /** Start tracking a normal primary-button text drag inside one editable block. */
   private readonly onMouseDown = (event: MouseEvent): void => {
     if (this.closed || !this.options.editable || event.button !== 0) return;
+    if (this.extendSelectionByClick(event)) { this.clearDragSelection(); return; }
     const target = event.target instanceof Node ? event.target : null;
     const origin = this.editableBlockOf(target);
     if (!origin || isInMarker(target)) return;
@@ -1771,6 +1832,7 @@ export class DocxEditor {
       if (focus && focusBlock && this.ownerRoot(focusBlock) === this.ownerRoot(drag.origin)) {
         event.preventDefault();
         setSelectionBetween(drag.anchor, focus);
+        this.extendedSelection = { anchor: drag.anchor, focus };
       }
     }
     this.clearDragSelection();
@@ -2090,6 +2152,8 @@ export class DocxEditor {
     if (this.closed) return;
     this.closed = true;
     this.container.removeEventListener("copy", this.onCopy);
+    this.container.removeEventListener("cut", this.onCut);
+    this.container.removeEventListener("paste", this.onPasteOverBlocks);
     if (typeof document !== "undefined") {
       document.removeEventListener("selectionchange", this.onSelectionChange);
       document.removeEventListener("mousedown", this.onMouseDown, true);
@@ -2136,9 +2200,13 @@ export class DocxEditor {
     this.gutter = null;
     const previous = this.container;
     previous.removeEventListener("copy", this.onCopy);
+    previous.removeEventListener("cut", this.onCut);
+    previous.removeEventListener("paste", this.onPasteOverBlocks);
     container.replaceChildren(...Array.from(previous.childNodes));
     this.container = container;
     container.addEventListener("copy", this.onCopy);
+    container.addEventListener("cut", this.onCut);
+    container.addEventListener("paste", this.onPasteOverBlocks);
     this.viewport.adoptHost(container);
     this.setupBlockDrag();
     if (this.options.comments) this.createGutter();
@@ -3214,6 +3282,7 @@ export class DocxEditor {
 
   private onKeydown(el: HTMLElement, ev: KeyboardEvent): void {
     if (this.closed) return;
+    if (this.crossBlockKey(el, ev)) return;
     moveAcrossTab(el, ev);
     // Common formatting / history shortcuts.
     if ((ev.ctrlKey || ev.metaKey) && !ev.altKey) {
@@ -3752,6 +3821,336 @@ export class DocxEditor {
     const start = contentPositionIn(first, bookmark.startOffset);
     const end = contentPositionIn(last, bookmark.endOffset);
     return setSelectionBetween(start, end);
+  }
+
+  // ─── Selections across blocks: made by keyboard and Shift+click, and typed over ────────────
+  //
+  // Every block is its own editing host, and a browser fences a selection at a host's edge: past
+  // the mouse drag (onMouseMove), it cannot extend one into the next paragraph by Shift+click,
+  // Shift+arrow keys or Ctrl+A, and typing over one edits only the host that has the focus. Here
+  // the editor does those as Word does, and turns typing, Backspace, Delete, Enter, cut and paste
+  // over such a selection into one engine edit (one undo step).
+
+  /** The editable blocks a live selection spanning two or more blocks covers, or null. */
+  private crossBlockSelection(): HTMLElement[] | null {
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+    const range = sel.getRangeAt(0);
+    const a = this.editableBlockOf(range.startContainer);
+    const b = this.editableBlockOf(range.endContainer);
+    if (!a || !b || a === b || this.ownerRoot(a) !== this.ownerRoot(b)) return null;
+    const blocks = this.selectedBlocks();
+    return blocks.length > 1 ? blocks : null;
+  }
+
+  /** The editable blocks of `el`'s story (the body, or one header/footer band), in order. */
+  private storyBlocks(el: HTMLElement): HTMLElement[] {
+    const root = this.ownerRoot(el);
+    return Array.from(root.querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'))
+      .filter((b) => this.ownerRoot(b) === root);
+  }
+
+  /** The fixed and the moving end of the live selection. */
+  private selectionEnds(): { anchor: DomSelectionPoint; focus: DomSelectionPoint } | null {
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    if (!sel || sel.rangeCount === 0 || !sel.anchorNode || !sel.focusNode) return null;
+    const kept = this.extendedSelection;
+    if (kept && kept.anchor.node.isConnected && kept.focus.node.isConnected) {
+      const range = sel.getRangeAt(0);
+      const same = (p: DomSelectionPoint, node: Node, offset: number) => p.node === node && p.offset === offset;
+      if ((same(kept.anchor, range.startContainer, range.startOffset) && same(kept.focus, range.endContainer, range.endOffset))
+        || (same(kept.focus, range.startContainer, range.startOffset) && same(kept.anchor, range.endContainer, range.endOffset))) {
+        return kept;
+      }
+    }
+    return { anchor: { node: sel.anchorNode, offset: sel.anchorOffset }, focus: { node: sel.focusNode, offset: sel.focusOffset } };
+  }
+
+  /** Select from `anchor` to `focus` (in either order, across blocks) and remember which is which. */
+  private selectBetween(anchor: DomSelectionPoint, focus: DomSelectionPoint): void {
+    if (setSelectionBetween(anchor, focus)) this.extendedSelection = { anchor, focus };
+  }
+
+  /** The point where `block`'s text starts or ends. */
+  private static blockEdge(block: HTMLElement, end: boolean): DomSelectionPoint {
+    return contentPositionIn(block, end ? blockContentText(block).length : 0);
+  }
+
+  /**
+   * Shift+arrow keys, Shift+Home/End and their Ctrl forms, as Word has them. Inside one block the
+   * browser's own movement stands (words, lines, bidi); the editor steps in only where the browser
+   * cannot go on: at a block's edge, moving on into the next or previous block, and once the
+   * selection spans blocks, where it moves the selection's moving end with the same native step
+   * taken from a caret at that end. Returns true when it handled the key.
+   */
+  private extendSelectionByKey(el: HTMLElement, ev: KeyboardEvent): boolean {
+    if (!ev.shiftKey || ev.altKey || ev.metaKey) return false;
+    const forward = ev.key === "ArrowRight" || ev.key === "ArrowDown" || ev.key === "End";
+    const ctrl = ev.ctrlKey;
+    let granularity: "character" | "word" | "line" | "paragraph" | "lineboundary" | null = null;
+    if (ev.key === "ArrowLeft" || ev.key === "ArrowRight") granularity = ctrl ? "word" : "character";
+    else if (ev.key === "ArrowUp" || ev.key === "ArrowDown") granularity = ctrl ? "paragraph" : "line";
+    else if (ev.key === "Home" || ev.key === "End") granularity = "lineboundary";
+    if (!granularity) return false;
+    const sel = window.getSelection();
+    const ends = this.selectionEnds();
+    if (!sel || !ends) return false;
+    const focusBlock = this.editableBlockOf(ends.focus.node);
+    const anchorBlock = this.editableBlockOf(ends.anchor.node);
+    if (!focusBlock || !anchorBlock || this.ownerRoot(focusBlock) !== this.ownerRoot(anchorBlock)) return false;
+    const story = this.storyBlocks(focusBlock);
+
+    // Ctrl+Shift+Home/End: to the start or end of the story.
+    if (ctrl && granularity === "lineboundary") {
+      const target = forward ? story[story.length - 1] : story[0];
+      if (!target) return false;
+      ev.preventDefault();
+      this.selectBetween(ends.anchor, DocxEditor.blockEdge(target, forward));
+      return true;
+    }
+
+    // Where the browser's own step takes a caret at the moving end (within that block).
+    const across = anchorBlock !== focusBlock;
+    const extend = sel as Selection & { modify?: (alter: string, direction: string, granularity: string) => void };
+    if (typeof extend.modify !== "function") return false;
+    let moved: DomSelectionPoint | null = null;
+    try {
+      sel.collapse(ends.focus.node, ends.focus.offset);
+      extend.modify("move", forward ? "forward" : "backward", granularity);
+      if (sel.focusNode) moved = { node: sel.focusNode, offset: sel.focusOffset };
+    } catch {
+      moved = null;
+    }
+    // (a line step on a block's last or first line goes to that line's end or start instead of
+    // failing: still the edge, in Word the next paragraph's line)
+    const stayed = !moved || (moved.node === ends.focus.node && moved.offset === ends.focus.offset)
+      || this.editableBlockOf(moved.node) !== focusBlock
+      || (granularity === "line" && sameLine(ends.focus, moved));
+    // Put the selection back as it was before deciding.
+    if (across) setSelectionBetween(ends.anchor, ends.focus);
+    else sel.setBaseAndExtent(ends.anchor.node, ends.anchor.offset, ends.focus.node, ends.focus.offset);
+    // One block, and the browser can move within it: its own extend does the rest.
+    if (!across && !stayed) return false;
+
+    let next: DomSelectionPoint | null = stayed ? null : moved;
+    // Word's Ctrl+Shift+Down/Up at a paragraph's edge goes on to the next one's end/start.
+    if (stayed && granularity !== "lineboundary") {
+      const i = story.indexOf(focusBlock);
+      const target = story[i + (forward ? 1 : -1)];
+      if (!target) { ev.preventDefault(); return true; }    // at the story's edge: nothing more to take
+      if (granularity === "line") next = this.pointOnLineOf(target, ends.focus, forward);
+      next ??= DocxEditor.blockEdge(target, granularity === "paragraph" ? forward : !forward);
+    }
+    ev.preventDefault();
+    if (next) this.selectBetween(ends.anchor, next);
+    return true;
+  }
+
+  /** The point in `target`'s first (going down) or last (going up) line nearest the x of `from`. */
+  private pointOnLineOf(target: HTMLElement, from: DomSelectionPoint, down: boolean): DomSelectionPoint | null {
+    const x = caretRect(from)?.left ?? null;    // (no layout: the caller falls back to the block's edge)
+    const box = target.getBoundingClientRect();
+    if (x === null || box.height === 0) return null;
+    const y = down ? box.top + Math.min(4, box.height / 2) : box.bottom - Math.min(4, box.height / 2);
+    const point = caretPointFromClient(document, Math.min(Math.max(x, box.left + 1), box.right - 1), y);
+    return point && this.editableBlockOf(point.node) === target ? point : null;
+  }
+
+  /** Ctrl+A: the whole story the caret is in (the body, or the header or footer being edited). */
+  private selectStory(el: HTMLElement): void {
+    const story = this.storyBlocks(el);
+    if (story.length < 2) return;    // one block: the browser's own select-all is the same thing
+    this.selectBetween(DocxEditor.blockEdge(story[0], false), DocxEditor.blockEdge(story[story.length - 1], true));
+  }
+
+  /**
+   * Shift+click in another block of the same story extends the selection to the click, from its
+   * fixed end. Returns true when it took the click.
+   */
+  private extendSelectionByClick(event: MouseEvent): boolean {
+    if (!event.shiftKey || event.button !== 0) return false;
+    const ends = this.selectionEnds();
+    const anchorBlock = ends ? this.editableBlockOf(ends.anchor.node) : null;
+    if (!ends || !anchorBlock) return false;
+    const point = caretPointFromClient(document, event.clientX, event.clientY);
+    const target = point ? this.editableBlockOf(point.node) : null;
+    if (!point || !target || this.ownerRoot(target) !== this.ownerRoot(anchorBlock)) return false;
+    // Within the anchor's own block, and the selection all in it, the browser extends natively.
+    if (target === anchorBlock && this.editableBlockOf(ends.focus.node) === anchorBlock) return false;
+    event.preventDefault();
+    this.selectBetween(ends.anchor, point);
+    return true;
+  }
+
+  /**
+   * Replace a selection that spans blocks with `text` (empty: just delete it), as Word does: the
+   * first block keeps its start and takes the text, the blocks between go, the last block's
+   * selected start goes and what is left of it joins the first. Lines of `text` after the first
+   * become paragraphs of their own. One engine transaction, so one undo step. Returns false, with
+   * nothing changed, when the selection does not span blocks or is one {@link crossBlockEditable}
+   * leaves to the browser; true when it took the edit, whether or not the engine could make it.
+   */
+  private replaceCrossBlockSelection(text: string): boolean {
+    const blocks = this.crossBlockSelection();
+    if (!blocks || !this.crossBlockEditable(blocks)) return false;
+    const bridge = this.exports.DocxSessionBridge;
+    const targets = this.multiBlockTargets(blocks);
+    const first = targets[0], last = targets[targets.length - 1];
+    const firstSpan = first.span ?? { start: 0, length: blockContentText(first.block).length };
+    const lastSpan = last.span ?? { start: 0, length: blockContentText(last.block).length };
+    const firstIndex = this.editableList().indexOf(first.block);
+    const lines = text.split(/\r\n|\r|\n/);
+    const tx = typeof bridge.BeginTransaction === "function" ? bridge.BeginTransaction(this.handle) : 0;
+    let ok = true;
+    let caretIndex = firstIndex, caretOffset = firstSpan.start + lines[0].length;
+    try {
+      // (typing not yet committed in any of them goes in first, so the spans match the session)
+      const ids = targets.map((t) => (t.fullId ? this.syncBlock(t.block, t.fullId) : undefined));
+      if (ids.some((id) => !id)) throw new Error("a block could not be committed");
+      const step = (json: string) => {
+        const res = this.parseEdit(json);
+        if (!res.success) throw new Error("the engine refused the edit");
+        return res;
+      };
+      let firstId = ids[0]!, lastId = ids[ids.length - 1]!;
+      firstId = step(bridge.ReplaceTextAtSpan(this.handle, firstId, firstSpan.start, firstSpan.length, lines[0], ""))
+        .modified?.[0]?.id ?? firstId;
+      if (lastSpan.length > 0) {
+        lastId = step(bridge.ReplaceTextAtSpan(this.handle, lastId, 0, lastSpan.length, "", "")).modified?.[0]?.id ?? lastId;
+      }
+      if (ids.length > 2) {
+        if (typeof bridge.DeleteRange === "function") step(bridge.DeleteRange(this.handle, ids[1]!, lastId));
+        else for (const id of ids.slice(1, -1)) step(bridge.DeleteBlock(this.handle, id!));
+      }
+      let current = step(bridge.MergeParagraphs(this.handle, firstId, lastId)).modified?.[0]?.id ?? firstId;
+      // MergeParagraphs puts a space between the two when neither side has one (right for
+      // Backspace joining two paragraphs, which Word does the same way); deleting a selection
+      // joins its two ends as they are. (Tracked, the merge is only recorded: nothing to take out.)
+      // The space is taken out only where the merged paragraph has one: an engine that joins
+      // without it leaves the text as it is.
+      const tracked = this.options.trackedChanges === TrackedChangeMode.RenderInline;
+      const kept = blockContentText(first.block).slice(0, firstSpan.start) + lines[0];
+      const rest = blockContentText(last.block).slice(lastSpan.start + lastSpan.length);
+      if (!tracked && kept && rest && !/\s$/.test(kept) && !/^\s/.test(rest)
+        && this.sessionTextOf(current)?.[kept.length] === " ") {
+        current = step(bridge.ReplaceTextAtSpan(this.handle, current, kept.length, 1, "", "")).modified?.[0]?.id ?? current;
+      }
+      for (const line of lines.slice(1)) {
+        const split = step(bridge.SplitParagraph(this.handle, current, caretOffset));
+        const second = split.created?.[0]?.id;
+        if (!second) throw new Error("the engine made no new paragraph");
+        current = line ? step(bridge.ReplaceTextAtSpan(this.handle, second, 0, 0, line, "")).modified?.[0]?.id ?? second : second;
+        caretIndex++;
+        caretOffset = line.length;
+      }
+    } catch {
+      ok = false;
+    } finally {
+      if (tx) {
+        if (ok) bridge.CommitTransaction!(tx);
+        else bridge.RollbackTransaction?.(tx);
+      }
+    }
+    this.extendedSelection = null;
+    this.lastCrossBlockSelection = null;
+    // A merge or a split can change list numbering and border grouping: the whole flow again.
+    this.remount(ok ? caretIndex : firstIndex);
+    const target = this.editableList()[ok ? caretIndex : firstIndex];
+    if (target) placeCaretAtOffset(target, ok ? caretOffset : firstSpan.start);
+    if (ok && target) this.options.onEdit?.({ anchorId: this.anchorIdOf(target) ?? "", unid: target.getAttribute("data-anchor") ?? "" });
+    return true;
+  }
+
+  /**
+   * Whether {@link replaceCrossBlockSelection} edits this selection. Not one reaching into a table
+   * (cells are not merged into paragraphs) nor one in a header or footer (a band repaints on its
+   * own, not through the body's remount): over those the browser's own editing runs, so a key is
+   * never dropped.
+   */
+  private crossBlockEditable(blocks: HTMLElement[]): boolean {
+    return !blocks.some((b) => b.closest("table") || this.isBandBlock(b));
+  }
+
+  /** The session's text of block `fullId` (`GetAnchorInfo`'s visibleText without the list number
+   *  and the space that visibleText puts before a numbered paragraph's text), or null. */
+  private sessionTextOf(fullId: string): string | null {
+    try {
+      const raw = this.exports.DocxSessionBridge.GetAnchorInfo?.(this.handle, fullId);
+      if (raw === undefined) return null;
+      const info = JSON.parse(raw) as { visibleText?: unknown; autoNumberPrefix?: unknown };
+      const text = info.visibleText;
+      if (typeof text !== "string") return null;
+      const prefix = typeof info.autoNumberPrefix === "string" ? info.autoNumberPrefix : "";
+      if (!prefix) return text;
+      if (text === prefix) return "";
+      return text.startsWith(prefix + " ") ? text.slice(prefix.length + 1) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The selected text of a selection spanning blocks, a line for each block. */
+  private crossBlockText(blocks: HTMLElement[]): string {
+    return this.multiBlockTargets(blocks).map((t) => {
+      const text = blockContentText(t.block);
+      return t.span ? text.slice(t.span.start, t.span.start + t.span.length) : text;
+    }).join("\n");
+  }
+
+  /** Cut of a selection spanning blocks: the browser's cut would remove the focused block's part
+   *  only. The clipboard gets the selection (as copy gives it), then the selection goes. */
+  private readonly onCut = (ev: ClipboardEvent): void => {
+    if (this.closed || ev.defaultPrevented || !ev.clipboardData) return;
+    const blocks = this.crossBlockSelection();
+    if (!blocks || !this.crossBlockEditable(blocks)) return;
+    ev.preventDefault();
+    const range = window.getSelection()!.getRangeAt(0);
+    const holder = document.createElement("div");
+    holder.append(range.cloneContents());
+    ev.clipboardData.setData("text/html", holder.innerHTML);
+    ev.clipboardData.setData("text/plain", this.crossBlockText(blocks));
+    this.replaceCrossBlockSelection("");
+  };
+
+  /** Paste over a selection spanning blocks: the selection goes, and the clipboard's text takes
+   *  its place, a paragraph for each line. */
+  private readonly onPasteOverBlocks = (ev: ClipboardEvent): void => {
+    if (this.closed || ev.defaultPrevented || !ev.clipboardData) return;
+    const blocks = this.crossBlockSelection();
+    if (!blocks || !this.crossBlockEditable(blocks)) return;
+    ev.preventDefault();
+    this.replaceCrossBlockSelection(ev.clipboardData.getData("text/plain"));
+  };
+
+  /**
+   * Keys over a selection spanning blocks, and the keys that make one (see
+   * {@link extendSelectionByKey}, {@link selectStory}). Returns true when it handled the key.
+   */
+  private crossBlockKey(el: HTMLElement, ev: KeyboardEvent): boolean {
+    if (ev.isComposing) return false;
+    if (this.extendSelectionByKey(el, ev)) return true;
+    const ctrl = ev.ctrlKey || ev.metaKey;
+    if (ctrl && !ev.altKey && !ev.shiftKey && (ev.key ?? "").toLowerCase() === "a") {
+      // (a story whose selection could not be typed over keeps the browser's own select-all)
+      const story = this.storyBlocks(el);
+      if (story.length < 2 || !this.crossBlockEditable(story)) return false;
+      ev.preventDefault();
+      this.selectStory(el);
+      return true;
+    }
+    const blocks = this.crossBlockSelection();
+    if (!blocks || !this.crossBlockEditable(blocks)) return false;
+    const printable = !ctrl && !ev.altKey && typeof ev.key === "string" && [...ev.key].length === 1;
+    let text: string | null = null;
+    if (printable) text = ev.key;
+    else if ((ev.key === "Backspace" || ev.key === "Delete") && !ev.altKey) text = "";
+    else if (ev.key === "Enter" && !ctrl && !ev.altKey) text = ev.shiftKey ? "" : "\n";
+    if (text === null) return false;
+    ev.preventDefault();
+    const shiftEnter = ev.key === "Enter" && ev.shiftKey;
+    this.replaceCrossBlockSelection(text);
+    if (shiftEnter && this.activeBlock) this.insertLineBreakAtCaret(this.activeBlock);
+    return true;
   }
 
   /** Editable blocks the current selection covers, in document order. Uses Range.comparePoint

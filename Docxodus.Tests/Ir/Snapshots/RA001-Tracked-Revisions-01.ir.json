@@ -79,7 +79,7 @@
           "anchor": "p:body:7c838a2f5d4d325446adde7a1163cbd2",
           "type": "paragraph",
           "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-          "formatFingerprint": "a290c997df38fcd83d4020d97ea5cc101e2b414029d4991f9b81aed3d70dae22",
+          "formatFingerprint": "08318d57341e16b0c9b7bf5c216d2a74cc3695dad142d15f101f5712dd36b9e7",
           "format": {
             "indentFirstLineTwips": 720
           },
@@ -3184,7 +3184,7 @@
           "anchor": "sec:body:fe574d4b8e0fb6ceb4a4f5db2e1761ed",
           "type": "sectionBreak",
           "contentHash": "00cf499aa3d1d3f43808b57a62d3c825636abf758260c5dc504450de5479c605",
-          "formatFingerprint": "2bd828c4823baecf47cbe86fb5c8c8ac6493d09110b6b0ad1f25ff9992feeae0",
+          "formatFingerprint": "9140ece5cd93843251f923d335459a6df158effdfc4e31fde7af456033ca514c",
           "format": {
             "pageWidthTwips": 11909,
             "pageHeightTwips": 16834,

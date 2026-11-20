@@ -1966,6 +1966,62 @@ class NumberFormat(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class ListLevelInfo:
+    """One level of a list, as Word's Define New Multilevel List dialog shows it
+    (``DocxSession.get_list_levels``). ``format`` is the ``w:numFmt`` token (``decimal``,
+    ``upperRoman``, ``bullet``, ...); ``text`` the number text, ``%1``-``%9`` naming this level and
+    the ones above it (``%1.%2.``); positions are in twips."""
+
+    level: int
+    format: str = "decimal"
+    text: str = ""
+    start: int = 1
+    number_position_twips: int = 0
+    text_position_twips: int = 0
+    legal: bool = False
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ListLevelInfo":
+        return cls(
+            level=int(d["level"]),
+            format=d.get("format", "decimal"),
+            text=d.get("text", ""),
+            start=int(d.get("start", 1)),
+            number_position_twips=int(d.get("numberPositionTwips", 0)),
+            text_position_twips=int(d.get("textPositionTwips", 0)),
+            legal=bool(d.get("legal", False)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ListLevelSpec:
+    """A change to one level of a list (``DocxSession.set_list_levels``): ``level`` (0-8) names
+    it, and each field that is not ``None`` is written there. ``format`` is a ``w:numFmt`` token
+    (``decimal``, ``decimalZero``, ``lowerLetter``, ``upperLetter``, ``lowerRoman``,
+    ``upperRoman``, ``bullet``, ``none``, ``ordinal``, ``cardinalText``, ``ordinalText``); ``text``
+    may name only this level and the ones above it (``%3`` on level 2 is refused); ``start`` must
+    be >= 0."""
+
+    level: int
+    format: str | None = None
+    text: str | None = None
+    legal: bool | None = None
+    start: int | None = None
+    number_position_twips: int | None = None
+    text_position_twips: int | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"level": self.level}
+        if self.format is not None: out["format"] = self.format
+        if self.text is not None: out["text"] = self.text
+        if self.legal is not None: out["legal"] = self.legal
+        if self.start is not None: out["start"] = self.start
+        if self.number_position_twips is not None: out["numberPositionTwips"] = self.number_position_twips
+        if self.text_position_twips is not None: out["textPositionTwips"] = self.text_position_twips
+        return out
+
+
+@dataclass(frozen=True, slots=True)
 class ListMembership:
     """Numbering facts for a list-item paragraph."""
 
@@ -2897,7 +2953,10 @@ class ParagraphFormatOp:
     rule paragraph gets (or loses) its bottom border.
 
     Indent/spacing fields are absolute values in twips (1440 twips = 1 inch; 20 twips = 1pt)
-    and must be >= 0. ``first_line_indent`` (``w:ind/@w:firstLine``) and ``hanging_indent``
+    and must be >= 0, except ``left_indent`` and ``right_indent`` (``w:ind/@w:left``/``@w:right``,
+    or ``@w:start``/``@w:end`` when the paragraph already uses that spelling), which may be
+    negative (text in the margin), as in Word. ``left_indent`` and ``indent_delta`` set the same
+    attribute, so an op carrying both is rejected with ``INVALID_PARAGRAPH_FORMAT``. ``first_line_indent`` (``w:ind/@w:firstLine``) and ``hanging_indent``
     (``w:ind/@w:hanging``) share one either/or slot in Word — setting one removes the other,
     and an op carrying both is rejected with ``INVALID_PARAGRAPH_FORMAT``. ``line_spacing``
     (``w:spacing/@w:line``) is measured per ``line_spacing_rule``: 240ths of a line under
@@ -2917,6 +2976,12 @@ class ParagraphFormatOp:
     top_border: ParagraphBorderEdge | None = None
     bottom_border: ParagraphBorderEdge | None = None
     clear_borders: bool | None = None
+    left_indent: int | None = None
+    right_indent: int | None = None
+    keep_next: bool | None = None
+    keep_lines: bool | None = None
+    widow_control: bool | None = None
+    contextual_spacing: bool | None = None
 
     def to_wire(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -2932,6 +2997,12 @@ class ParagraphFormatOp:
         if self.top_border is not None: out["topBorder"] = self.top_border.to_wire()
         if self.bottom_border is not None: out["bottomBorder"] = self.bottom_border.to_wire()
         if self.clear_borders is not None: out["clearBorders"] = self.clear_borders
+        if self.left_indent is not None: out["leftIndent"] = self.left_indent
+        if self.right_indent is not None: out["rightIndent"] = self.right_indent
+        if self.keep_next is not None: out["keepNext"] = self.keep_next
+        if self.keep_lines is not None: out["keepLines"] = self.keep_lines
+        if self.widow_control is not None: out["widowControl"] = self.widow_control
+        if self.contextual_spacing is not None: out["contextualSpacing"] = self.contextual_spacing
         return out
 
 
@@ -2956,6 +3027,8 @@ class ParagraphFormatting:
     shading_fill: str | None = None
     top_border: ParagraphBorderEdge | None = None
     bottom_border: ParagraphBorderEdge | None = None
+    widow_control: bool | None = None
+    contextual_spacing: bool | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "ParagraphFormatting":
@@ -2977,6 +3050,8 @@ class ParagraphFormatting:
             shading_fill=d.get("shadingFill"),
             top_border=(ParagraphBorderEdge._from_wire(d["topBorder"]) if "topBorder" in d else None),
             bottom_border=(ParagraphBorderEdge._from_wire(d["bottomBorder"]) if "bottomBorder" in d else None),
+            widow_control=d.get("widowControl"),
+            contextual_spacing=d.get("contextualSpacing"),
         )
 
 
@@ -4440,7 +4515,8 @@ class DocxDiffFormatChange:
 
     ``scope`` names the property container the change describes: ``"run"`` (the default,
     an rPr-grade report) or one of the block-format-change family scopes ``"paragraph"``
-    (pPr), ``"tableCell"``/``"tableRow"``/``"table"`` (tcPr/trPr/tblPr+tblGrid), ``"section"``
+    (pPr, or the paragraph mark's run properties with ``mark``-prefixed names such as
+    ``markFontSize``), ``"tableCell"``/``"tableRow"``/``"table"`` (tcPr/trPr/tblPr+tblGrid), ``"section"``
     (sectPr). Non-run scopes are reported only under Fine revision granularity."""
 
     old_properties: Mapping[str, str]

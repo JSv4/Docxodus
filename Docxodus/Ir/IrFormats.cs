@@ -38,7 +38,8 @@ internal enum IrVMerge { None, Restart, Continue }
 
 /// <summary>
 /// Direct section properties (`w:sectPr`): page size, margins, orientation, and type.
-/// Any unmodeled `w:sectPr` child is folded into <see cref="UnmodeledDigest"/>.
+/// Any other `w:sectPr` child is folded into <see cref="UnmodeledDigest"/>, except the header and footer
+/// references, whose stories are compared as stories (issue #1793).
 /// </summary>
 internal sealed record IrSectionFormat
 {
@@ -52,6 +53,15 @@ internal sealed record IrSectionFormat
 
     /// <summary>`w:type/@w:val` as written (e.g. "nextPage", "continuous").</summary>
     public string? SectionType { get; init; }
+
+    /// <summary>The orientation as the document writes it, for revision payloads, when it differs from
+    /// <see cref="Landscape"/>: the reader leaves a stated portrait out of <see cref="Landscape"/>, so it compares
+    /// equal to an omitted one (issue #1775).</summary>
+    public bool? StatedLandscape { get; init; }
+
+    /// <summary>The section type as the document writes it, for revision payloads; the reader leaves a stated
+    /// next-page break out of <see cref="SectionType"/> (issue #1775).</summary>
+    public string? StatedSectionType { get; init; }
 
     /// <summary>
     /// Digest of unmodeled `w:sectPr` children (§6.4) so a change in an unmodeled section

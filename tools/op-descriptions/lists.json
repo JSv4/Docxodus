@@ -83,6 +83,23 @@
       }
     },
     {
+      "op": "setListMembership",
+      "facade": "SetListMembership",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "numId", "type": "int", "required": true },
+        { "name": "level", "type": "int", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetListMembership" },
+        "npm": { "method": "setListMembership" },
+        "python": { "method": "set_list_membership" },
+        "stdio": { "op": "set_list_membership" },
+        "mcp": { "tool": "docxodus_list", "action": "set_membership" }
+      }
+    },
+    {
       "op": "removeListMembership",
       "facade": "RemoveListMembership",
       "result": "EditResult",
@@ -110,6 +127,52 @@
         "python": { "method": "get_list_membership" },
         "stdio": { "op": "get_list_membership" },
         "mcp": { "tool": "docxodus_list", "action": "get_membership" }
+      }
+    },
+    {
+      "op": "getListLevels",
+      "facade": "GetListLevels",
+      "result": "IReadOnlyList<ListLevelInfo>?",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "GetListLevels" },
+        "npm": { "method": "getListLevels" },
+        "python": { "method": "get_list_levels" },
+        "stdio": { "op": "get_list_levels" },
+        "mcp": { "tool": "docxodus_list", "action": "get_levels" }
+      }
+    },
+    {
+      "op": "setListLevels",
+      "facade": "SetListLevels",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "levels", "type": "array", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetListLevels" },
+        "npm": { "method": "setListLevels" },
+        "python": { "method": "set_list_levels" },
+        "stdio": { "op": "set_list_levels" },
+        "mcp": { "tool": "docxodus_list", "action": "set_levels" }
+      }
+    },
+    {
+      "op": "continueNumbering",
+      "facade": "ContinueNumbering",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ContinueNumbering" },
+        "npm": { "method": "continueNumbering" },
+        "python": { "method": "continue_numbering" },
+        "stdio": { "op": "continue_numbering" },
+        "mcp": { "tool": "docxodus_list", "action": "continue" }
       }
     }
   ]

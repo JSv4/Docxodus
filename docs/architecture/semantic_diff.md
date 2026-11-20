@@ -137,6 +137,9 @@ The package supplement deliberately suppresses representation-only differences:
   content-type vocabulary (`IsKnownOoxmlXmlContentType`) — one policy for the
   manifest's normalized identity and the semantic diff, so the two surfaces
   cannot disagree about the same part bytes;
+- indentation is never content: whitespace-only text between child elements is dropped before the IR hashes a
+  block and before styles and numbering are compared, while the text of a `w:t` is kept (issue #1793); header and
+  footer references are not part of a section's format, whose stories are compared as stories;
 - serialization bookkeeping is never semantic content: the rsid attribute family
   and `w:rsid(s)` elements, Word-regenerated `w14:paraId`/`w14:textId`, generated
   pt14 Unids, and annotations-part indentation are excluded from every detector

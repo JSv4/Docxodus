@@ -90,7 +90,7 @@ public class RedlineReversibilityFixtureSweepTests
     [InlineData("RP031-Table-Prop-Change", true, false)]
     [InlineData("RP032-Table-Prop-Change", true, false)]
     [InlineData("RP033-Table-Prop-Ex-Change", true, false)]
-    [InlineData("RP034-Deleted-Cells", false, false)]
+    [InlineData("RP034-Deleted-Cells", true, false)]
     [InlineData("RP035-Inserted-Cells", false, false)]
     [InlineData("RP036-Vert-Merged-Cells", true, false)]
     [InlineData("RP037-Changed-Style-Para-Props", true, false)]

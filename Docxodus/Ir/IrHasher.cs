@@ -132,6 +132,10 @@ internal static class IrHasher
         XElement element, IrRelResolver? resolver,
         Func<XAttribute, XAttribute>? attributeRewrite = null)
     {
+        // Indentation goes before the noise elements, so an indented property element left empty by their
+        // removal (<w:rPr> holding only <w:noProof/>) reads as the compact one (issue #1793).
+        RemoveInsignificantWhitespace(element);
+
         // Remove noise child elements first (proofErr/noProof, anywhere in the subtree). Most subtrees
         // carry none, so the removal list is allocated only once one is actually found.
         List<XElement>? toRemove = null;
@@ -149,6 +153,52 @@ internal static class IrHasher
 
         foreach (var el in element.DescendantsAndSelf())
             CleanAttributes(el, resolver, attributeRewrite);
+    }
+
+    /// <summary>
+    /// Drop the indentation of a pretty-printed part, so re-indenting a document is no change (issue #1793): in one
+    /// pass, each element that <see cref="DropsIndentation"/> loses its whitespace text, rebuilt in one step.
+    /// </summary>
+    private static void RemoveInsignificantWhitespace(XElement element, bool preserve = false)
+    {
+        preserve = PreservesSpace(element, preserve);
+        if (DropsIndentation(element, preserve))
+            element.ReplaceNodes(element.Nodes().Where(node => node is not XText || node is XCData).ToList());
+        foreach (var child in element.Elements())
+            RemoveInsignificantWhitespace(child, preserve);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="element"/>'s whitespace text is indentation: it holds child elements and no text but
+    /// XML whitespace (no CDATA), outside an <c>xml:space="preserve"</c> scope (<paramref name="preserve"/>, the
+    /// state <see cref="PreservesSpace"/> gives it). Text in a text-only element, such as the spaces of a
+    /// <c>w:t</c>, is content, as is whitespace in mixed content or under <c>preserve</c> (SVG, foreign XML).
+    /// </summary>
+    internal static bool DropsIndentation(XElement element, bool preserve)
+    {
+        if (preserve || !element.HasElements)
+            return false;
+        bool whitespace = false;
+        foreach (var node in element.Nodes())
+        {
+            if (node is XCData || node is XText text && !IsXmlWhitespace(text.Value))
+                return false;
+            whitespace |= node is XText;
+        }
+        return whitespace;
+    }
+
+    /// <summary>Whether <paramref name="element"/> is in an <c>xml:space="preserve"</c> scope: its own
+    /// <c>xml:space</c> decides (<c>default</c> resets it), else the scope it inherits.</summary>
+    internal static bool PreservesSpace(XElement element, bool inherited) =>
+        element.Attribute(XNamespace.Xml + "space") is { } space ? space.Value == "preserve" : inherited;
+
+    internal static bool IsXmlWhitespace(string value)
+    {
+        foreach (var c in value)
+            if (c is not (' ' or '\t' or '\r' or '\n'))
+                return false;
+        return true;
     }
 
     private static void CleanAttributes(
