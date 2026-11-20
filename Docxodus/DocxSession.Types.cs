@@ -349,6 +349,35 @@ public sealed record ParagraphFormatOp
     /// </summary>
     public int? HangingIndent { get; init; }
 
+    /// <summary>
+    /// Left (leading) indent in twips, absolute (<c>w:ind/@w:left</c>, or <c>@w:start</c> when the
+    /// paragraph already uses that spelling) — the Paragraph dialog's "Left". May be negative
+    /// (text in the left margin), as in Word. Mutually exclusive with <see cref="IndentDelta"/>
+    /// (<see cref="EditErrorCode.InvalidParagraphFormat"/>).
+    /// </summary>
+    public int? LeftIndent { get; init; }
+
+    /// <summary>
+    /// Right (trailing) indent in twips, absolute (<c>w:ind/@w:right</c>, or <c>@w:end</c> when
+    /// the paragraph already uses that spelling). May be negative, as in Word.
+    /// </summary>
+    public int? RightIndent { get; init; }
+
+    /// <summary>Keep with next (<c>w:keepNext</c>). The explicit element is written only when the
+    /// value differs from what the paragraph's style gives; otherwise the direct one is removed.</summary>
+    public bool? KeepNext { get; init; }
+
+    /// <summary>Keep lines together (<c>w:keepLines</c>); written like <see cref="KeepNext"/>.</summary>
+    public bool? KeepLines { get; init; }
+
+    /// <summary>Widow/orphan control (<c>w:widowControl</c>); written like <see cref="KeepNext"/>.
+    /// Word applies widow control when nothing in the style chain says otherwise.</summary>
+    public bool? WidowControl { get; init; }
+
+    /// <summary>"Don't add space between paragraphs of the same style" (<c>w:contextualSpacing</c>);
+    /// written like <see cref="KeepNext"/>.</summary>
+    public bool? ContextualSpacing { get; init; }
+
     /// <summary>Space above the paragraph in twips (<c>w:spacing/@w:before</c>; 20 twips = 1pt,
     /// so 240 = 12pt). Absolute; 0 writes an explicit zero; negatives are invalid.</summary>
     public int? SpacingBefore { get; init; }
@@ -683,6 +712,11 @@ public sealed record ParagraphFormatting
     public bool? KeepNext { get; init; }
     public bool? KeepLines { get; init; }
     public bool? PageBreakBefore { get; init; }
+    /// <summary><c>w:widowControl</c>. Effective snapshots fill true when the style chain is
+    /// silent (Word's behavior).</summary>
+    public bool? WidowControl { get; init; }
+    /// <summary><c>w:contextualSpacing</c>: no space between paragraphs of the same style.</summary>
+    public bool? ContextualSpacing { get; init; }
     public int? OutlineLevel { get; init; }
     public string? ShadingFill { get; init; }
     public ParagraphBorderEdge? TopBorder { get; init; }

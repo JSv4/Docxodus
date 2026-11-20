@@ -121,6 +121,25 @@ test.describe('Editor — page geometry on a wide window', () => {
     expect(g.sheetRight).toBeLessThan(g.surfaceRight + 1);
   });
 
+  test('zooming out leaves nothing to scroll sideways (the comment leaders shrink too)', async ({ page }) => {
+    await openDemo(page);
+    const widths = () => page.evaluate(() => {
+      const scroll = document.querySelector<HTMLElement>('.dxr-scroll')!;
+      return { scroll: scroll.scrollWidth, client: scroll.clientWidth,
+        leaders: document.querySelectorAll('.docx-comment-leaders').length };
+    });
+    const before = await widths();
+    expect(before.leaders).toBeGreaterThan(0); // the demo has comments, so the leaders' SVG is there
+    await page.locator('.dxr-tab[data-tab="view"]').click();
+    await page.locator('[data-dxr="zoom"]').selectOption('2');
+    await page.waitForTimeout(200);
+    expect((await widths()).scroll).toBeGreaterThan(before.client);
+    await page.locator('[data-dxr="zoom"]').selectOption('1');
+    await page.waitForTimeout(200);
+    const after = await widths();
+    expect(after.scroll).toBeLessThanOrEqual(after.client);
+  });
+
   test('enlarging a heading to 66pt keeps the text inside the column', async ({ page }) => {
     await openDemo(page);
     await setHeroFontSize(page, 66);

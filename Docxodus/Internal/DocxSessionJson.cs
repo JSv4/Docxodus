@@ -827,6 +827,8 @@ internal static class DocxSessionJson
     /// <summary>
     /// Parse a ParagraphFormatOp wire object: { alignment?: "left"|"center"|"right"|"justify",
     /// indentDelta?: int (twips), firstLineIndent?/hangingIndent?: int (twips, mutually exclusive),
+    /// leftIndent?/rightIndent?: int (twips, absolute, may be negative; leftIndent excludes indentDelta),
+    /// keepNext?/keepLines?/widowControl?/contextualSpacing?: bool,
     /// spacingBefore?/spacingAfter?: int (twips), lineSpacing?: int (240ths of a line under "auto",
     /// twips under "exact"/"atLeast"), lineSpacingRule?: "auto"|"exact"|"atLeast",
     /// pageBreakBefore?: bool, topBorder?/bottomBorder?: BorderEdge, clearBorders?: bool }.
@@ -848,6 +850,12 @@ internal static class DocxSessionJson
             IndentDelta = TryGetIntNullable(root, "indentDelta"),
             FirstLineIndent = TryGetIntNullable(root, "firstLineIndent"),
             HangingIndent = TryGetIntNullable(root, "hangingIndent"),
+            LeftIndent = TryGetIntNullable(root, "leftIndent"),
+            RightIndent = TryGetIntNullable(root, "rightIndent"),
+            KeepNext = TryGetBoolNullable(root, "keepNext"),
+            KeepLines = TryGetBoolNullable(root, "keepLines"),
+            WidowControl = TryGetBoolNullable(root, "widowControl"),
+            ContextualSpacing = TryGetBoolNullable(root, "contextualSpacing"),
             SpacingBefore = TryGetIntNullable(root, "spacingBefore"),
             SpacingAfter = TryGetIntNullable(root, "spacingAfter"),
             LineSpacing = TryGetIntNullable(root, "lineSpacing"),
@@ -3231,6 +3239,8 @@ internal static class DocxSessionJson
         BoolValue("keepNext", f.KeepNext);
         BoolValue("keepLines", f.KeepLines);
         BoolValue("pageBreakBefore", f.PageBreakBefore);
+        BoolValue("widowControl", f.WidowControl);
+        BoolValue("contextualSpacing", f.ContextualSpacing);
         IntValue("outlineLevel", f.OutlineLevel);
         StringValue("shadingFill", f.ShadingFill);
         AppendBorder("topBorder", f.TopBorder);

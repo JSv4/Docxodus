@@ -145,3 +145,46 @@ def test_set_paragraph_format_unknown_anchor_fails():
         )
         assert not result.success
         assert result.error.code.value == "anchor_not_found"
+
+
+def test_set_paragraph_format_dialog_fields_round_trip():
+    # The Paragraph dialog's absolute indents and on/off settings (#1788): written into the
+    # paragraph, and read back through get_formatting.
+    with open_session(FIXTURE.read_bytes()) as session:
+        anchor = _first_body_anchor(session)
+
+        result = session.set_paragraph_format(
+            anchor,
+            ParagraphFormatOp(
+                left_indent=-360,
+                right_indent=720,
+                keep_next=True,
+                keep_lines=True,
+                widow_control=False,
+                contextual_spacing=True,
+            ),
+        )
+        assert result.success
+
+        inspection = session.get_formatting(anchor)
+        assert inspection is not None
+        effective = inspection.effective_paragraph
+        assert effective.left_indent_twips == -360
+        assert effective.right_indent_twips == 720
+        assert effective.keep_next is True
+        assert effective.keep_lines is True
+        assert effective.widow_control is False
+        assert effective.contextual_spacing is True
+
+        xml = _document_xml(session.save())
+        assert "w:keepNext" in xml
+        assert "w:contextualSpacing" in xml
+        assert 'w:widowControl w:val="0"' in xml
+
+
+def test_set_paragraph_format_left_indent_with_indent_delta_rejected():
+    with open_session(FIXTURE.read_bytes()) as session:
+        anchor = _first_body_anchor(session)
+        result = session.set_paragraph_format(anchor, ParagraphFormatOp(left_indent=720, indent_delta=360))
+        assert not result.success
+        assert result.error.code.value == "invalid_paragraph_format"

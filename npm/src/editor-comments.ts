@@ -309,7 +309,11 @@ export class CommentGutter {
     placeDraft();
 
     // Leader lines: from the highlight's right edge to the bubble's top-left, in the
-    // container's coordinate space (the SVG covers the whole scrollable content).
+    // container's coordinate space (the SVG covers the whole scrollable content). Measured
+    // with the SVG collapsed: at its old size it would count itself, so after zooming out it
+    // kept the larger zoom's size and left the container scrolling sideways into nothing.
+    this.leaders.style.width = "0px";
+    this.leaders.style.height = "0px";
     const scrollW = this.host.container.scrollWidth;
     const scrollH = this.host.container.scrollHeight;
     this.leaders.setAttribute("width", String(scrollW));

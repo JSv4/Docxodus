@@ -2953,7 +2953,10 @@ class ParagraphFormatOp:
     rule paragraph gets (or loses) its bottom border.
 
     Indent/spacing fields are absolute values in twips (1440 twips = 1 inch; 20 twips = 1pt)
-    and must be >= 0. ``first_line_indent`` (``w:ind/@w:firstLine``) and ``hanging_indent``
+    and must be >= 0, except ``left_indent`` and ``right_indent`` (``w:ind/@w:left``/``@w:right``,
+    or ``@w:start``/``@w:end`` when the paragraph already uses that spelling), which may be
+    negative (text in the margin), as in Word. ``left_indent`` and ``indent_delta`` set the same
+    attribute, so an op carrying both is rejected with ``INVALID_PARAGRAPH_FORMAT``. ``first_line_indent`` (``w:ind/@w:firstLine``) and ``hanging_indent``
     (``w:ind/@w:hanging``) share one either/or slot in Word — setting one removes the other,
     and an op carrying both is rejected with ``INVALID_PARAGRAPH_FORMAT``. ``line_spacing``
     (``w:spacing/@w:line``) is measured per ``line_spacing_rule``: 240ths of a line under
@@ -2973,6 +2976,12 @@ class ParagraphFormatOp:
     top_border: ParagraphBorderEdge | None = None
     bottom_border: ParagraphBorderEdge | None = None
     clear_borders: bool | None = None
+    left_indent: int | None = None
+    right_indent: int | None = None
+    keep_next: bool | None = None
+    keep_lines: bool | None = None
+    widow_control: bool | None = None
+    contextual_spacing: bool | None = None
 
     def to_wire(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -2988,6 +2997,12 @@ class ParagraphFormatOp:
         if self.top_border is not None: out["topBorder"] = self.top_border.to_wire()
         if self.bottom_border is not None: out["bottomBorder"] = self.bottom_border.to_wire()
         if self.clear_borders is not None: out["clearBorders"] = self.clear_borders
+        if self.left_indent is not None: out["leftIndent"] = self.left_indent
+        if self.right_indent is not None: out["rightIndent"] = self.right_indent
+        if self.keep_next is not None: out["keepNext"] = self.keep_next
+        if self.keep_lines is not None: out["keepLines"] = self.keep_lines
+        if self.widow_control is not None: out["widowControl"] = self.widow_control
+        if self.contextual_spacing is not None: out["contextualSpacing"] = self.contextual_spacing
         return out
 
 
@@ -3012,6 +3027,8 @@ class ParagraphFormatting:
     shading_fill: str | None = None
     top_border: ParagraphBorderEdge | None = None
     bottom_border: ParagraphBorderEdge | None = None
+    widow_control: bool | None = None
+    contextual_spacing: bool | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "ParagraphFormatting":
@@ -3033,6 +3050,8 @@ class ParagraphFormatting:
             shading_fill=d.get("shadingFill"),
             top_border=(ParagraphBorderEdge._from_wire(d["topBorder"]) if "topBorder" in d else None),
             bottom_border=(ParagraphBorderEdge._from_wire(d["bottomBorder"]) if "bottomBorder" in d else None),
+            widow_control=d.get("widowControl"),
+            contextual_spacing=d.get("contextualSpacing"),
         )
 
 
