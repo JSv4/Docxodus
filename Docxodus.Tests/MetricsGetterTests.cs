@@ -115,7 +115,7 @@ namespace Docxodus.Tests
             // no font at all (Linux CI) it measures nothing, and the 0.6 em estimate must be pixels too.
             const string text = "the parties agree that the supplier shall deliver the services";
             using var typeface = SkiaSharp.SKTypeface.FromFamilyName("Times New Roman");
-            using var tenPoints = new SkiaSharp.SKFont(typeface, 10f);
+            using var tenPoints = new SkiaSharp.SKFont(typeface, 10f) { LinearMetrics = true };
             var measured = tenPoints.MeasureText(text);
             var points = measured > 0 ? measured : text.Length * 10f * 0.6f;
 
