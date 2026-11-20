@@ -2010,6 +2010,7 @@ export interface DocxodusWasmExports {
     SetListLevels: (handle: number, anchor: string, levelsJson: string) => string;
     ContinueNumbering: (handle: number, anchor: string) => string;
     ClearListStartOverride: (handle: number, anchor: string) => string;
+    SetListMembership: (handle: number, anchor: string, numId: number, level: number) => string;
     ReplaceCellContent: (handle: number, anchor: string, md: string) => string;
     RawGetXml: (handle: number, anchor: string) => string;
     RawInsertXml: (handle: number, anchor: string, pos: string, xml: string) => string;

@@ -2453,6 +2453,20 @@ class DocxSession:
             self._call("continue_numbering", {"anchorId": anchor_id})
         )
 
+    def set_list_membership(self, anchor_id: str, num_id: int, level: int) -> EditResult:
+        """Make the paragraph an item of an existing list: numbering instance ``num_id`` (a
+        ``ListMembership.num_id`` read from one of its items) at ``level`` (0-8). The paragraph
+        then numbers on in that list, as Word's Format Painter does when it copies a numbered
+        paragraph's formatting. A list item moves to that list. A level the list does not define
+        is defined first (refused under tracked changes, since that change to the numbering
+        cannot be tracked). One undo step."""
+        return EditResult._from_wire(
+            self._call(
+                "set_list_membership",
+                {"anchorId": anchor_id, "numId": num_id, "level": level},
+            )
+        )
+
     def apply_list_format(
         self, anchor_id: str, list_format: ListFormat
     ) -> EditResult:

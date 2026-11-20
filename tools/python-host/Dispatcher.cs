@@ -323,6 +323,8 @@ internal static partial class Dispatcher
         "set_list_levels" => DocxSessionOps.SetListLevels(
             Handle(args), Str(args, "anchorId"), ListLevelSpecs(args)),
         "continue_numbering" => DocxSessionOps.ContinueNumbering(Handle(args), Str(args, "anchorId")),
+        "set_list_membership" => DocxSessionOps.SetListMembership(
+            Handle(args), Str(args, "anchorId"), Int(args, "numId"), Int(args, "level")),
 
         "get_table_metadata" => DocxSessionOps.GetTableMetadata(
             Handle(args), Str(args, "tableAnchorId")),
@@ -1175,7 +1177,7 @@ internal static partial class Dispatcher
         or "apply_format" or "apply_format_by_substring" or "set_paragraph_style"
         or "set_paragraph_format" or "set_list_level" or "remove_list_membership"
         or "apply_list_format" or "apply_list_format_range" or "set_list_start_override"
-        or "clear_list_start_override" or "set_list_levels" or "continue_numbering"
+        or "clear_list_start_override" or "set_list_levels" or "continue_numbering" or "set_list_membership"
         or "replace_cell_content" or "set_table_style"
         or "raw_insert_xml" or "raw_replace_xml"
         or "add_annotation" or "remove_annotation" or "update_annotation" or "move_annotation"

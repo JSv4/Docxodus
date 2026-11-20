@@ -1729,6 +1729,13 @@ export class DocxSession {
     return JSON.parse(this.wasm.ContinueNumbering(this.handle, anchorId)) as EditResult;
   }
 
+  /** Make the anchored paragraph an item of an existing list (`numId`, as
+   * {@link getListMembership} reads it from another item) at `level` (0-8): it numbers on in that
+   * list, as Word's Format Painter does with a numbered paragraph. One undo step. */
+  setListMembership(anchorId: string, numId: number, level: number): EditResult {
+    return JSON.parse(this.wasm.SetListMembership(this.handle, anchorId, numId, level)) as EditResult;
+  }
+
   // ─── Tier D: cell content ────────────────────────────────────────────
 
   replaceCellContent(cellAnchorId: string, markdown: string): EditResult {

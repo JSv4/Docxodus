@@ -83,6 +83,23 @@
       }
     },
     {
+      "op": "setListMembership",
+      "facade": "SetListMembership",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "numId", "type": "int", "required": true },
+        { "name": "level", "type": "int", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetListMembership" },
+        "npm": { "method": "setListMembership" },
+        "python": { "method": "set_list_membership" },
+        "stdio": { "op": "set_list_membership" },
+        "mcp": { "tool": "docxodus_list", "action": "set_membership" }
+      }
+    },
+    {
       "op": "removeListMembership",
       "facade": "RemoveListMembership",
       "result": "EditResult",
