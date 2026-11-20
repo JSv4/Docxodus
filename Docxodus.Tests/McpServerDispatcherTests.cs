@@ -770,6 +770,36 @@ public class McpServerDispatcherTests : IDisposable
     }
 
     [Fact]
+    public void MCP060b_Table_PropertiesSetAndRead()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        var inserted = Parse(Dispatcher.Call(_store, "docxodus_table", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"insert","anchorId":"{{anchor}}","position":"after","rows":2,"columns":2}""")));
+        var cell = inserted.GetProperty("created")[3].GetProperty("id").GetString()!;
+
+        var set = Dispatcher.Call(_store, "docxodus_table", J(
+            $$$"""{"sessionId":{{{sessionArg}}},"action":"set_properties","cellAnchorId":"{{{cell}}}","op":{"alignment":"center","widthType":"percent","width":75,"altTitle":"T"}}"""));
+        Assert.True(Parse(set).GetProperty("success").GetBoolean(), set);
+        var cellSet = Dispatcher.Call(_store, "docxodus_table", J(
+            $$$"""{"sessionId":{{{sessionArg}}},"action":"set_cell_properties","cellAnchorId":"{{{cell}}}","op":{"verticalAlignment":"bottom"},"scope":"row"}"""));
+        Assert.True(Parse(cellSet).GetProperty("success").GetBoolean(), cellSet);
+
+        var info = Parse(Dispatcher.Call(_store, "docxodus_table", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"get_properties","cellAnchorId":"{{cell}}"}""")));
+        Assert.Equal("center", info.GetProperty("alignment").GetString());
+        Assert.Equal("percent", info.GetProperty("widthType").GetString());
+        Assert.Equal(75, info.GetProperty("width").GetDouble());
+        Assert.Equal("T", info.GetProperty("altTitle").GetString());
+        Assert.Equal("bottom", info.GetProperty("verticalAlignment").GetString());
+
+        var bad = Assert.ThrowsAny<ArgumentException>(() => Dispatcher.Call(_store, "docxodus_table", J(
+            $$$"""{"sessionId":{{{sessionArg}}},"action":"set_cell_properties","cellAnchorId":"{{{cell}}}","op":{},"scope":"page"}""")));
+        Assert.Contains("scope", bad.Message);
+    }
+
+    [Fact]
     public void MCP060_Table_InsertRowAndReplaceCellContent()
     {
         var sessionId = OpenSession();

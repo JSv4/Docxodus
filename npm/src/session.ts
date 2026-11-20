@@ -1041,17 +1041,17 @@ export class DocxSession {
   /** Word's Table Properties for the table containing the cell (or `tbl`) anchor: width,
    *  alignment, indent, default cell margins and alt text. One undo step. */
   setTableProperties(cellAnchorId: string, op: TablePropertiesOp): EditResult {
-    return JSON.parse(this.wasm.SetTableProperties!(this.handle, cellAnchorId, JSON.stringify(op))) as EditResult;
+    return JSON.parse(this.wasm.SetTableProperties(this.handle, cellAnchorId, JSON.stringify(op))) as EditResult;
   }
 
   /** Cell properties (vertical alignment) on the cell, its row, its grid column or the table. */
   setCellProperties(cellAnchorId: string, op: CellPropertiesOp, scope: TableCellScope = "cell"): EditResult {
-    return JSON.parse(this.wasm.SetCellProperties!(this.handle, cellAnchorId, JSON.stringify(op), scope)) as EditResult;
+    return JSON.parse(this.wasm.SetCellProperties(this.handle, cellAnchorId, JSON.stringify(op), scope)) as EditResult;
   }
 
   /** The Table Properties dialog's values for the cell's table, row and cell, or null outside a table. */
   getTableProperties(cellAnchorId: string): TablePropertiesInfo | null {
-    return JSON.parse(this.wasm.GetTableProperties!(this.handle, cellAnchorId)) as TablePropertiesInfo | null;
+    return JSON.parse(this.wasm.GetTableProperties(this.handle, cellAnchorId)) as TablePropertiesInfo | null;
   }
 
   /** Apply row layout options to the row containing the canonical cell anchor. */

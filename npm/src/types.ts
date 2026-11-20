@@ -1905,10 +1905,10 @@ export interface DocxodusWasmExports {
     SetRepeatHeaderRow: (handle: number, cellAnchor: string, repeat: boolean | null) => string;
     SetTableRowOptions: (handle: number, cellAnchor: string, repeatHeader: boolean | null,
       allowBreakAcrossPages: boolean | null, heightTwips: number | null, heightRule: string) => string;
-    /** Table Properties (optional: older engine builds lack them). */
-    SetTableProperties?: (handle: number, cellAnchor: string, opJson: string) => string;
-    SetCellProperties?: (handle: number, cellAnchor: string, opJson: string, scope: string) => string;
-    GetTableProperties?: (handle: number, cellAnchor: string) => string;
+    /** Word's Table Properties. */
+    SetTableProperties: (handle: number, cellAnchor: string, opJson: string) => string;
+    SetCellProperties: (handle: number, cellAnchor: string, opJson: string, scope: string) => string;
+    GetTableProperties: (handle: number, cellAnchor: string) => string;
     SetHeaderText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     SetFooterText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     InsertPageNumberField: (handle: number, anchor: string, field: string, format: string) => string;
