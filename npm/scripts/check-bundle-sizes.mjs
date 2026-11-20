@@ -125,7 +125,9 @@ const budgetsKiB = {
   // Reading a selection's format at its first character (#1776) adds 115-125 gzip bytes over
   // 4d94dc32: embed/IIFE/editor 164642/164692/143283, over these three gates by 85/33/26
   // bytes. Round only them up by 0.1 KiB; pagination is unchanged.
-  'embed.bundle.js': 160.8,
+  // #1773 and #1776 together add 148 gzip bytes to embed over 4d94dc32 (164517 -> 164665),
+  // 6 over 160.8 KiB: 0.1 KiB more.
+  'embed.bundle.js': 160.9,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
   // The appended bullet-normalization option adds 29 gzip bytes (161996 -> 162025).
