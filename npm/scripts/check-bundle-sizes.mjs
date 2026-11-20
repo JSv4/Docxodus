@@ -140,7 +140,9 @@ const budgetsKiB = {
   // editor bundle over its gate and IIFE and pagination at theirs (160.4/139.5/56.8 KiB rounded);
   // raise those three by 0.1 KiB. Embed (160.3) still fits.
   // #1776 (above): 0.1 KiB.
-  'embed.iife.js': 160.9,
+  // #1790 on top of #1773 and #1776 adds 187 gzip bytes over 4d94dc32 (164575 -> 164762),
+  // at this 160.9 KiB gate: 0.1 KiB more.
+  'embed.iife.js': 161,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
   // #1776 (above): 0.1 KiB.
   'editor.bundle.js': 140,

@@ -2006,6 +2006,9 @@ export interface DocxodusWasmExports {
     ApplyListFormat: (handle: number, anchor: string, kind: string) => string;
     ApplyListFormatRange: (handle: number, firstAnchor: string, lastAnchor: string, kind: string) => string;
     SetListStartOverride: (handle: number, anchor: string, value: number) => string;
+    GetListLevels: (handle: number, anchor: string) => string;
+    SetListLevels: (handle: number, anchor: string, levelsJson: string) => string;
+    ContinueNumbering: (handle: number, anchor: string) => string;
     ClearListStartOverride: (handle: number, anchor: string) => string;
     ReplaceCellContent: (handle: number, anchor: string, md: string) => string;
     RawGetXml: (handle: number, anchor: string) => string;
@@ -3719,6 +3722,44 @@ export type NumberFormat =
   | "upperRoman"
   | "lowerRoman"
   | "bullet";
+
+/** One level of a list's numbering definition, as {@link DocxSession.getListLevels} reads it:
+ *  what Word's *Define New Multilevel List* dialog shows for the level. */
+export interface ListLevelInfo {
+  /** The level, 0 (the top) to 8. */
+  level: number;
+  /** The number format as OOXML writes it: `decimal`, `lowerLetter`, `upperLetter`,
+   *  `lowerRoman`, `upperRoman`, `bullet`, `none`, or another token the document carries. */
+  format: string;
+  /** The number's text: `%1.` is level 1's number and a period, `%1.%2` a legal number,
+   *  `(%3)` level 3's in parentheses; a bullet level's glyph. */
+  text: string;
+  /** The level's first number. */
+  start: number;
+  /** Where the number starts, in twips from the text margin. */
+  numberPositionTwips: number;
+  /** Where the text (and every line after the first) starts, in twips. */
+  textPositionTwips: number;
+  /** Legal numbering (`w:isLgl`): higher levels' numbers shown as arabic in this level's text. */
+  legal: boolean;
+}
+
+/** A change to one level of a list for {@link DocxSession.setListLevels}: `level` says which;
+ *  every other field left out stays as it is. */
+export interface ListLevelSpec {
+  level: number;
+  /** `decimal`, `decimalZero`, `lowerLetter`, `upperLetter`, `lowerRoman`, `upperRoman`,
+   *  `bullet`, `none`, `ordinal`, `cardinalText` or `ordinalText`. */
+  format?: string;
+  /** The number's text, with `%1`..`%9` for the levels' numbers; a level may name only itself
+   *  and the levels above it. */
+  text?: string;
+  /** The first number (0 or more); setting it also drops a restart the list has at the level. */
+  start?: number;
+  numberPositionTwips?: number;
+  textPositionTwips?: number;
+  legal?: boolean;
+}
 
 /** Numbering facts for a list-item paragraph. Returned by
  *  {@link DocxSession.getListMembership} and surfaced as {@link BlockMetadata.list}. */

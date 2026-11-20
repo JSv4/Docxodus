@@ -2973,6 +2973,57 @@ internal static class DocxSessionJson
         return sb.ToString();
     }
 
+    /// <summary>A list's levels (<see cref="DocxSession.GetListLevels"/>) as a JSON array of
+    /// <c>{ level, format, text, start, numberPositionTwips, textPositionTwips, legal }</c>, or
+    /// <c>null</c>.</summary>
+    public static string SerializeListLevelsOrNull(IReadOnlyList<ListLevelInfo>? levels)
+    {
+        if (levels is null) return "null";
+        var sb = new StringBuilder(128 * levels.Count + 2).Append('[');
+        foreach (var l in levels)
+        {
+            if (sb.Length > 1) sb.Append(',');
+            sb.Append("{\"level\":").Append(l.Level)
+              .Append(",\"format\":").Append(JsonString(l.Format))
+              .Append(",\"text\":").Append(JsonString(l.Text))
+              .Append(",\"start\":").Append(l.Start)
+              .Append(",\"numberPositionTwips\":").Append(l.NumberPositionTwips)
+              .Append(",\"textPositionTwips\":").Append(l.TextPositionTwips)
+              .Append(",\"legal\":").Append(l.Legal ? "true" : "false")
+              .Append('}');
+        }
+        return sb.Append(']').ToString();
+    }
+
+    /// <summary>Parse <see cref="DocxSession.SetListLevels"/>'s levels: a JSON array of
+    /// <c>{ level, format?, text?, start?, numberPositionTwips?, textPositionTwips?, legal? }</c>
+    /// (also accepted wrapped as <c>{ levels: [...] }</c>). A missing field leaves it unchanged.</summary>
+    public static IReadOnlyList<ListLevelSpec> ParseListLevelSpecs(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return Array.Empty<ListLevelSpec>();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("levels", out var wrapped)) root = wrapped;
+        if (root.ValueKind != JsonValueKind.Array)
+            throw new ArgumentException("list levels must be a JSON array of level objects");
+        var specs = new List<ListLevelSpec>();
+        foreach (var e in root.EnumerateArray())
+        {
+            if (e.ValueKind != JsonValueKind.Object) throw new ArgumentException("each list level must be an object");
+            specs.Add(new ListLevelSpec
+            {
+                Level = TryGetIntNullable(e, "level") ?? throw new ArgumentException("each list level needs its \"level\" (0-8)"),
+                Format = TryGetString(e, "format", null),
+                Text = TryGetString(e, "text", null),
+                Start = TryGetIntNullable(e, "start"),
+                NumberPositionTwips = TryGetIntNullable(e, "numberPositionTwips"),
+                TextPositionTwips = TryGetIntNullable(e, "textPositionTwips"),
+                Legal = TryGetBoolNullable(e, "legal"),
+            });
+        }
+        return specs;
+    }
+
     public static string SerializeListMembershipOrNull(ListMembership? list)
     {
         if (list is null) return "null";

@@ -700,6 +700,9 @@ internal static class DocxSessionOps
     public static string GetBlockMetadatas(int handle, System.Collections.Generic.IEnumerable<string> anchorIds) =>
         DocxSessionJson.SerializeBlockMetadataMap(SessionRegistry.Get(handle).GetBlockMetadatas(anchorIds));
 
+    public static string GetListLevels(int handle, string anchorId) =>
+        DocxSessionJson.SerializeListLevelsOrNull(SessionRegistry.Get(handle).GetListLevels(anchorId));
+
     public static string GetListMembership(int handle, string anchorId) =>
         DocxSessionJson.SerializeListMembershipOrNull(SessionRegistry.Get(handle).GetListMembership(anchorId));
 
@@ -1268,6 +1271,14 @@ internal static class DocxSessionOps
     public static string SetListStartOverride(int handle, string anchorId, int value,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId, s => s.SetListStartOverride(anchorId, value));
+
+    public static string SetListLevels(int handle, string anchorId, IReadOnlyList<ListLevelSpec> levels,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetListLevels(anchorId, levels));
+
+    public static string ContinueNumbering(int handle, string anchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.ContinueNumbering(anchorId));
 
     public static string ClearListStartOverride(int handle, string anchorId,
         MutationPreconditions? preconditions = null) =>
