@@ -1440,8 +1440,8 @@ public static class WmlToMarkdownConverter
         if (el == null) return false;
         var val = (string?)el.Attribute(W.val);
         // OOXML toggle properties: absent => default (false), present-with-no-val => true,
-        // present with val="0"/"false" => false, otherwise true.
-        return val == null || (val != "0" && !val.Equals("false", StringComparison.OrdinalIgnoreCase));
+        // present with any spelling of off => false, otherwise true.
+        return WordprocessingMLUtil.OnOffValue(val) != false;
     }
 
     internal static bool IsCodeRun(XElement? rPr)

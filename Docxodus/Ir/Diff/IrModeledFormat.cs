@@ -132,6 +132,14 @@ internal static class IrModeledFormat
         {
             sb.Append('¶');
             sb.Append(ParaKey(paragraph.Format));
+            // The paragraph mark's modeled run properties (size, bold, colour, …): a mark-only change of how the
+            // paragraph looks classifies FormatOnly, and the renderer records it as w:pPr/w:rPr/w:rPrChange
+            // (issue #1794). Its unmodeled properties (w:lang) stay out, as they do for runs.
+            if (settings.TrackParagraphMarkFormatChanges)
+            {
+                sb.Append('¤');
+                sb.Append(RunKey(paragraph.MarkFormat));
+            }
         }
         // A3: an inline (in-pPr) sectPr's modeled page setup participates too, so a mid-document
         // sectPr-only change classifies FormatOnly instead of Unchanged under ModeledOnly. Gated on the
@@ -255,6 +263,19 @@ internal static class IrModeledFormat
         return dict;
     }
 
+    /// <summary>The Paragraph-scope details of a paragraph mark's run-property change (issue #1794): the run
+    /// properties' names prefixed with <c>mark</c> (<c>markFontSize</c>, <c>markBold</c>, <c>markStyle</c>), so they
+    /// never read as the paragraph's own properties of the same name (<c>style</c>, <c>shading</c>).</summary>
+    public static IrFormatChangeDetails MarkFormatChangeDetails(IrRunFormat? left, IrRunFormat? right)
+    {
+        var details = FormatChangeDetails(left, right);
+        static string Mark(string name) => "mark" + char.ToUpperInvariant(name[0]) + name.Substring(1);
+        static IReadOnlyDictionary<string, string> Prefix(IReadOnlyDictionary<string, string> properties) =>
+            properties.ToDictionary(pair => Mark(pair.Key), pair => pair.Value);
+        return new IrFormatChangeDetails(Prefix(details.OldProperties), Prefix(details.NewProperties),
+            details.ChangedPropertyNames.Select(Mark).ToList(), IrFormatChangeScope.Paragraph);
+    }
+
     /// <summary>
     /// Build the Paragraph-scope <see cref="IrFormatChangeDetails"/> for a (left, right) paragraph-format
     /// pair: modeled property dictionaries + changed names in the fixed field order — the same
@@ -311,20 +332,27 @@ internal static class IrModeledFormat
     /// described here — the modeled-only-revision limitation, consistent with the run/paragraph scopes.</summary>
     public static IrFormatChangeDetails SectionFormatChangeDetails(IrSectionFormat? left, IrSectionFormat? right)
     {
-        var oldProps = ModeledSectionProperties(left);
-        var newProps = ModeledSectionProperties(right);
+        // Changes are judged on the read values (a stated default equals the omitted one, issue #1775); the
+        // payload reports the values as written.
+        var oldProps = ModeledSectionProperties(AsWritten(left));
+        var newProps = ModeledSectionProperties(AsWritten(right));
+        var oldComparable = ModeledSectionProperties(left);
+        var newComparable = ModeledSectionProperties(right);
 
         var changed = new List<string>();
         foreach (var name in ModeledSectionFieldOrder)
         {
-            bool hasOld = oldProps.TryGetValue(name, out var oldVal);
-            bool hasNew = newProps.TryGetValue(name, out var newVal);
+            bool hasOld = oldComparable.TryGetValue(name, out var oldVal);
+            bool hasNew = newComparable.TryGetValue(name, out var newVal);
             if (hasOld != hasNew || (hasOld && hasNew && oldVal != newVal))
                 changed.Add(name);
         }
 
         return new IrFormatChangeDetails(oldProps, newProps, changed, IrFormatChangeScope.Section);
     }
+
+    private static IrSectionFormat? AsWritten(IrSectionFormat? f) =>
+        f is null ? null : f with { Landscape = f.StatedLandscape ?? f.Landscape, SectionType = f.StatedSectionType ?? f.SectionType };
 
     private static readonly string[] ModeledSectionFieldOrder =
     {

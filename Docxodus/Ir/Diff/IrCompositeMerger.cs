@@ -41,7 +41,7 @@ internal static class IrCompositeMerger
         // TrackBlockFormatChanges stays FALSE so the shared two-way emit helpers never double-stamp on a
         // conflict-path winner (they consult the specific slice). text+pPr edits keep routing to the
         // block-level conflict path (never a silent format drop). Pinned by ConsolidateBlockFormatB2Tests.
-        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true, TrackSectionFormatChanges = true };
+        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackParagraphMarkFormatChanges = false, TrackTableFormatChanges = true, TrackSectionFormatChanges = true };
 
         // v1 ceiling (cross-paragraph token-stream campaign, 2026-07-25): the cross-paragraph fusion is a
         // two-way MARKUP-only feature. The composite merger consumes the per-reviewer edit scripts as DATA

@@ -703,7 +703,7 @@ internal static class WordprocessingClosureInspector
         if (hasImplicitParagraphStyle)
             foreach (var style in styles.Values.Where(style =>
                          WordAttribute(style.Element, "type") == "paragraph"
-                         && WordAttribute(style.Element, "default") is "1" or "true"))
+                         && WordprocessingMLUtil.OnOffValue(WordAttribute(style.Element, "default")) == true))
                 referencedStyleIds.Add(style.Id!);
         var scheduledStyles = new HashSet<string>(referencedStyleIds, StringComparer.Ordinal);
         var pendingStyles = new Queue<string>(scheduledStyles.OrderBy(value => value, StringComparer.Ordinal));

@@ -432,8 +432,7 @@ internal static class CommentOps
     }
 
     /// <summary>Interpret the OOXML on/off lexical forms accepted by <c>w15:done</c>.</summary>
-    internal static bool ParseDone(string? value) =>
-        value is "1" or "true" or "on";
+    internal static bool ParseDone(string? value) => WordprocessingMLUtil.OnOffValue(value) == true;
 
     private static string NextParaId(MainDocumentPart main) => new ParaIdAllocator(main).Next();
 

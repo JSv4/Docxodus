@@ -103,6 +103,14 @@ internal sealed record IrParagraph : IrBlock
     public IrHash PPrDigest { get; init; }
 
     /// <summary>
+    /// The paragraph mark's own run properties (`w:pPr/w:rPr`), mapped like a run's, or null when the mark has
+    /// none. It sets what the mark itself looks like, an empty paragraph's height among it, so its modeled fields
+    /// take part in the modeled block signature (issue #1794); the whole mark is already in the format fingerprint
+    /// through the paragraph format's unmodeled digest.
+    /// </summary>
+    public IrRunFormat? MarkFormat { get; init; }
+
+    /// <summary>
     /// Resolver-aware canonical digest of this paragraph's outer inline <c>w:sdt</c>/<c>w:smartTag</c>
     /// carriers, including their metadata, full contained OOXML, and position in the inline tree. The reader
     /// deliberately splices those wrappers from <see cref="Inlines"/> to preserve the markdown projection,

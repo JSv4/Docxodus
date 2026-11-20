@@ -320,6 +320,11 @@ internal static partial class Dispatcher
             Handle(args), Str(args, "anchorId"), AliasedInt(args, "startValue", "value")),
         "clear_list_start_override" => DocxSessionOps.ClearListStartOverride(
             Handle(args), Str(args, "anchorId")),
+        "set_list_levels" => DocxSessionOps.SetListLevels(
+            Handle(args), Str(args, "anchorId"), ListLevelSpecs(args)),
+        "continue_numbering" => DocxSessionOps.ContinueNumbering(Handle(args), Str(args, "anchorId")),
+        "set_list_membership" => DocxSessionOps.SetListMembership(
+            Handle(args), Str(args, "anchorId"), Int(args, "numId"), Int(args, "level")),
 
         "get_table_metadata" => DocxSessionOps.GetTableMetadata(
             Handle(args), Str(args, "tableAnchorId")),
@@ -412,6 +417,7 @@ internal static partial class Dispatcher
         "get_block_metadata" => DocxSessionOps.GetBlockMetadata(Handle(args), Str(args, "anchorId")),
         "get_block_metadatas" => DocxSessionOps.GetBlockMetadatas(Handle(args), ParseAnchorIdArray(args)),
         "get_list_membership" => DocxSessionOps.GetListMembership(Handle(args), Str(args, "anchorId")),
+        "get_list_levels" => DocxSessionOps.GetListLevels(Handle(args), Str(args, "anchorId")),
         "get_section_info" => DocxSessionOps.GetSectionInfo(Handle(args), Str(args, "anchorId")),
         "list_styles" => DocxSessionOps.ListStyles(Handle(args)),
         "get_formatting" => DocxSessionOps.GetFormatting(Handle(args), Str(args, "anchorId")),
@@ -820,6 +826,14 @@ internal static partial class Dispatcher
             : fallback;
     }
 
+    /// <summary>The <c>levels</c> argument: an array of list level objects.</summary>
+    private static IReadOnlyList<ListLevelSpec> ListLevelSpecs(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty("levels", out var v) || v.ValueKind != JsonValueKind.Array)
+            throw new FormatException("args missing array \"levels\"");
+        return DocxSessionJson.ParseListLevelSpecs(v.GetRawText());
+    }
+
     private static string Str(JsonElement args, string name)
     {
         if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.String)
@@ -1163,7 +1177,8 @@ internal static partial class Dispatcher
         or "apply_format" or "apply_format_by_substring" or "set_paragraph_style"
         or "set_paragraph_format" or "set_list_level" or "remove_list_membership"
         or "apply_list_format" or "apply_list_format_range" or "set_list_start_override"
-        or "clear_list_start_override" or "replace_cell_content" or "set_table_style"
+        or "clear_list_start_override" or "set_list_levels" or "continue_numbering" or "set_list_membership"
+        or "replace_cell_content" or "set_table_style"
         or "raw_insert_xml" or "raw_replace_xml"
         or "add_annotation" or "remove_annotation" or "update_annotation" or "move_annotation"
         or "undo" or "redo";

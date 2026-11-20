@@ -912,15 +912,21 @@ namespace Docxodus
             if (p == null)
                 return false;
             var v = p.Attribute(W.val);
-            if (v == null)
-                return true;
-            var s = v.Value.ToLower();
-            if (s == "0" || s == "false")
-                return false;
-            if (s == "1" || s == "true")
-                return true;
-            return false;
+            // Any value that is not a spelling of on leaves it off.
+            return v == null || OnOffValue(v.Value) == true;
         }
+
+        /// <summary>
+        /// An ST_OnOff value, as every on/off reader reads it: <c>1</c>, <c>true</c> and <c>on</c> are on and
+        /// <c>0</c>, <c>false</c> and <c>off</c> are off, in any letter case (issue #1786). Null for any other
+        /// value, or none, so each reader keeps its own reading of a value that is neither.
+        /// </summary>
+        public static bool? OnOffValue(string? value) => value?.ToLowerInvariant() switch
+        {
+            "1" or "true" or "on" => true,
+            "0" or "false" or "off" => false,
+            _ => null,
+        };
 
         public static int StringToTwips(string twipsOrPoints) =>
             (int)StringToDecimalTwips(twipsOrPoints);
@@ -1482,7 +1488,10 @@ listSeparator
 
         /// <summary>
         /// Insert <paramref name="child"/> into <paramref name="sectPr"/> at its CT_SectPr schema
-        /// slot: before the first sibling <c>Order_sectPr</c> ranks strictly later, else at the end.
+        /// slot: after the last sibling <c>Order_sectPr</c> ranks no later, else before the first
+        /// sibling it ranks, else first. Placing it after its known predecessor, rather than before its
+        /// known successor, keeps it ahead of extension content such as <c>w15:footnoteColumns</c>,
+        /// which closes the property list.
         /// </summary>
         /// <remarks>
         /// Same slot-insert discipline as <see cref="EnsureSettingsChildInOrder"/>, and for the same
@@ -1492,12 +1501,16 @@ listSeparator
         internal static void InsertSectPrChildInOrder(XElement sectPr, XElement child)
         {
             var rank = Order_sectPr[child.Name];
+            var lastEarlier = sectPr.Elements().LastOrDefault(e =>
+                Order_sectPr.TryGetValue(e.Name, out var earlierRank) && earlierRank <= rank);
             var firstLater = sectPr.Elements().FirstOrDefault(e =>
                 Order_sectPr.TryGetValue(e.Name, out var laterRank) && laterRank > rank);
-            if (firstLater == null)
-                sectPr.Add(child);
-            else
+            if (lastEarlier != null)
+                lastEarlier.AddAfterSelf(child);
+            else if (firstLater != null)
                 firstLater.AddBeforeSelf(child);
+            else
+                sectPr.AddFirst(child);
         }
 
         private static Dictionary<XName, int> Order_pPr = new Dictionary<XName, int>

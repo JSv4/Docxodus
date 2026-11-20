@@ -437,8 +437,7 @@ internal static class XmlSemanticNormalizer
     private static IReadOnlyList<string> SplitXmlWhitespace(string value) =>
         value.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
 
-    private static bool IsXmlWhitespace(string value) =>
-        value.All(character => character is ' ' or '\t' or '\r' or '\n');
+    private static bool IsXmlWhitespace(string value) => Docxodus.Ir.IrHasher.IsXmlWhitespace(value);
 
     private static IEnumerable<XNode> CoalesceAdjacentText(IEnumerable<XNode> source)
     {

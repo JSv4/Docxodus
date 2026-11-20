@@ -2,9 +2,9 @@
 # Revisions are the per-kind (kind, normalized-text) multiset: Kind|count|text, joined by two spaces.
 # Regenerate with DOCXODUS_REGEN_CORPUS_BASELINE=1; review the diff as an engine change.
 WC-BodyBookmarks-After -> WC-BodyBookmarks-Before	compat	#digest atoms[Inserted=1828,Deleted=2064,FormatChanged=86] sha256:733087a71fd3212ac67ddd2281820fa0629f3d01d2fa2d2de3615b4d6192d947
-WC-BodyBookmarks-After -> WC-BodyBookmarks-Before	fine	#digest atoms[Inserted=1883,Deleted=2087,FormatChanged=2763] sha256:3373e60aa1e70a3c3c54abffc7fc64fb2e9f8220b42dc1c61a861c9930770502
+WC-BodyBookmarks-After -> WC-BodyBookmarks-Before	fine	#digest atoms[Inserted=1883,Deleted=2087,FormatChanged=2789] sha256:cc483490471f397fb08551d9af4335542ea9eea0e321edf4c0502ecf501e7930
 WC-BodyBookmarks-Before -> WC-BodyBookmarks-After	compat	#digest atoms[Inserted=2073,Deleted=1817,FormatChanged=86] sha256:d7450519fa7fee4b7495433ddc1b68825f091e561ccce9468ace9725eeb4105e
-WC-BodyBookmarks-Before -> WC-BodyBookmarks-After	fine	#digest atoms[Inserted=2106,Deleted=1858,FormatChanged=2763] sha256:2604c0637a83e82ff3648222b164a5b7bcfb0171f998cf9a6b722ef362439653
+WC-BodyBookmarks-Before -> WC-BodyBookmarks-After	fine	#digest atoms[Inserted=2106,Deleted=1858,FormatChanged=2789] sha256:66c61a7dd8a41fef11563791613193926fd207d370fa91e59d2e0797b4be6b2a
 WC001-Digits -> WC001-Digits-Deleted-Paragraph	compat	Deleted|1|12,34
 WC001-Digits -> WC001-Digits-Deleted-Paragraph	fine	Deleted|1|12,34
 WC001-Digits -> WC001-Digits-Mod	compat	Inserted|1|4  Inserted|1|st  Deleted|1|34  Deleted|1|Test
@@ -242,9 +242,9 @@ WC036-Footnote-With-Table-After -> WC036-Footnote-With-Table-Before	fine	Inserte
 WC036-Footnote-With-Table-Before -> WC036-Footnote-With-Table-After	compat	Inserted|1|Aaa1  Inserted|1|Eee1  Deleted|1|Aaa  Deleted|1|Eee  Deleted|1|GggHhhIii
 WC036-Footnote-With-Table-Before -> WC036-Footnote-With-Table-After	fine	Inserted|1|Aaa1  Inserted|1|Eee1  Deleted|1|Aaa  Deleted|1|Eee  Deleted|1|GggHhhIii
 WC037-Textbox-After1 -> WC037-Textbox-Before	compat	Inserted|1|In1  Deleted|1|In
-WC037-Textbox-After1 -> WC037-Textbox-Before	fine	Inserted|2|1
+WC037-Textbox-After1 -> WC037-Textbox-Before	fine	Inserted|2|1  FormatChanged|2|In1
 WC037-Textbox-Before -> WC037-Textbox-After1	compat	Inserted|1|In  Deleted|1|In1
-WC037-Textbox-Before -> WC037-Textbox-After1	fine	Deleted|2|1
+WC037-Textbox-Before -> WC037-Textbox-After1	fine	Deleted|2|1  FormatChanged|2|In
 WC038-Document-With-BR-After -> WC038-Document-With-BR-Before	compat	Inserted|1|Video  Deleted|1|Text
 WC038-Document-With-BR-After -> WC038-Document-With-BR-Before	fine	Inserted|1|Video  Deleted|1|Text
 WC038-Document-With-BR-Before -> WC038-Document-With-BR-After	compat	Inserted|1|Text  Deleted|1|Video

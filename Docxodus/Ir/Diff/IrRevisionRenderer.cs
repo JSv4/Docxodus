@@ -1532,15 +1532,39 @@ internal static class IrRevisionRenderer
             return false;
         if (!ctx.Right.AnchorIndex.TryGetValue(op.RightAnchor, out var rb) || rb is not IrParagraph rp)
             return false;
-        if (!ParaFormatDiffers(lp, rp, ctx.Settings))
+        bool mark = MarkFormatDiffers(lp, rp, ctx.Settings);
+        // Under Full the paragraph format's unmodeled digest holds the mark too; a change to the mark alone is the
+        // mark's revision, not also the paragraph's.
+        bool paragraph = ParaFormatDiffers(lp, rp, ctx.Settings) &&
+            !(mark && lp.PPrDigest == rp.PPrDigest && IrModeledFormat.ParaKey(lp.Format) == IrModeledFormat.ParaKey(rp.Format)
+              && lp.InlineSectionFormat == rp.InlineSectionFormat);
+        if (!paragraph && !mark)
             return false;
 
         var rightTokens = ParagraphTokens(op.RightAnchor, ctx.Right, ctx.Settings);
-        sink.Add(new IrRevision(IrRevisionType.FormatChanged,
-            RawText(rightTokens, 0, rightTokens.Count), ctx.Author, ctx.Date,
-            FormatChange: IrModeledFormat.ParaFormatChangeDetails(lp.Format, rp.Format),
-            LeftAnchor: op.LeftAnchor, RightAnchor: op.RightAnchor));
+        var text = RawText(rightTokens, 0, rightTokens.Count);
+        if (paragraph)
+            sink.Add(new IrRevision(IrRevisionType.FormatChanged, text, ctx.Author, ctx.Date,
+                FormatChange: IrModeledFormat.ParaFormatChangeDetails(lp.Format, rp.Format),
+                LeftAnchor: op.LeftAnchor, RightAnchor: op.RightAnchor));
+        // The paragraph mark's run properties are the paragraph's (w:pPr/w:rPr), so their change is a second
+        // Paragraph-scope revision carrying the mark's run-property delta, as the redline's mark w:rPrChange is.
+        if (mark)
+            sink.Add(new IrRevision(IrRevisionType.FormatChanged, text, ctx.Author, ctx.Date,
+                FormatChange: IrModeledFormat.MarkFormatChangeDetails(lp.MarkFormat, rp.MarkFormat),
+                LeftAnchor: op.LeftAnchor, RightAnchor: op.RightAnchor));
         return true;
+    }
+
+    /// <summary>True when two paired paragraphs' marks differ in their run properties under the settings'
+    /// policy: their modeled run fields under ModeledOnly (issue #1794), the whole mapped format under Full.</summary>
+    private static bool MarkFormatDiffers(IrParagraph left, IrParagraph right, IrDiffSettings settings)
+    {
+        if (!settings.TrackParagraphFormatChanges || !settings.TrackParagraphMarkFormatChanges)
+            return false;
+        return settings.FormatComparison == IrFormatComparison.ModeledOnly
+            ? IrModeledFormat.RunKey(left.MarkFormat) != IrModeledFormat.RunKey(right.MarkFormat)
+            : !EqualityComparer<IrRunFormat?>.Default.Equals(left.MarkFormat, right.MarkFormat);
     }
 
     /// <summary>

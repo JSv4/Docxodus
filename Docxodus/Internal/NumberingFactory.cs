@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
@@ -434,6 +435,200 @@ internal static class NumberingFactory
             part.PutXDocument();
         }
         return mutated;
+    }
+
+    /// <summary>The number formats <see cref="ApplyLevelSpec"/> writes (<c>w:numFmt</c> tokens).</summary>
+    internal static readonly string[] EditableLevelFormats =
+    {
+        "decimal", "decimalZero", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman",
+        "bullet", "none", "ordinal", "cardinalText", "ordinalText",
+    };
+
+    private static int LevelOf(XElement e) =>
+        int.TryParse((string?)e.Attribute(W + "ilvl"), out var v) ? v : -1;
+
+    private static XElement? NumOf(XElement root, int numId) =>
+        root.Elements(W + "num").FirstOrDefault(n => (string?)n.Attribute(W + "numId") == numId.ToString());
+
+    private static XElement? AbstractOf(XElement root, string? abstractId) =>
+        abstractId is null ? null
+        : root.Elements(W + "abstractNum").FirstOrDefault(a => (string?)a.Attribute(W + "abstractNumId") == abstractId);
+
+    /// <summary>
+    /// The abstract definition that defines the levels of <paramref name="numId"/>'s list,
+    /// following a <c>w:numStyleLink</c> to the list style's own definition when there is one.
+    /// </summary>
+    internal static XElement? DefiningAbstractNum(WordprocessingDocument doc, int numId)
+    {
+        var root = doc.MainDocumentPart?.NumberingDefinitionsPart?.GetXDocument().Root;
+        var num = root is null ? null : NumOf(root, numId);
+        var abstractNum = root is null ? null : AbstractOf(root, (string?)num?.Element(W + "abstractNumId")?.Attribute(W + "val"));
+        var styleLink = (string?)abstractNum?.Element(W + "numStyleLink")?.Attribute(W + "val");
+        if (styleLink is null || root is null) return abstractNum;
+        // A list that links to a list style: the definition is the one whose w:styleLink names it.
+        return root.Elements(W + "abstractNum")
+            .FirstOrDefault(a => (string?)a.Element(W + "styleLink")?.Attribute(W + "val") == styleLink) ?? abstractNum;
+    }
+
+    /// <summary>
+    /// The nine levels of <paramref name="numId"/>'s list as Word shows them: each level of its
+    /// definition, a level the list overrides whole (<c>w:lvlOverride/w:lvl</c>) as overridden.
+    /// Levels the definition leaves out are skipped.
+    /// </summary>
+    internal static IReadOnlyList<ListLevelInfo> ReadLevels(WordprocessingDocument doc, int numId)
+    {
+        var root = doc.MainDocumentPart?.NumberingDefinitionsPart?.GetXDocument().Root;
+        var abstractNum = DefiningAbstractNum(doc, numId);
+        if (root is null || abstractNum is null) return Array.Empty<ListLevelInfo>();
+        var num = NumOf(root, numId);
+        var levels = new List<ListLevelInfo>();
+        for (int l = 0; l < 9; l++)
+        {
+            var lvl = num?.Elements(W + "lvlOverride").FirstOrDefault(o => LevelOf(o) == l)?.Element(W + "lvl")
+                ?? abstractNum.Elements(W + "lvl").FirstOrDefault(e => LevelOf(e) == l);
+            if (lvl is null) continue;
+            var ind = lvl.Element(W + "pPr")?.Element(W + "ind");
+            int text = WordprocessingMLUtil.AttributeToTwips(WordprocessingMLUtil.IndLeadingAttribute(ind)) ?? 0;
+            int hanging = WordprocessingMLUtil.AttributeToTwips(ind?.Attribute(W + "hanging")) ?? 0;
+            int firstLine = WordprocessingMLUtil.AttributeToTwips(ind?.Attribute(W + "firstLine")) ?? 0;
+            var isLgl = lvl.Element(W + "isLgl");
+            levels.Add(new ListLevelInfo
+            {
+                Level = l,
+                Format = (string?)lvl.Element(W + "numFmt")?.Attribute(W + "val") ?? "decimal",
+                Text = (string?)lvl.Element(W + "lvlText")?.Attribute(W + "val") ?? "",
+                Start = int.TryParse((string?)lvl.Element(W + "start")?.Attribute(W + "val"), out var s) ? s : 1,
+                NumberPositionTwips = hanging != 0 ? text - hanging : text + firstLine,
+                TextPositionTwips = text,
+                Legal = isLgl is not null && (string?)isLgl.Attribute(W + "val") is null or "1" or "true" or "on",
+            });
+        }
+        return levels;
+    }
+
+    /// <summary>
+    /// The abstract definition <paramref name="numId"/>'s list may change without changing any
+    /// other list, made so if needed: one of Docxodus's own shared definitions (which every new
+    /// list of that format reuses) is copied, under a new id and <c>w:nsid</c>, and the list's
+    /// <c>w:num</c> pointed at the copy. A document's own definition is the list's, as Word treats
+    /// it: changing it changes every part of that list, restarted parts too. Null when the list
+    /// takes its levels from a list style (<c>w:numStyleLink</c>), which is edited as a style.
+    /// </summary>
+    internal static XElement? OwnAbstractNum(WordprocessingDocument doc, int numId)
+    {
+        var part = doc.MainDocumentPart?.NumberingDefinitionsPart;
+        var root = part?.GetXDocument().Root;
+        var num = root is null ? null : NumOf(root, numId);
+        var abstractNum = root is null ? null : AbstractOf(root, (string?)num?.Element(W + "abstractNumId")?.Attribute(W + "val"));
+        if (part is null || root is null || num is null || abstractNum is null) return null;
+        if (abstractNum.Element(W + "numStyleLink") is not null) return null;
+        if (!IsDocxodusDefinition(abstractNum)) return abstractNum;
+
+        int absId = NextId(root, "abstractNum", "abstractNumId");
+        var copy = new XElement(abstractNum);
+        copy.SetAttributeValue(W + "abstractNumId", absId);
+        // A fresh nsid (8 hex digits) no other definition carries, so the copy is never taken
+        // for the shared definition it came from.
+        var taken = root.Elements(W + "abstractNum")
+            .Select(a => ((string?)a.Element(W + "nsid")?.Attribute(W + "val"))?.ToUpperInvariant())
+            .ToHashSet();
+        uint seed = 0x1D0C0000u + (uint)absId;
+        while (taken.Contains(seed.ToString("X8"))) seed++;
+        copy.Element(W + "nsid")?.SetAttributeValue(W + "val", seed.ToString("X8"));
+        WordprocessingMLUtil.InsertNumberingChildInOrder(root, copy);
+        num.Element(W + "abstractNumId")!.SetAttributeValue(W + "val", absId);
+        part.PutXDocument();
+        return copy;
+    }
+
+    /// <summary>True when <paramref name="numId"/>'s list takes its levels from a list style
+    /// (its definition is a <c>w:numStyleLink</c>).</summary>
+    internal static bool IsStyleLinked(WordprocessingDocument doc, int numId)
+    {
+        var root = doc.MainDocumentPart?.NumberingDefinitionsPart?.GetXDocument().Root;
+        var num = root is null ? null : NumOf(root, numId);
+        var abstractNum = root is null ? null : AbstractOf(root, (string?)num?.Element(W + "abstractNumId")?.Attribute(W + "val"));
+        return abstractNum?.Element(W + "numStyleLink") is not null;
+    }
+
+    /// <summary>The <c>w:num</c> of <paramref name="numId"/>, or null.</summary>
+    internal static XElement? FindNum(WordprocessingDocument doc, int numId)
+    {
+        var root = doc.MainDocumentPart?.NumberingDefinitionsPart?.GetXDocument().Root;
+        return root is null ? null : NumOf(root, numId);
+    }
+
+    // CT_Lvl's child order, for writing a child into its place.
+    private static readonly string[] LvlChildOrder =
+    {
+        "start", "numFmt", "lvlRestart", "pStyle", "isLgl", "suff", "lvlText", "lvlPicBulletId",
+        "legacy", "lvlJc", "pPr", "rPr",
+    };
+
+    private static void SetLvlChild(XElement lvl, XElement child)
+    {
+        lvl.Elements(child.Name).Remove();
+        int index = Array.IndexOf(LvlChildOrder, child.Name.LocalName);
+        var after = lvl.Elements().LastOrDefault(e =>
+            Array.IndexOf(LvlChildOrder, e.Name.LocalName) is var i && i >= 0 && i < index);
+        if (after is null) lvl.AddFirst(child); else after.AddAfterSelf(child);
+    }
+
+    /// <summary>
+    /// Write <paramref name="spec"/> into level <c>spec.Level</c> of <paramref name="abstractNum"/>
+    /// (which must define it), and drop what in <paramref name="num"/> would hide the change: a
+    /// whole overriding level, and, when the start changes, a restart at the level.
+    /// </summary>
+    internal static void ApplyLevelSpec(XElement abstractNum, XElement num, ListLevelSpec spec)
+    {
+        var lvl = abstractNum.Elements(W + "lvl").First(e => LevelOf(e) == spec.Level);
+        var ovr = num.Elements(W + "lvlOverride").FirstOrDefault(o => LevelOf(o) == spec.Level);
+        ovr?.Element(W + "lvl")?.Remove();
+        if (spec.Start is not null) ovr?.Element(W + "startOverride")?.Remove();
+        if (ovr is not null && !ovr.Elements().Any()) ovr.Remove();
+
+        string oldFormat = (string?)lvl.Element(W + "numFmt")?.Attribute(W + "val") ?? "decimal";
+        string format = spec.Format ?? oldFormat;
+        string? text = spec.Text;
+        if (spec.Format is not null && (format == "bullet") != (oldFormat == "bullet"))
+        {
+            // Between a bullet and a number: the bullet's symbol font must not dress the number
+            // (a number takes the paragraph's font), and the old text cannot serve.
+            lvl.Element(W + "rPr")?.Element(W + "rFonts")?.Remove();
+            if (lvl.Element(W + "rPr") is { } rPr && !rPr.HasElements) rPr.Remove();
+            text ??= format == "bullet" ? "•" : $"%{spec.Level + 1}.";
+        }
+
+        if (spec.Start is { } start) SetLvlChild(lvl, new XElement(W + "start", new XAttribute(W + "val", start)));
+        if (spec.Format is not null) SetLvlChild(lvl, new XElement(W + "numFmt", new XAttribute(W + "val", format)));
+        if (spec.Legal is { } legal)
+        {
+            lvl.Element(W + "isLgl")?.Remove();
+            if (legal) SetLvlChild(lvl, new XElement(W + "isLgl"));
+        }
+        if (text is not null) SetLvlChild(lvl, new XElement(W + "lvlText", new XAttribute(W + "val", text)));
+
+        if (spec.NumberPositionTwips is not null || spec.TextPositionTwips is not null)
+        {
+            var pPr = lvl.Element(W + "pPr");
+            if (pPr is null) { pPr = new XElement(W + "pPr"); SetLvlChild(lvl, pPr); }
+            var ind = pPr.Element(W + "ind");
+            if (ind is null) { ind = new XElement(W + "ind"); pPr.Add(ind); }
+            var leading = WordprocessingMLUtil.IndLeadingAttribute(ind);
+            int oldText = WordprocessingMLUtil.AttributeToTwips(leading) ?? 0;
+            int oldHanging = WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W + "hanging")) ?? 0;
+            int oldFirst = WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W + "firstLine")) ?? 0;
+            int textAt = spec.TextPositionTwips ?? oldText;
+            int numberAt = spec.NumberPositionTwips ?? (oldHanging != 0 ? oldText - oldHanging : oldText + oldFirst);
+            ind.SetAttributeValue(leading?.Name ?? W + "left", textAt);
+            ind.SetAttributeValue(W + "hanging", numberAt <= textAt ? textAt - numberAt : null);
+            ind.SetAttributeValue(W + "firstLine", numberAt > textAt ? numberAt - textAt : null);
+            // (indents in character units would win over these in Word)
+            ind.SetAttributeValue(W + "leftChars", null);
+            ind.SetAttributeValue(W + "startChars", null);
+            ind.SetAttributeValue(W + "hangingChars", null);
+            ind.SetAttributeValue(W + "firstLineChars", null);
+        }
     }
 
     /// <summary>
