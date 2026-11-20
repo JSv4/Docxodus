@@ -511,7 +511,7 @@ status, checks performed and any outstanding human approval; staging alone is no
 ## Dependencies
 
 - **DocumentFormat.OpenXml** 3.5.1
-- **SkiaSharp** 4.148.0 (+ `SkiaSharp.NativeAssets.Linux.NoDependencies`), excluded under `WASM_BUILD`
+- **SkiaSharp** 4.156.1 (+ `SkiaSharp.NativeAssets.Linux.NoDependencies`), excluded under `WASM_BUILD`
 
 Target framework: `net10.0` for both library and tests.
 

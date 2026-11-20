@@ -162,7 +162,10 @@ namespace Docxodus
                 var weight = bold ? SKFontStyleWeight.Bold : SKFontStyleWeight.Normal;
                 var slant = italic ? SKFontStyleSlant.Italic : SKFontStyleSlant.Upright;
                 using var typeface = SKTypeface.FromFamilyName(fontName, weight, SKFontStyleWidth.Normal, slant);
-                using var font = new SKFont(typeface, SizeInPixels(sz));
+                // Linear metrics: each glyph's advance unrounded, as Word sets text. Hinted, the advances
+                // snap to whole pixels at the run's size, so 10 pt Times New Roman measured 236.25 pt
+                // where Word sets 233.5 pt, and each 11 pt Liberation Mono glyph 9 px where it is 8.8.
+                using var font = new SKFont(typeface, SizeInPixels(sz)) { LinearMetrics = true };
 
                 var result = (int)font.MeasureText(text);
 
