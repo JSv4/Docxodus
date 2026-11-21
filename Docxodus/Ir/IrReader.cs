@@ -3241,8 +3241,8 @@ internal static class IrReader
         return IrNodeList.From(refs);
     }
 
-    /// <summary>The story a header or footer reference selects. <c>w:type</c> is optional; an absent or
-    /// unrecognized value means the default story.</summary>
+    /// <summary>The story a header or footer reference selects. The schema requires <c>w:type</c>; a reference
+    /// without one, or with an unrecognized value, is read as the default story.</summary>
     internal static IrHeaderFooterKind ReferenceKind(XElement reference) => (string?)reference.Attribute(W + "type") switch
     {
         "first" => IrHeaderFooterKind.First,

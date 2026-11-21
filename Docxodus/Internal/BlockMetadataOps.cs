@@ -232,7 +232,7 @@ internal static class BlockMetadataOps
     }
 
     /// <summary>The story kind a <c>w:headerReference</c>/<c>w:footerReference</c> supplies.
-    /// <c>w:type</c> is optional; an absent or unrecognized value means the default story.</summary>
+    /// The schema requires <c>w:type</c>; an absent or unrecognized value is read as the default story.</summary>
     private static HeaderFooterKind ParseRefKind(XElement reference)
         => (string?)reference.Attribute(W.type) switch
         {

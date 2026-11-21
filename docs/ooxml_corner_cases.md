@@ -9646,3 +9646,32 @@ Tests: `BlockFormatChangeTests.A_section_change_archives_the_default_orientation
 `BlockFormatChangeTests.A_stated_default_and_an_omitted_one_are_not_a_section_change`,
 `BlockFormatChangeTests.A_value_written_out_beside_an_extension_property_keeps_schema_order`,
 `BlockFormatChangeTests.A_paragraph_whose_only_change_is_its_section_break_has_no_run_format_change`.
+
+## A header or footer reference without `w:type` (#1803)
+
+The schema requires `w:type` on `w:headerReference` and `w:footerReference`; some generators leave it
+out. Original: one section whose header is referenced without a type. Revision: the same, with a word
+added to the header.
+
+```xml
+<w:sectPr><w:headerReference r:id="rStory"/><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>
+```
+
+| | Reads the untyped reference as |
+| --- | --- |
+| Open XML SDK 3.5.1 validator | invalid: `Sch_MissRequiredAttribute`, "The required attribute 'type' is missing" |
+| LibreOffice 25.8.7.3 | no reference: the PDF it exports has no header, while the same document with `w:type="default"` shows it |
+| Docxodus `WmlToHtmlConverter` (`--render-headers-footers`) | no reference: the header is not rendered |
+| Docxodus IR reader (`IrReader.ReferenceKind`) and session metadata (`BlockMetadataOps.ParseRefKind`) | the default story |
+| Word | not checked |
+
+The comparison reads stories through the IR reader, so it compares the default header of both documents
+and redlines it. Before the fix, binding that story to its section (`BindHeaderFooterReference`) and
+re-attaching an orphaned story (`EnsureStoryReference`) looked for a literal `w:type="default"`, found
+none beside the untyped reference, and added one: the section then had two default references, to the
+same part, or after a new section break to two different parts. Both now compare
+`IrReader.ReferenceKind`, so the untyped reference is rebound and kept as written. The redline does not
+add the missing attribute, so it is exactly as valid as its input; a reference the comparison writes
+itself is typed.
+
+Tests: `UntypedStoryReferenceTests`.

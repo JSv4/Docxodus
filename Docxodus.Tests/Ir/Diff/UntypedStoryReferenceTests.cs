@@ -9,9 +9,9 @@ using static Docxodus.Tests.Ir.Diff.HeaderFooterFixtures;
 namespace Docxodus.Tests.Ir.Diff;
 
 /// <summary>
-/// A header or footer reference written without <c>w:type</c> is the section's default story. When that story
-/// changes, the comparison keeps the reference as written and binds it to the redlined part, rather than adding
-/// a second, typed default reference beside it (issue #1803).
+/// A header or footer reference written without <c>w:type</c>, which the schema requires, is read as the section's
+/// default story. When that story changes, the comparison keeps the reference as written and binds it to the
+/// redlined part, rather than adding a second, typed default reference beside it (issue #1803).
 /// </summary>
 public class UntypedStoryReferenceTests
 {
