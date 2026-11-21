@@ -58,6 +58,7 @@ public sealed class DocxDiffComparison
     private readonly Lazy<(WmlDocument Left, WmlDocument Right)> _preflighted;
     private readonly Lazy<(IrDocument Left, IrDocument Right)> _ir;
     private readonly Lazy<IrBlockAlignment> _alignment;
+    private readonly Lazy<IReadOnlySet<string>?> _preservedReplacements;
     private readonly Lazy<IrEditScript> _markupBuild;
     private readonly Lazy<(IrEditScript Data, IrEditScript? Markup)> _scripts;
     private readonly Lazy<WmlDocument> _redline;
@@ -117,6 +118,17 @@ public sealed class DocxDiffComparison
         {
             var (irLeft, irRight) = _ir.Value;
             return IrBlockAligner.Align(irLeft, irRight, DataSettings());
+        }, LazyThreadSafetyMode.ExecutionAndPublication);
+
+        // With the inputs' own revisions kept, the redline replaces whole each kept block whose revision holds
+        // tracked changes; the header and footer section map counts both copies of such a block's section break
+        // (issue #1809).
+        _preservedReplacements = new(() =>
+        {
+            if (!_settings.PreserveInputRevisions)
+                return null;
+            var (left, right) = _preflighted.Value;
+            return IrMarkupRenderer.PreservedReplacementAnchors(_ir.Value.Right, left, right);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
         // The fused MARKUP build, before relocation pairing (only built when the redline fuses runs).
@@ -273,7 +285,7 @@ public sealed class DocxDiffComparison
     private IrEditScript FinalizeStories(IrEditScript script, IrDiffSettings settings)
     {
         var (left, right) = _ir.Value;
-        return IrEditScriptBuilder.FinalizeHeaderFooterOps(script, left, right, settings, _alignment.Value);
+        return IrEditScriptBuilder.FinalizeHeaderFooterOps(script, left, right, settings, _preservedReplacements.Value);
     }
 
     /// <summary>
