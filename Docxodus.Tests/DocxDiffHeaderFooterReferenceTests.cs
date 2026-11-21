@@ -460,6 +460,73 @@ public class DocxDiffHeaderFooterReferenceTests
         AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), false, "default");
     }
 
+    /// <summary>
+    /// Issue #1805: the revision removes the section break of a paragraph both documents keep, and the original's
+    /// last section has no story of its own: it inherits the one the removed break names. Accepting the redline
+    /// removes that break, so the last section keeps the story only by naming it. <paramref name="reverse"/> adds
+    /// the break instead; <paramref name="changed"/> also edits the story.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "default", true, false)]
+    [InlineData(true, "default", false, false)]
+    [InlineData(false, "default", true, false)]
+    [InlineData(false, "default", false, false)]
+    [InlineData(true, "first", true, false)]
+    [InlineData(false, "even", false, false)]
+    [InlineData(true, "default", true, true)]
+    [InlineData(false, "default", false, true)]
+    public void RemovedBreakOnRetainedParagraph_KeepsTheStoryTheNextSectionInherited(bool header, string kind, bool changed, bool reverse)
+    {
+        string[] bodies = { "The ferry timetable changes in October.", "Passengers board from the eastern pier." };
+        var stories = new[] { (kind, "a") };
+        WmlDocument Document(Section[] sections, string story) => HeaderFooterFixtures.Build(sections,
+            header ? new Dictionary<string, string[]> { ["a"] = new[] { story } } : null,
+            header ? null : new Dictionary<string, string[]> { ["a"] = new[] { story } },
+            titlePg: kind == "first", evenAndOddHeaders: kind == "even");
+        var original = Document(new[] { new Section(new[] { bodies[0] }, Headers: header ? stories : null, Footers: header ? null : stories),
+            new Section(new[] { bodies[1] }) }, "Harbour notices");
+        var revised = Document(new[] { new Section(bodies, Headers: header ? stories : null, Footers: header ? null : stories) },
+            changed ? "Harbour notices, winter" : "Harbour notices");
+        if (reverse) (original, revised) = (revised, original);
+        AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), header, kind);
+    }
+
+    /// <summary>
+    /// Controls for #1805: the paragraph holding the break is deleted with it, which main already handled, and the
+    /// revision drops the story along with the break, so neither view of the merged section has one to keep.
+    /// </summary>
+    [Theory]
+    [InlineData("deleted-carrier")]
+    [InlineData("story-dropped")]
+    public void RemovedBreak_Controls(string scenario)
+    {
+        string[] bodies = { "The ferry timetable changes in October.", "Passengers board from the eastern pier." };
+        var stories = new[] { ("default", "a") };
+        var original = HeaderFooterFixtures.Build(new[] { new Section(new[] { bodies[0] }, Headers: stories), new Section(new[] { bodies[1] }) },
+            new Dictionary<string, string[]> { ["a"] = new[] { "Harbour notices" } });
+        var revised = scenario == "deleted-carrier"
+            ? HeaderFooterFixtures.Build(new[] { new Section(new[] { bodies[1] }, Headers: stories) },
+                new Dictionary<string, string[]> { ["a"] = new[] { "Harbour notices, winter" } })
+            : HeaderFooterFixtures.Build(new[] { new Section(bodies) });
+        AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), true, "default");
+    }
+
+    [Fact]
+    public void RemovedBreakOnRetainedParagraph_LeavesTheRemovedSectionsOwnStoryUnrevised()
+    {
+        // The last section names its own story here. The removed break's section holds only the original's copy of
+        // the paragraph, so its story need only reject to the original's: it is not redlined into the revision's.
+        string[] bodies = { "The ferry timetable changes in October.", "Passengers board from the eastern pier." };
+        var original = HeaderFooterFixtures.Build(new[] { new Section(new[] { bodies[0] }, Headers: new[] { ("default", "a") }),
+                new Section(new[] { bodies[1] }, Headers: new[] { ("default", "b") }) },
+            new Dictionary<string, string[]> { ["a"] = new[] { "Harbour notices" }, ["b"] = new[] { "Pier timetable" } });
+        var revised = HeaderFooterFixtures.Build(new[] { new Section(bodies, Headers: new[] { ("default", "b") }) },
+            new Dictionary<string, string[]> { ["b"] = new[] { "Pier timetable, winter" } });
+        var result = DocxCompare.Compare(original, revised);
+        AssertStoryEndpoints(original, revised, result, true, "default");
+        Assert.DoesNotMatch("<w:(ins|del) ", ReferencedStoryXml(result, true, 0)!);
+    }
+
     [Fact]
     public void SectionBoundaryInsideControl_DoesNotSuppressLaterStoryEdits()
     {

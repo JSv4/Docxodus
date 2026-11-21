@@ -249,6 +249,11 @@ internal static class IrEditScriptBuilder
         {
             bool hasLeft = leftSections.TryGetValue(entry.Left?.Anchor.ToString() ?? "", out var l);
             bool hasRight = rightSections.TryGetValue(entry.Right?.Anchor.ToString() ?? "", out var r);
+            // A kept paragraph that gains or loses its break is drawn as its deleted copy, then its inserted copy
+            // (StructuralCarrierDiffers), so a break only the original's copy carries ends the review section before
+            // the revision's copy, which opens the next one (issue #1805).
+            bool leftCopyEnds = hasLeft && hasRight && l.Ends && !r.Ends;
+            int rightBefore = currentRight;
             if (hasLeft) currentLeft = l.Section;
             if (hasRight) currentRight = r.Section;
             if (entry.MultiBlocks is { Count: > 0 } members)
@@ -259,13 +264,13 @@ internal static class IrEditScriptBuilder
             }
             if (!l.Ends && !r.Ends)
                 continue;
-            // Moved boundaries and changed retained carriers still need the existing grid; the
-            // projection covers inserted and deleted boundaries, alone or mixed.
-            if (entry.Kind is IrAlignmentKind.Moved or IrAlignmentKind.MovedModified ||
-                hasLeft && hasRight && l.Ends != r.Ends)
+            // Moved boundaries still need the existing grid; the projection covers inserted and deleted
+            // boundaries, alone or mixed, including the copies of a kept paragraph whose break changed.
+            if (entry.Kind is IrAlignmentKind.Moved or IrAlignmentKind.MovedModified)
                 return null;
-            sections.Add((currentLeft, currentRight));
-            currentLeft = currentRight = -1;
+            sections.Add((currentLeft, leftCopyEnds ? rightBefore : currentRight));
+            currentLeft = -1;
+            currentRight = leftCopyEnds ? r.Section : -1;
             if (l.Ends) seenLeft++;
             if (r.Ends) seenRight++;
         }
