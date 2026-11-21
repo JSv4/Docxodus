@@ -1215,9 +1215,11 @@ internal static class IrEditScriptBuilder
                 case IrAlignmentKind.Unchanged:
                 case IrAlignmentKind.FormatOnly:
                     // Textbox interiors are absent from their host's format fingerprint, including
-                    // when that host is nested in a table or block wrapper.
+                    // when that host is nested in a table or block wrapper. A table whose cells changed
+                    // formatting is diffed too, so the change is tracked inside its cell.
                     if (StructuralCarrierDiffers(entry.Left!, entry.Right!) ||
-                        TextboxContentDiffers(entry.Left!, entry.Right!))
+                        TextboxContentDiffers(entry.Left!, entry.Right!) ||
+                        CellFormattingDiffers(entry.Left!, entry.Right!, settings))
                         ops.Add(MakeModifyOp(entry.Left!, entry.Right!, settings));
                     else
                         ops.Add(new IrEditOp(entry.Kind == IrAlignmentKind.Unchanged
@@ -1981,6 +1983,36 @@ internal static class IrEditScriptBuilder
     {
         for (int i = 0; i < Math.Min(left.Count, right.Count); i++)
             if (StructuralCarrierDiffers(left[i], right[i])) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a table pair has a cell whose blocks keep their text but change formatting (issue #1797). A
+    /// cell's content hash covers its text and not its paragraphs' formatting, so without this the table, row
+    /// and cell gates treat such a cell as unchanged and copy the revised one untracked. Blocks compare by the
+    /// aligner's own format rule, so the comparison policy and tracking settings apply as they do in the body.
+    /// </summary>
+    internal static bool CellFormattingDiffers(IrBlock left, IrBlock right, IrDiffSettings settings)
+    {
+        if (left is not IrTable lt || right is not IrTable rt) return false;
+        for (int i = 0; i < Math.Min(lt.Rows.Count, rt.Rows.Count); i++)
+            if (CellFormattingDiffers(lt.Rows[i], rt.Rows[i], settings)) return true;
+        return false;
+    }
+
+    internal static bool CellFormattingDiffers(IrRow left, IrRow right, IrDiffSettings settings)
+    {
+        for (int i = 0; i < Math.Min(left.Cells.Count, right.Cells.Count); i++)
+            if (CellFormattingDiffers(left.Cells[i], right.Cells[i], settings)) return true;
+        return false;
+    }
+
+    internal static bool CellFormattingDiffers(IrCell left, IrCell right, IrDiffSettings settings)
+    {
+        // Equal stored fingerprints are format-equal, as in the aligner's first anchor pass.
+        if (left.FormatFingerprint.Equals(right.FormatFingerprint)) return false;
+        for (int i = 0; i < Math.Min(left.Blocks.Count, right.Blocks.Count); i++)
+            if (!IrBlockAligner.FormatEqual(left.Blocks[i], right.Blocks[i], settings)) return true;
         return false;
     }
 

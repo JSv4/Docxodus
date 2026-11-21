@@ -703,7 +703,8 @@ internal static class IrTableDiffer
             {
                 case IrRowOpKind.EqualRow:
                     if (IrEditScriptBuilder.RowCarriersDiffer(leftRows[li], rightRows[j]) ||
-                        IrEditScriptBuilder.TextboxContentDiffers(leftRows[li], rightRows[j]))
+                        IrEditScriptBuilder.TextboxContentDiffers(leftRows[li], rightRows[j]) ||
+                        IrEditScriptBuilder.CellFormattingDiffers(leftRows[li], rightRows[j], settings))
                         goto case IrRowOpKind.ModifyRow;
                     ops.Add(new IrRowOp(IrRowOpKind.EqualRow,
                         leftRows[li].Anchor.ToString(), rightRows[j].Anchor.ToString(), null));
@@ -1026,12 +1027,13 @@ internal static class IrTableDiffer
         return cellOps;
     }
 
-    /// <summary>Build one paired cell op, recursing for content, cell-shell, or nested structural carrier changes.</summary>
+    /// <summary>Build one paired cell op, recursing for content, cell-shell, formatting, or nested structural carrier changes.</summary>
     private static IrCellOp PairedCellOp(IrCell left, IrCell right, IrDiffSettings settings)
     {
         var blockOps = left.ContentHash.Equals(right.ContentHash) &&
             !IrEditScriptBuilder.BlockCarriersDiffer(left.Blocks, right.Blocks) &&
-            !IrEditScriptBuilder.TextboxContentDiffers(left.Blocks, right.Blocks)
+            !IrEditScriptBuilder.TextboxContentDiffers(left.Blocks, right.Blocks) &&
+            !IrEditScriptBuilder.CellFormattingDiffers(left, right, settings)
             ? null
             : IrNodeList.From(DiffCellBlocks(left, right, settings));
         return new IrCellOp(left.Anchor.ToString(), right.Anchor.ToString(), blockOps);
