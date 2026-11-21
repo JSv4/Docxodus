@@ -710,21 +710,29 @@ internal static class IrCompositeMarkupRenderer
             IrMarkupRenderer.RenderComposedParagraph(compositeOp, baseIr, reviewerIrs, state, sink);
         else
             IrMarkupRenderer.RenderBlockOp(op, state, sink);
-        if (compositeOp.EqualReviewerMarkers is { } reviewerMarkers && sink.Count == emittedFrom + 1)
+        // The reviewers who left this block's text equal but added comments or bookmarks: carried into the base's copy,
+        // or into another reviewer's edit of a paragraph (or its formatting) at their original-view offsets (issue #1812).
+        // A block another reviewer edits otherwise, or replaces whole, keeps such a comment on a copy that still holds
+        // the commented text as written: an edited table's, or the inserted copy of a paragraph whose text is unchanged.
+        // A comment on text another reviewer deletes is not carried: no copy that survives accepting holds that text.
+        if (compositeOp.EqualReviewerMarkers is { } reviewerMarkers && sink.Count > emittedFrom)
         {
-            if (baseSourced)
-                foreach (var reviewer in reviewerMarkers)
-                    if (reviewer.Reviewer >= 0 && reviewer.Reviewer < reviewerIrs.Count)
-                        IrMarkupRenderer.CarryMissingComments(sink[emittedFrom],
-                            IrMarkupRenderer.SourceElement(reviewer.Anchor, reviewerIrs[reviewer.Reviewer]));
-            if (sink[emittedFrom].Name == W.p && (baseSourced || op.TokenDiff is not null))
-                IrMarkupRenderer.CarryReviewerOnlyBookmarks(sink[emittedFrom], reviewerMarkers, baseIr, reviewerIrs, state);
-            else if (baseSourced && IrMarkupRenderer.SourceElement(op.LeftAnchor, baseIr) is { } baseSource)
+            var counterparts = reviewerMarkers.Where(b => b.Reviewer >= 0 && b.Reviewer < reviewerIrs.Count)
+                .Select(b => (b.Reviewer, Source: IrMarkupRenderer.SourceElement(b.Anchor, reviewerIrs[b.Reviewer]), b.Author))
+                .Where(c => c.Source is not null).Select(c => (c.Reviewer, Source: c.Source!, c.Author)).ToList();
+            bool single = sink.Count == emittedFrom + 1;
+            if (single && sink[emittedFrom].Name == W.p &&
+                (baseSourced || op.TokenDiff is not null || op.Kind == IrEditOpKind.FormatOnlyBlock))
+                IrMarkupRenderer.CarryReviewerInlineMarkers(sink[emittedFrom], counterparts, baseIr,
+                    IrMarkupRenderer.SourceElement(op.LeftAnchor, baseIr), state, baseCopy: baseSourced);
+            else if (single && baseSourced && IrMarkupRenderer.SourceElement(op.LeftAnchor, baseIr) is { } baseSource)
                 IrMarkupRenderer.ReconcileCompositeEqualContainerMarkers(sink[emittedFrom], baseSource,
-                    reviewerMarkers.Where(b => b.Reviewer >= 0 && b.Reviewer < reviewerIrs.Count)
-                        .Select(b => (b.Reviewer, IrMarkupRenderer.SourceElement(b.Anchor, reviewerIrs[b.Reviewer])))
-                        .Where(c => c.Item2 is not null).Select(c => (c.Reviewer, c.Item2!)).ToList(),
+                    counterparts.Select(c => (c.Reviewer, c.Source)).ToList(),
                     AuthorsByReviewer(reviewerMarkers, reviewerIrs.Count), state);
+            else if (!baseSourced && op.Kind != IrEditOpKind.DeleteBlock)
+                IrMarkupRenderer.CarryReviewerComments(sink.GetRange(emittedFrom, sink.Count - emittedFrom),
+                    counterparts.Select(c => c.Source), baseIr, IrMarkupRenderer.SourceElement(op.LeftAnchor, baseIr), state,
+                    originalView: false);
         }
 
         if (state.CommentAttachments?.For(op.LeftAnchor) is not null)

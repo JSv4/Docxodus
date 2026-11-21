@@ -1157,9 +1157,9 @@ internal static class IrCompositeMerger
         }
         var touched = entries.Where(e => e.Op.Kind != IrEditOpKind.EqualBlock).ToList();
 
-        // Marker-only reviewers contribute even when several other reviewers edit the table's cells.
+        // Marker-only reviewers contribute even when several other reviewers edit the table's cells or its format.
         if (baseIr.AnchorIndex.TryGetValue(anchor, out var editedBlock) && editedBlock is IrTable editedTable &&
-            MarkerOnlyTableReviewers(anchor, editedTable, touched[0], entries, reviewers) is { Count: > 0 } promoted &&
+            MarkerOnlyTableReviewers(anchor, editedTable, touched, entries, reviewers) is { Count: > 0 } promoted &&
             ComposeTable(anchor, editedTable, touched.Concat(promoted).ToList(), reviewers, baseIr, policy, settings,
                 ops, conflicts, ref nextConflictId))
             return;
@@ -1846,17 +1846,17 @@ internal static class IrCompositeMerger
     }
 
     /// <summary>
-    /// The reviewers to compose into a table that <paramref name="editor"/> alone changed because their own copy,
-    /// equal to the base table, differs from it in the bookmarks or comment ranges between a cell's blocks (issue
-    /// #1175): each as an all-EqualRow ModifyBlock pairing the two tables' rows by position. Only for an editor's
-    /// ModifyBlock with a table diff (never a whole-table delete or replace).
+    /// The reviewers to compose into a table that <paramref name="touched"/> changed because their own copy, equal to
+    /// the base table, differs from it in the bookmarks or comments in a cell (issues #1175, #1812): each as an
+    /// all-EqualRow ModifyBlock pairing the two tables' rows by position. Only when every toucher edits the table's
+    /// content or its format, as <see cref="ComposeTable"/> requires (never a whole-table delete or replace).
     /// </summary>
     private static List<(int Reviewer, IrEditOp Op)> MarkerOnlyTableReviewers(string anchor, IrTable baseTable,
-        (int Reviewer, IrEditOp Op) editor, List<(int Reviewer, IrEditOp Op)> entries,
+        List<(int Reviewer, IrEditOp Op)> touched, List<(int Reviewer, IrEditOp Op)> entries,
         IReadOnlyList<(string Author, IrDocument Ir)> reviewers)
     {
         var promoted = new List<(int Reviewer, IrEditOp Op)>();
-        if (editor.Op.Kind != IrEditOpKind.ModifyBlock || editor.Op.TableDiff is null)
+        if (!touched.All(e => IsTableContentOrShellEdit(e.Op, reviewers[e.Reviewer].Ir)))
             return promoted;
         foreach (var (reviewer, op) in entries)
         {
