@@ -1233,6 +1233,16 @@ internal static class SemanticDiffEngine
                     "table", la, ra, left.Anchor.Scope, right.Anchor.Scope, null,
                     BlockValue(left), BlockValue(right));
             }
+            if (left.ControlDigest != right.ControlDigest)
+            {
+                var before = AlignedTableControls(left, diff, leftSide: true);
+                var after = AlignedTableControls(right, diff, leftSide: false);
+                if (before != after)
+                    Add(SemanticChangeOperation.Modify, SemanticChangeFamily.ContentControl, part,
+                        "table.content_controls", la, ra, left.Anchor.Scope, right.Anchor.Scope, null,
+                        Digest(left.ControlDigest, "docxodus-ir-table-controls-v1"),
+                        Digest(right.ControlDigest, "docxodus-ir-table-controls-v1"));
+            }
             if (left.TblPrDigest != right.TblPrDigest)
             {
                 Add(SemanticChangeOperation.Modify, SemanticChangeFamily.TableStyle, part,
@@ -1290,6 +1300,32 @@ internal static class SemanticDiffEngine
                         break;
                 }
             }
+        }
+
+        // A plain inserted or deleted row does not change the controls beside it. Paired rows
+        // provide the boundaries shared by both documents. Rows carrying controls also describe
+        // membership, even when the edit plan draws a changed shell as a deleted and inserted row.
+        private static IrHash AlignedTableControls(IrTable table, IrTableDiff? diff, bool leftSide)
+        {
+            if (table.ControlDigest == default)
+                return default;
+            var paired = diff?.RowOps.Where(op => op.Kind is IrRowOpKind.EqualRow or IrRowOpKind.ModifyRow or IrRowOpKind.MovedRow)
+                .Select(op => leftSide ? op.LeftRowAnchor : op.RightRowAnchor).ToHashSet(StringComparer.Ordinal);
+            var builder = new IrContentHashBuilder();
+            void AppendRow(IrContentHashBuilder output, int i)
+            {
+                var row = table.Rows[i];
+                if (row.ControlDigest == default && paired is not null && !paired.Contains(row.Anchor.ToString()))
+                    return;
+                output.AppendStructure(IrContentHashBuilder.StructureRow);
+                output.AppendHash(row.ControlDigest);
+            }
+            if (table.ChildOrder is { } order)
+                order.AppendControlLayout(builder, AppendRow);
+            else
+                for (int i = 0; i < table.Rows.Count; i++)
+                    AppendRow(builder, i);
+            return builder.Build();
         }
 
         private void CompareRowsPositionally(IrTable left, IrTable right, string part)

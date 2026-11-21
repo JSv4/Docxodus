@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using Docxodus.Verification;
 using Xunit;
 
 namespace Docxodus.Tests.Ir.Diff;
@@ -537,6 +538,58 @@ public class ContentControlTableTests
         Assert.Equal(Layout(right), Layout(accepted));
         Assert.Equal(Layout(left), Layout(rejected));
         var revisions = DocxDiff.GetRevisions(left, right);
+        Assert.Equal(string.Concat(revisions.Where(r => r.Type == DocxDiffRevisionType.Inserted).Select(r => r.Text)), Marked(redline, true));
+        Assert.Equal(string.Concat(revisions.Where(r => r.Type == DocxDiffRevisionType.Deleted).Select(r => r.Text)), Marked(redline, false));
+        AssertValid(redline, accepted, rejected);
+    }
+
+    [Theory]
+    [InlineData("wrapped")]
+    [InlineData("renamed")]
+    [InlineData("cell-renamed")]
+    [InlineData("empty-added")]
+    [InlineData("empty-moved")]
+    [InlineData("grouped")]
+    [InlineData("text-edit")]
+    [InlineData("plain-row-added")]
+    public void Semantic_report_identifies_changes_to_the_table_controls(string shape)
+    {
+        string first = Row("Dock", "Berth one"), next = Row("Crane", "Hook two");
+        string cells = Row("Crane", Control(8, Cell(P("Hook two"))));
+        static string Group(params string[] rows) => Control(9, rows).Replace("<w:id w:val=\"9\"/>", "");
+        var (left, right) = shape switch
+        {
+            "wrapped" => (Table(first, next), Table(first, Control(9, next))),
+            "renamed" => (Table(first, Control(9, next)), Table(first, Control(9, next).Replace("Item 9", "Spare 9"))),
+            "cell-renamed" => (Table(first, cells), Table(first, cells.Replace("Item 8", "Spare 8"))),
+            "empty-added" => (Table(first, next), Table(first, EmptyControl, next)),
+            "empty-moved" => (Table(EmptyControl, first, next), Table(first, EmptyControl, next)),
+            "grouped" => (Table(Group(first), Group(next)), Table(Group(first, next))),
+            "plain-row-added" => (Table(first, Control(9, next)), Table(Row("New", "Entry"), first, Control(9, next))),
+            _ => (Table(first, Control(9, next)), Table(first, Control(9, Row("Crane", "Hook two, spare")))),
+        };
+        var report = SemanticDiff.Compare(left, right);
+        var controls = report.Changes.Where(c => c.Family == SemanticChangeFamily.ContentControl);
+        if (shape is "text-edit" or "plain-row-added")
+        {
+            Assert.Empty(controls);
+            Assert.NotEmpty(report.Changes);
+        }
+        else
+        {
+            var control = Assert.Single(controls);
+            Assert.NotEqual(control.Before, control.After);
+            Assert.Equal("/word/document.xml", control.PartUri);
+            Assert.NotNull(control.LeftAnchor);
+            Assert.NotNull(control.RightAnchor);
+        }
+        var redline = DocxCompare.Compare(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(redline);
+        var rejected = RevisionProcessor.RejectRevisions(redline);
+        Assert.Equal(Layout(right), Layout(accepted));
+        Assert.Equal(Layout(left), Layout(rejected));
+        var revisions = DocxDiff.GetRevisions(left, right);
+        Assert.NotEmpty(revisions);
         Assert.Equal(string.Concat(revisions.Where(r => r.Type == DocxDiffRevisionType.Inserted).Select(r => r.Text)), Marked(redline, true));
         Assert.Equal(string.Concat(revisions.Where(r => r.Type == DocxDiffRevisionType.Deleted).Select(r => r.Text)), Marked(redline, false));
         AssertValid(redline, accepted, rejected);
