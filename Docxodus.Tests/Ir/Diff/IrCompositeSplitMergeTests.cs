@@ -1,5 +1,6 @@
 #nullable enable
 using System.Linq;
+using System.Xml.Linq;
 using Docxodus;
 using Docxodus.Ir;
 using Docxodus.Ir.Diff;
@@ -12,9 +13,8 @@ namespace Docxodus.Tests.Ir.Diff;
 /// <see cref="IrCompositeMoveTests"/>). A reviewer's UNCONTESTED paragraph split/merge — the reviewer is
 /// the sole toucher of every base paragraph the op consumes — passes through the composite merge as a
 /// NATIVE <see cref="IrEditOpKind.SplitBlock"/>/<see cref="IrEditOpKind.MergeBlock"/> and renders as the
-/// SAME inserted/deleted-pilcrow markup the two-way renderer produces. A CONTESTED split/merge (another
-/// reviewer edits a consumed paragraph) lowers to del/ins and resolves through the existing
-/// conflict machinery — composed or conflicted, never silently dropped.
+/// same paragraph-mark revisions as Compare. A contested split competes as one result at its base
+/// paragraph. A contested merge lowers its consumed paragraphs to whole-block operations.
 /// </summary>
 public class IrCompositeSplitMergeTests
 {
@@ -170,24 +170,115 @@ public class IrCompositeSplitMergeTests
         Assert.Equal(Docs.PlainText(b), Docs.PlainText(RevisionProcessor.RejectRevisions(merged)));
     }
 
-    // ---- 4. Contested split/merge lower and conflict — never silently dropped ----
+    // ---- 4. Contested splits and merges ----
+
+    [Theory]
+    [InlineData(ConflictResolution.BaseWins, false)]
+    [InlineData(ConflictResolution.BaseWins, true)]
+    [InlineData(ConflictResolution.FirstReviewerWins, false)]
+    [InlineData(ConflictResolution.FirstReviewerWins, true)]
+    [InlineData(ConflictResolution.StackAll, false)]
+    [InlineData(ConflictResolution.StackAll, true)]
+    public void A_split_and_an_edit_compete_as_complete_paragraph_results(ConflictResolution policy, bool editorFirst)
+    {
+        const string first = "The ferry leaves at nine.";
+        const string second = "Tickets are sold on board.";
+        const string original = first + " " + second;
+        const string edited = "The ferry leaves at ten. " + second;
+        const string split = first + "\n" + second;
+        var baseDoc = Docs.Para(original, "End.");
+        var splitter = new DocxDiffReviewer { Author = "Splitter", Document = Docs.Para(first, second, "End.") };
+        var editor = new DocxDiffReviewer { Author = "Editor", Document = Docs.Para(edited, "End.") };
+        var reviewers = editorFirst ? new[] { editor, splitter } : new[] { splitter, editor };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+
+        Assert.Contains("\"kind\": \"SplitBlock\"", DocxDiff.GetEditScriptJson(baseDoc, splitter.Document));
+        var marked = DocxCompare.Consolidate(baseDoc, reviewers, settings);
+        var accepted = RevisionProcessor.AcceptRevisions(marked);
+        var rejected = RevisionProcessor.RejectRevisions(marked);
+        foreach (var doc in new[] { marked, accepted, rejected })
+            PackageValidation.AssertValid(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
+
+        var results = editorFirst ? new[] { edited, split } : new[] { split, edited };
+        string expected = policy switch
+        {
+            ConflictResolution.BaseWins => original,
+            ConflictResolution.FirstReviewerWins => results[0],
+            _ => string.Join("\n", results),
+        };
+        Assert.Equal(original + "\nEnd.", Docs.PlainText(rejected));
+        Assert.Equal(expected + "\nEnd.", Docs.PlainText(accepted));
+        var conflict = Assert.Single(DocxDiff.GetConflicts(baseDoc, reviewers, settings));
+        Assert.Equal(policy, conflict.AppliedPolicy);
+        Assert.Equal(reviewers.Select(r => r.Author), conflict.Competitors.Select(c => c.Author));
+        Assert.Equal(results, conflict.Competitors.Select(c => c.ResultText));
+
+        var revisions = DocxDiff.GetConsolidatedRevisions(baseDoc, reviewers, settings);
+        var xml = XDocument.Parse(Docs.MainPartXml(marked));
+        XNamespace w = IrTestDocuments.W;
+        var authors = policy == ConflictResolution.BaseWins ? System.Array.Empty<string>()
+            : policy == ConflictResolution.FirstReviewerWins ? new[] { reviewers[0].Author }
+            : reviewers.Select(r => r.Author).ToArray();
+        Assert.Equal(authors, xml.Descendants().Attributes(w + "author").Select(a => a.Value).Distinct());
+        Assert.Equal(authors, revisions.Select(r => r.Author).Distinct());
+        Assert.All(revisions, r => Assert.Equal(conflict.Id, r.ConflictId));
+    }
 
     [Theory]
     [InlineData(ConflictResolution.BaseWins)]
     [InlineData(ConflictResolution.FirstReviewerWins)]
     [InlineData(ConflictResolution.StackAll)]
-    public void Contested_split_lowers_and_records_conflict(ConflictResolution policy)
+    public void A_split_in_a_footnote_obeys_the_same_conflict_decision(ConflictResolution policy)
     {
-        var b = Docs.Para(SplitSrc, Anchor);
-        var alice = Docs.Para(SplitA, SplitB, Anchor);                          // splits paragraph 1
-        var bob = Docs.Para("aaa bbb ccc REPLACED. eee fff ggg hhh.", Anchor);  // edits the SAME paragraph
+        WmlDocument Note(params string[] paragraphs) => IrTestDocuments.FromBodyXmlWithFootnoteParagraph("",
+            paragraphs.Select(p => $"<w:r><w:t xml:space=\"preserve\">{p}</w:t></w:r>").ToArray());
+        string[] Paragraphs(WmlDocument document)
+        {
+            using var stream = new System.IO.MemoryStream(document.DocumentByteArray);
+            using var package = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, false);
+            var note = Assert.Single(package.MainDocumentPart!.FootnotesPart!.GetXDocument().Descendants(W.footnote),
+                n => n.Attribute(W.type) == null);
+            return note.Elements(W.p).Select(p => string.Concat(p.Descendants(W.t).Select(t => t.Value))).ToArray();
+        }
 
-        var s = Merge(b, policy, ("Alice", alice), ("Bob", bob));
-        Assert.DoesNotContain(s.Operations, o => o.Op.Kind == IrEditOpKind.SplitBlock);
-        Assert.NotEmpty(s.Conflicts);
+        const string edit = "aaa bbb ccc replaced. eee fff ggg hhh.";
+        var original = Note(SplitSrc);
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Author = "Editor", Document = Note(edit) },
+            new DocxDiffReviewer { Author = "Splitter", Document = Note(SplitA, SplitB) },
+        };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+        var marked = DocxCompare.Consolidate(original, reviewers, settings);
+        var accepted = RevisionProcessor.AcceptRevisions(marked);
+        var rejected = RevisionProcessor.RejectRevisions(marked);
+        foreach (var doc in new[] { marked, accepted, rejected })
+            PackageValidation.AssertValid(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
+        var conflict = Assert.Single(DocxDiff.GetConflicts(original, reviewers, settings));
+        Assert.Equal(new[] { edit, SplitA + "\n" + SplitB }, conflict.Competitors.Select(c => c.ResultText));
+        Assert.Equal(Paragraphs(original), Paragraphs(rejected));
+        Assert.Equal(policy switch
+        {
+            ConflictResolution.BaseWins => new[] { SplitSrc },
+            ConflictResolution.FirstReviewerWins => new[] { edit },
+            _ => new[] { edit, SplitA, SplitB },
+        }, Paragraphs(accepted));
+    }
 
-        var merged = Consolidate(b, policy, ("Alice", alice), ("Bob", bob));
-        Assert.Equal(Docs.PlainText(b), Docs.PlainText(RevisionProcessor.RejectRevisions(merged)));
+    [Fact]
+    public void Identical_splits_are_reported_once()
+    {
+        var original = Docs.Para(SplitSrc, Anchor);
+        var result = Docs.Para(SplitA, SplitB, Anchor);
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Author = "First", Document = result },
+            new DocxDiffReviewer { Author = "Second", Document = Docs.Para(SplitA, SplitB, Anchor) },
+        };
+        var marked = DocxCompare.Consolidate(original, reviewers);
+        Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
+        Assert.Equal(Docs.PlainText(result), Docs.PlainText(RevisionProcessor.AcceptRevisions(marked)));
+        Assert.Equal(Docs.PlainText(original), Docs.PlainText(RevisionProcessor.RejectRevisions(marked)));
     }
 
     [Theory]
@@ -232,8 +323,8 @@ public class IrCompositeSplitMergeTests
     /// <summary>Concatenated w:delText content of the main part.</summary>
     private static string GetDelText(string mainXml)
     {
-        var doc = System.Xml.Linq.XDocument.Parse(mainXml);
-        System.Xml.Linq.XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        var doc = XDocument.Parse(mainXml);
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
         return string.Concat(doc.Descendants(w + "delText").Select(e => e.Value));
     }
 }
