@@ -208,7 +208,7 @@ internal static class IrEditScriptBuilder
         if (!settings.CompareHeadersFooters)
             return null;
 
-        var sections = MatchSectionBoundaries(left, right, alignment, bodyOps, settings);
+        var sections = MatchSectionBoundaries(left, right, alignment, bodyOps);
         var diffs = new List<IrHeaderFooterDiff>();
         BuildOneHeaderFooterScope(left, right, left.Headers, right.Headers, isHeader: true, settings, diffs, sections);
         BuildOneHeaderFooterScope(left, right, left.Footers, right.Footers, isHeader: false, settings, diffs, sections);
@@ -219,7 +219,7 @@ internal static class IrEditScriptBuilder
     // boundary still belongs to its source section; a review section that holds content from one
     // side only (wholly inserted or wholly deleted) has no story from the other.
     private static List<(int Left, int Right)>? MatchSectionBoundaries(
-        IrDocument left, IrDocument right, IrBlockAlignment alignment, IEnumerable<IrEditOp> bodyOps, IrDiffSettings settings)
+        IrDocument left, IrDocument right, IrBlockAlignment alignment, IEnumerable<IrEditOp> bodyOps)
     {
         Dictionary<string, (int Section, bool Ends)> SourceSections(IrDocument document)
         {
@@ -246,8 +246,7 @@ internal static class IrEditScriptBuilder
         // A kept paragraph the redline replaces whole is drawn as its deleted copy, then its inserted copy
         // (RenderModifyBlock's fallback), each with its own break (issue #1805): one the edit op marks for whole
         // replacement, and one whose text boxes cannot be redlined in place (TextboxBodiesDiffInPlace, the renderer's
-        // own test). With input revisions preserved, the renderer also replaces a paragraph whose revised copy holds
-        // tracked changes, which only it can see, so a changed paragraph holding a break keeps the ordinal map.
+        // own test).
         var modified = new Dictionary<string, IrEditOp>(StringComparer.Ordinal);
         foreach (var op in bodyOps)
             if (op.Kind == IrEditOpKind.ModifyBlock && op.LeftAnchor is { } anchor)
@@ -273,8 +272,7 @@ internal static class IrEditScriptBuilder
             // Moved boundaries, and a break change the redline does not draw as two copies, still need the existing
             // grid; the projection covers inserted and deleted boundaries, alone or mixed.
             if (entry.Kind is IrAlignmentKind.Moved or IrAlignmentKind.MovedModified ||
-                hasLeft && hasRight && (l.Ends != r.Ends || settings.PreserveInputRevisions &&
-                    modified.ContainsKey(entry.Left!.Anchor.ToString())) && !copies)
+                hasLeft && hasRight && l.Ends != r.Ends && !copies)
                 return null;
             if (copies && l.Ends)
             {

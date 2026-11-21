@@ -660,6 +660,25 @@ public class DocxDiffHeaderFooterReferenceTests
             r => (r.LeftAnchor ?? r.RightAnchor ?? "").Contains(header ? "hdr" : "ftr"));
     }
 
+    [Fact]
+    public void PreservingInputRevisionsLeavesCleanInputsMappedAsWithout()
+    {
+        // With PreserveInputRevisions on and no tracked change in either input, a changed paragraph holding a break is
+        // redlined finely, as without the setting, so the section map pairs its sections the same way (#1805 review).
+        string[] bodies = { "The ferry timetable changes in October.", "Passengers board from the eastern pier.",
+            "Tickets are sold at the harbour office." };
+        Section Story(string text, string header, string? footer) =>
+            new(new[] { text }, Headers: new[] { ("default", header) }, Footers: footer is null ? null : new[] { ("default", footer) });
+        var headers = new Dictionary<string, string[]> { ["a"] = new[] { "Alpha notice" }, ["b"] = new[] { "Bravo notice" }, ["c"] = new[] { "Charlie notice" } };
+        var footers = new Dictionary<string, string[]> { ["x"] = new[] { "Footer X" }, ["y"] = new[] { "Footer Y" } };
+        var original = HeaderFooterFixtures.Build(new[] { Story(bodies[0], "a", "x"), Story(bodies[1], "b", "y"), Story(bodies[2], "c", null) }, headers, footers);
+        var revised = HeaderFooterFixtures.Build(new[] { Story("Cyclists wait by the ramp before boarding.", "c", "y"),
+            Story(bodies[0].Replace("October", "November"), "a", "x"), Story(bodies[1], "b", "y"), Story(bodies[2], "c", null) }, headers, footers);
+        var result = DocxDiff.Compare(original, revised, new DocxDiffSettings { PreserveInputRevisions = true });
+        AssertStoryEndpoints(original, revised, result, true, "default");
+        AssertStoryEndpoints(original, revised, result, false, "default");
+    }
+
     private static WmlDocument WithBody(WmlDocument doc, System.Action<XElement> edit)
     {
         using var stream = new OpenXmlMemoryStreamDocument(doc);
