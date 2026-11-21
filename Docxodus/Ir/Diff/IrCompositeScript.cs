@@ -101,7 +101,8 @@ internal sealed record IrAuthoredRowOp(
     IrNodeList<IrAuthoredCellOp>? ComposedCells,
     string? RightRowAnchor = null,
     IrComposedShellRef? TrPr = null,
-    IrComposedShellRef? TblPrEx = null);
+    IrComposedShellRef? TblPrEx = null,
+    IrNodeList<IrEqualReviewerMarkers>? EqualReviewerMarkers = null);
 
 /// <summary>
 /// The per-element ATTRIBUTION of ONE composed block-format shell (Consolidate B2): which reviewer's

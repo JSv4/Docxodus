@@ -419,7 +419,7 @@ internal static partial class IrMarkupRenderer
         for (int i = 0; i < rows.Count && i < outputRows.Count; i++)
         {
             var row = rows[i];
-            if (row.Kind != IrRowOpKind.EqualRow && row.Kind != IrRowOpKind.ModifyRow ||
+            if (row.EqualReviewerMarkers is not null || row.Kind != IrRowOpKind.EqualRow && row.Kind != IrRowOpKind.ModifyRow ||
                 row.BaseRowAnchor is not { } anchor || !baseRows.TryGetValue(anchor, out var source))
                 continue;
             var baseRowCells = RowCells(source);

@@ -741,7 +741,7 @@ internal static class IrCompositeMarkupRenderer
     }
 
     /// <summary>Each reviewer's author by reviewer index, from the entries that name them.</summary>
-    private static IReadOnlyList<string> AuthorsByReviewer(IEnumerable<IrEqualReviewerMarkers> entries, int reviewers)
+    internal static IReadOnlyList<string> AuthorsByReviewer(IEnumerable<IrEqualReviewerMarkers> entries, int reviewers)
     {
         var authors = new string[reviewers];
         foreach (var entry in entries)
