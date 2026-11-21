@@ -40,10 +40,12 @@ public sealed record TablePropertiesOp
     public double? Width { get; init; }
 
     /// <summary>The table's alignment between the margins (<c>w:jc</c>): "left", "center" or
-    /// "right".</summary>
+    /// "right". "left", Word's default, is written as no <c>w:jc</c>, unless the table style sets
+    /// another alignment.</summary>
     public string? Alignment { get; init; }
 
-    /// <summary>Indent from the left margin (<c>w:tblInd</c>), twips, may be negative. 0 removes it.</summary>
+    /// <summary>Indent from the left margin (<c>w:tblInd</c>), twips, may be negative. 0 removes it,
+    /// or writes 0 when the table style sets another indent.</summary>
     public int? IndentTwips { get; init; }
 
     /// <summary>Default cell margins (<c>w:tblCellMar</c>).</summary>
@@ -59,7 +61,8 @@ public sealed record TablePropertiesOp
 public sealed record CellPropertiesOp
 {
     /// <summary>Vertical alignment of the cell's text (<c>w:vAlign</c>): "top", "center" or
-    /// "bottom". "top", Word's default, is written as no <c>w:vAlign</c>.</summary>
+    /// "bottom". "top", Word's default, is written as no <c>w:vAlign</c>, unless the table style
+    /// sets another alignment.</summary>
     public string? VerticalAlignment { get; init; }
 }
 
@@ -143,14 +146,19 @@ public sealed partial class DocxSession
                 SetChildInOrder(tblPr, new XElement(W.tblW, new XAttribute(W._w, w), new XAttribute(W.type, kind)),
                     TblPrChildOrder);
             }
+            // Left alignment and no indent are Word's defaults, written as no setting, unless the
+            // table style sets another value: then the direct setting must say so.
             if (op.Alignment is { } alignment)
             {
-                if (alignment == "left") tblPr.Elements(W.jc).Remove();
+                if (alignment == "left"
+                    && (string?)TableStyleSetting(tbl, W.tblPr, W.jc)?.Attribute(W.val) is null or "left" or "start")
+                    tblPr.Elements(W.jc).Remove();
                 else SetChildInOrder(tblPr, new XElement(W.jc, new XAttribute(W.val, alignment)), TblPrChildOrder);
             }
             if (op.IndentTwips is { } indent)
             {
-                if (indent == 0) tblPr.Elements(W.tblInd).Remove();
+                if (indent == 0 && (string?)TableStyleSetting(tbl, W.tblPr, W.tblInd)?.Attribute(W._w) is null or "0")
+                    tblPr.Elements(W.tblInd).Remove();
                 else SetChildInOrder(tblPr,
                     new XElement(W.tblInd, new XAttribute(W._w, indent), new XAttribute(W.type, "dxa")), TblPrChildOrder);
             }
@@ -209,14 +217,14 @@ public sealed partial class DocxSession
         switch (scope)
         {
             case TableCellScope.Row:
-                cells = tr!.Elements(W.tc).ToList();
+                cells = WordprocessingMLUtil.RowCells(tr!).ToList();
                 break;
             case TableCellScope.Table:
-                cells = tbl!.Elements(W.tr).SelectMany(row => row.Elements(W.tc)).ToList();
+                cells = WordprocessingMLUtil.TableRows(tbl!).SelectMany(WordprocessingMLUtil.RowCells).ToList();
                 break;
             case TableCellScope.Column:
                 var mine = RowGrid(tr!).First(c => c.Tc == tc);
-                cells = tbl!.Elements(W.tr).SelectMany(RowGrid)
+                cells = WordprocessingMLUtil.TableRows(tbl!).SelectMany(RowGrid)
                     .Where(c => c.Start < mine.End && mine.Start < c.End).Select(c => c.Tc).ToList();
                 break;
             default:
@@ -231,6 +239,9 @@ public sealed partial class DocxSession
         var old = tracked ? cells.ToDictionary(cell => cell,
             cell => new XElement(cell.Element(W.tcPr) ?? new XElement(W.tcPr))) : null;
 
+        // Top is Word's default, written as no w:vAlign, unless the table style aligns otherwise.
+        var styleAligns = (string?)TableStyleSetting(tbl!, W.tcPr, W.vAlign)?.Attribute(W.val) is not (null or "top");
+
         _history.RecordPreOp(TakeSnapshot());
         try
         {
@@ -238,7 +249,7 @@ public sealed partial class DocxSession
             {
                 if (op.VerticalAlignment is { } valign)
                 {
-                    if (valign == "top") cell.Element(W.tcPr)?.Elements(W.vAlign).Remove();
+                    if (valign == "top" && !styleAligns) cell.Element(W.tcPr)?.Elements(W.vAlign).Remove();
                     else SetChildInOrder(GetOrCreateTcPr(cell), new XElement(W.vAlign, new XAttribute(W.val, valign)),
                         TcPrChildOrder);
                 }
@@ -262,19 +273,24 @@ public sealed partial class DocxSession
     }
 
     /// <summary>Read the properties Word's Table Properties dialog shows for the table, row and
-    /// cell of <paramref name="cellAnchorId"/> (a <c>tc</c> anchor or a paragraph in a cell), or
-    /// null when the anchor is not in a table.</summary>
+    /// cell of <paramref name="cellAnchorId"/> (a <c>tc</c> anchor or a paragraph in a cell; for the
+    /// table's <c>tbl</c> anchor, its first row and cell), or null when the anchor is not in a
+    /// table. The table is found as the setters find it, so a nested table's own anchor reads that
+    /// table and cells and rows inside content controls are found.</summary>
     public TablePropertiesInfo? GetTableProperties(string cellAnchorId)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(cellAnchorId);
-        var target = FindAnchor(cellAnchorId);
-        var element = target?.Resolve(_doc!);
-        if (element is null) return null;
-        var tc = element.Name == W.tc ? element : element.Ancestors(W.tc).FirstOrDefault();
-        var tr = tc?.Parent;
-        var tbl = tr?.Parent;
-        if (tc is null || tr?.Name != W.tr || tbl?.Name != W.tbl) return null;
+        XElement? tc = null, tr = null, tbl = null;
+        if (FindAnchor(cellAnchorId)?.Anchor.Kind == "tbl")
+        {
+            if (ResolveTableFor(cellAnchorId, out tbl, out _) is not null || tbl is null) return null;
+            tr = WordprocessingMLUtil.TableRows(tbl).FirstOrDefault();
+            tc = tr is null ? null : WordprocessingMLUtil.RowCells(tr).FirstOrDefault();
+        }
+        else if (ResolveCell(cellAnchorId, out _, out tc, out tr, out tbl, out _) is not null)
+            return null;
+        if (tc is null || tr is null || tbl is null) return null;
 
         var tblPr = tbl.Element(W.tblPr);
         var tblW = tblPr?.Element(W.tblW);
@@ -312,7 +328,7 @@ public sealed partial class DocxSession
         var trPr = tr.Element(W.trPr);
         var height = trPr?.Element(W.trHeight);
         int? heightTwips = int.TryParse((string?)height?.Attribute(W.val), NumberStyles.Integer, CultureInfo.InvariantCulture, out var h) ? h : null;
-        var rows = tbl.Elements(W.tr).ToList();
+        var rows = WordprocessingMLUtil.TableRows(tbl).ToList();
         var tcPr = tc.Element(W.tcPr);
         var tableAnchor = AnchorForElement(tbl);
         return new TablePropertiesInfo
@@ -343,15 +359,36 @@ public sealed partial class DocxSession
                 "auto" => TableRowHeightRule.Auto,
                 _ => TableRowHeightRule.AtLeast,
             },
-            AllowBreakAcrossPages = !ReadOnOff(trPr?.Element(W.cantSplit)),
-            RepeatHeader = ReadOnOff(trPr?.Element(W.tblHeader)),
+            AllowBreakAcrossPages = trPr is null || !WordprocessingMLUtil.GetBoolProp(trPr, W.cantSplit),
+            RepeatHeader = trPr is not null && WordprocessingMLUtil.GetBoolProp(trPr, W.tblHeader),
             VerticalAlignment = (string?)tcPr?.Element(W.vAlign)?.Attribute(W.val),
             CellWidthTwips = Twips(tcPr?.Element(W.tcW)),
         };
     }
 
-    private static bool ReadOnOff(XElement? e) =>
-        e is not null && (string?)e.Attribute(W.val) is null or "1" or "true" or "on";
+    /// <summary>The element a table style gives <paramref name="property"/> in its
+    /// <paramref name="container"/> (<c>w:tblPr</c> or <c>w:tcPr</c>): the table's
+    /// <c>w:tblStyle</c>, or without one the document's default table style, following
+    /// <c>w:basedOn</c> (cycle-guarded). Null when no style sets it. Clearing a direct setting would
+    /// let this one apply, so a setter writes its value explicitly when the style's differs.</summary>
+    private XElement? TableStyleSetting(XElement tbl, XName container, XName property)
+    {
+        var stylesRoot = _doc!.MainDocumentPart?.StyleDefinitionsPart?.GetXDocument().Root;
+        if (stylesRoot is null) return null;
+        var tableStyles = stylesRoot.Elements(W.style).Where(s => (string?)s.Attribute(W.type) == "table").ToList();
+        var current = (string?)tbl.Element(W.tblPr)?.Element(W.tblStyle)?.Attribute(W.val)
+            ?? (string?)tableStyles.FirstOrDefault(s =>
+                WordprocessingMLUtil.OnOffValue((string?)s.Attribute(W._default)) == true)?.Attribute(W.styleId);
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 0; i < 16 && current is not null && visited.Add(current); i++)
+        {
+            var style = tableStyles.FirstOrDefault(s => (string?)s.Attribute(W.styleId) == current);
+            if (style is null) break;
+            if (style.Element(container)?.Element(property) is { } set) return set;
+            current = (string?)style.Element(W.basedOn)?.Attribute(W.val);
+        }
+        return null;
+    }
 
     /// <summary>The table of a <c>tbl</c> anchor, or of the cell a <c>tc</c> or in-cell paragraph
     /// anchor is in.</summary>

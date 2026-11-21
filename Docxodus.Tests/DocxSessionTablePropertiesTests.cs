@@ -1,5 +1,3 @@
-#nullable enable
-
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -239,5 +237,103 @@ public class DocxSessionTablePropertiesTests
         Assert.Equal(JsonValueKind.Null, root.GetProperty("cellMargins").GetProperty("topTwips").ValueKind);
         Assert.Equal(2, root.GetProperty("columnWidthsTwips").GetArrayLength());
         Assert.Equal("null", DocxSessionJson.SerializeTablePropertiesInfo(null));
+    }
+
+    /// <summary>A document written as literal XML: <paramref name="bodyXml"/> in w:body and
+    /// <paramref name="stylesXml"/> in w:styles.</summary>
+    private static byte[] LiteralDocument(string bodyXml, string stylesXml = "")
+    {
+        const string ns = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"";
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            void Write(OpenXmlPart part, string xml)
+            {
+                using var writer = new StreamWriter(part.GetStream(FileMode.Create, FileAccess.Write));
+                writer.Write(xml);
+            }
+            Write(main, $"<w:document {ns}><w:body>{bodyXml}<w:p/></w:body></w:document>");
+            Write(main.AddNewPart<DocumentSettingsPart>(), $"<w:settings {ns}/>");
+            Write(main.AddNewPart<StyleDefinitionsPart>(), $"<w:styles {ns}>{stylesXml}</w:styles>");
+        }
+        return stream.ToArray();
+    }
+
+    private static string[] Anchors(DocxSession session, string kind) =>
+        session.Project().AnchorIndex.Values.Where(t => t.Anchor.Kind == kind).Select(t => t.Anchor.Id).ToArray();
+
+    [Fact]
+    public void TP009_GetTableProperties_FindsTheTableAsTheSettersDo()
+    {
+        // An outer table holding a centred nested table, and a right-aligned table whose row and cell
+        // are each wrapped in a content control.
+        const string grid = "<w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid>";
+        var session = new DocxSession(LiteralDocument(
+            $"<w:tbl><w:tblPr/>{grid}<w:tr><w:tc><w:p><w:r><w:t>Outer</w:t></w:r></w:p>"
+            + $"<w:tbl><w:tblPr><w:jc w:val=\"center\"/></w:tblPr>{grid}<w:tr><w:tc><w:p><w:r><w:t>Inner</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+            + "<w:p/></w:tc></w:tr></w:tbl><w:p/>"
+            + $"<w:tbl><w:tblPr><w:jc w:val=\"right\"/></w:tblPr>{grid}<w:sdt><w:sdtContent><w:tr>"
+            + "<w:sdt><w:sdtContent><w:tc><w:p><w:r><w:t>Wrapped</w:t></w:r></w:p></w:tc></w:sdtContent></w:sdt>"
+            + "</w:tr></w:sdtContent></w:sdt></w:tbl>"));
+
+        // Each table's own anchor reads that table, the nested one included.
+        var tables = Anchors(session, "tbl");
+        Assert.Equal(3, tables.Length);
+        foreach (var table in tables)
+            Assert.Equal(table, session.GetTableProperties(table)!.TableAnchorId);
+        Assert.Equal(new[] { "-", "center", "right" },
+            tables.Select(t => session.GetTableProperties(t)!.Alignment ?? "-").OrderBy(a => a));
+
+        // Each cell's anchor, and a paragraph in it, read the table the cell is in.
+        var cellAlignments = Anchors(session, "tc").Select(tc => session.GetTableProperties(tc)!.Alignment ?? "-");
+        Assert.Equal(new[] { "-", "center", "right" }, cellAlignments.OrderBy(a => a));
+        var wrapped = session.Project().AnchorIndex.Values
+            .Where(t => t.Anchor.Kind == "p")
+            .Select(t => session.GetTableProperties(t.Anchor.Id))
+            .Where(info => info?.Alignment == "right").ToList();
+        Assert.Single(wrapped);
+        Assert.Equal(1, wrapped[0]!.RowCount);
+        Assert.Equal(0, wrapped[0]!.RowIndex);
+    }
+
+    [Fact]
+    public void TP010_Defaults_AreWrittenWhenTheTableStyleSetsOtherValues()
+    {
+        // "Grid" is based on "Base"; "Plain" is the default table style, used by a table with no tblStyle.
+        const string styles =
+            "<w:style w:type=\"table\" w:styleId=\"Base\"><w:name w:val=\"Base\"/>"
+            + "<w:tblPr><w:jc w:val=\"center\"/></w:tblPr><w:tcPr><w:vAlign w:val=\"bottom\"/></w:tcPr></w:style>"
+            + "<w:style w:type=\"table\" w:styleId=\"Grid\"><w:name w:val=\"Grid\"/><w:basedOn w:val=\"Base\"/>"
+            + "<w:tblPr><w:tblInd w:w=\"720\" w:type=\"dxa\"/></w:tblPr></w:style>"
+            + "<w:style w:type=\"table\" w:default=\"1\" w:styleId=\"Plain\"><w:name w:val=\"Plain\"/>"
+            + "<w:tblPr><w:jc w:val=\"right\"/></w:tblPr></w:style>";
+        const string grid = "<w:tblGrid><w:gridCol w:w=\"3000\"/><w:gridCol w:w=\"3000\"/></w:tblGrid>";
+        const string row = "<w:tr><w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr>";
+        var session = new DocxSession(LiteralDocument(
+            $"<w:tbl><w:tblPr><w:tblStyle w:val=\"Grid\"/></w:tblPr>{grid}{row}</w:tbl><w:p/>"
+            + $"<w:tbl><w:tblPr/>{grid}{row}</w:tbl>", styles));
+        var cells = Anchors(session, "tc");
+        Assert.Equal(4, cells.Length);
+        XElement[] Tables() => DocumentXml(session.Save()).Descendants(W + "tbl").ToArray();
+
+        Assert.True(session.SetTableProperties(cells[0], new TablePropertiesOp { Alignment = "left", IndentTwips = 0 }).Success);
+        Assert.True(session.SetCellProperties(cells[0], new CellPropertiesOp { VerticalAlignment = "top" }, TableCellScope.Table).Success);
+        Assert.True(session.SetTableProperties(cells[2], new TablePropertiesOp { Alignment = "left", IndentTwips = 0 }).Success);
+        Assert.True(session.SetCellProperties(cells[2], new CellPropertiesOp { VerticalAlignment = "top" }, TableCellScope.Table).Success);
+
+        // The styled table: left over the base style's centre, 0 over Grid's indent, top over bottom.
+        var styled = Tables()[0];
+        Assert.Equal("left", (string?)styled.Element(W + "tblPr")!.Element(W + "jc")!.Attribute(W + "val"));
+        Assert.Equal("0", (string?)styled.Element(W + "tblPr")!.Element(W + "tblInd")!.Attribute(W + "w"));
+        Assert.Equal(new[] { "top", "top" }, styled.Descendants(W + "vAlign").Select(v => (string?)v.Attribute(W + "val")));
+
+        // The other table takes the default style: left is written over its right; it sets no
+        // indent or vertical alignment, so those stay unwritten.
+        var plain = Tables()[1];
+        Assert.Equal("left", (string?)plain.Element(W + "tblPr")!.Element(W + "jc")!.Attribute(W + "val"));
+        Assert.Null(plain.Element(W + "tblPr")!.Element(W + "tblInd"));
+        Assert.Empty(plain.Descendants(W + "vAlign"));
+        AssertSchemaValid(session.Save());
     }
 }
