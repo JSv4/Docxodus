@@ -279,7 +279,7 @@ internal static class IrBlockAligner
     /// flips the stored fingerprint (the M2.1 finding), so unmodeled rPr noise no longer reads as a
     /// format change.
     /// </summary>
-    private static bool FormatEqual(IrBlock left, IrBlock right, IrDiffSettings settings)
+    internal static bool FormatEqual(IrBlock left, IrBlock right, IrDiffSettings settings)
     {
         if (settings.FormatComparison == IrFormatComparison.ModeledOnly
             && left is IrParagraph lp && right is IrParagraph rp)

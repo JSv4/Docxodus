@@ -1215,9 +1215,11 @@ internal static class IrEditScriptBuilder
                 case IrAlignmentKind.Unchanged:
                 case IrAlignmentKind.FormatOnly:
                     // Textbox interiors are absent from their host's format fingerprint, including
-                    // when that host is nested in a table or block wrapper.
+                    // when that host is nested in a table or block wrapper. A table whose cells changed
+                    // formatting is diffed too, so the change is tracked inside its cell.
                     if (StructuralCarrierDiffers(entry.Left!, entry.Right!) ||
-                        TextboxContentDiffers(entry.Left!, entry.Right!))
+                        TextboxContentDiffers(entry.Left!, entry.Right!) ||
+                        CellFormattingDiffers(entry.Left!, entry.Right!, settings))
                         ops.Add(MakeModifyOp(entry.Left!, entry.Right!, settings));
                     else
                         ops.Add(new IrEditOp(entry.Kind == IrAlignmentKind.Unchanged
@@ -1981,6 +1983,71 @@ internal static class IrEditScriptBuilder
     {
         for (int i = 0; i < Math.Min(left.Count, right.Count); i++)
             if (StructuralCarrierDiffers(left[i], right[i])) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a table pair has a cell whose blocks keep their text but change formatting (issue #1797). A
+    /// cell's content hash covers its text and not its paragraphs' formatting, so without this the table, row
+    /// and cell gates treat such a cell as unchanged and copy the revised one untracked. Paragraphs compare by the
+    /// aligner's own format rule, so the comparison policy and tracking settings apply as they do in the body.
+    /// A table with a row or cell delivered by a content control, and such a row or cell, are never flagged: the
+    /// modified-table renderer does not rebuild those controls yet (issue #1804), so a formatting change there stays
+    /// untracked, as before, unless the table is compared row by row for another change.
+    /// </summary>
+    internal static bool CellFormattingDiffers(IrBlock left, IrBlock right, IrDiffSettings settings)
+    {
+        if (left is not IrTable lt || right is not IrTable rt || HasContentControlRow(lt) || HasContentControlRow(rt))
+            return false;
+        for (int i = 0; i < Math.Min(lt.Rows.Count, rt.Rows.Count); i++)
+            if (CellFormattingDiffers(lt.Rows[i], rt.Rows[i], settings)) return true;
+        return false;
+    }
+
+    internal static bool CellFormattingDiffers(IrRow left, IrRow right, IrDiffSettings settings)
+    {
+        if (FromContentControl(left) || FromContentControl(right)) return false;
+        for (int i = 0; i < Math.Min(left.Cells.Count, right.Cells.Count); i++)
+            if (CellFormattingDiffers(left.Cells[i], right.Cells[i], settings)) return true;
+        return false;
+    }
+
+    internal static bool CellFormattingDiffers(IrCell left, IrCell right, IrDiffSettings settings)
+    {
+        // Equal stored fingerprints are format-equal, as in the aligner's first anchor pass.
+        if (left.FromRowSdt || right.FromRowSdt || left.FormatFingerprint.Equals(right.FormatFingerprint)) return false;
+        for (int i = 0; i < Math.Min(left.Blocks.Count, right.Blocks.Count); i++)
+        {
+            // A nested table's stored fingerprint also holds what the policy ignores in its cells, so compare the
+            // shells a table's format change tracks and the nested cells by the same rule.
+            if (left.Blocks[i] is IrTable lt && right.Blocks[i] is IrTable rt
+                    ? (settings.TrackTableFormatChanges && TableShellsDiffer(lt, rt)) || CellFormattingDiffers(lt, rt, settings)
+                    : !IrBlockAligner.FormatEqual(left.Blocks[i], right.Blocks[i], settings))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool TableShellsDiffer(IrTable left, IrTable right)
+    {
+        if (!left.TblPrDigest.Equals(right.TblPrDigest) || !left.TblGridDigest.Equals(right.TblGridDigest)) return true;
+        for (int i = 0; i < Math.Min(left.Rows.Count, right.Rows.Count); i++)
+            if (!left.Rows[i].TrPrDigest.Equals(right.Rows[i].TrPrDigest)) return true;
+        return false;
+    }
+
+    private static bool HasContentControlRow(IrTable table)
+    {
+        for (int i = 0; i < table.Rows.Count; i++)
+            if (FromContentControl(table.Rows[i])) return true;
+        return false;
+    }
+
+    private static bool FromContentControl(IrRow row)
+    {
+        if (row.FromTableSdt) return true;
+        for (int i = 0; i < row.Cells.Count; i++)
+            if (row.Cells[i].FromRowSdt) return true;
         return false;
     }
 
