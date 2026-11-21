@@ -2244,8 +2244,16 @@ internal static partial class IrMarkupRenderer
     /// controls only one side has, true for the original's. A control both sides have is written once, from the
     /// revision.
     /// </summary>
-    internal sealed record ControlLayout(XElement[][] Chains, Dictionary<XElement, bool> OneSided)
+    internal sealed class ControlLayout
     {
+        public ControlLayout(XElement[][] chains, Dictionary<XElement, bool> oneSided)
+        {
+            Chains = chains;
+            OneSided = oneSided;
+        }
+
+        public XElement[][] Chains { get; }
+        public Dictionary<XElement, bool> OneSided { get; }
         public static readonly ControlLayout None = new(Array.Empty<XElement[]>(), new());
     }
 
@@ -2438,10 +2446,9 @@ internal static partial class IrMarkupRenderer
                 common++;
             // A move range's end closes with the row before it and its start opens with the row after it, so a range
             // never crosses a control's boundary; anything else stays outside a control the next row leaves.
-            AddWhere(open.Count == 0 ? container : open[open.Count - 1].Content, pending, IsMoveRangeEnd);
+            AddPending(open.Count == 0 ? container : open[open.Count - 1].Content, pending, MoveRangeEnd);
             open.RemoveRange(common, open.Count - common);
-            AddWhere(open.Count == 0 ? container : open[open.Count - 1].Content, pending,
-                e => !IsMoveRangeEnd(e) && !IsMoveRangeStart(e));
+            AddPending(open.Count == 0 ? container : open[open.Count - 1].Content, pending, NotMoveRange);
             for (int level = common; level < chain.Length; level++)
             {
                 var source = chain[level];
@@ -2464,12 +2471,14 @@ internal static partial class IrMarkupRenderer
                 if (oneSided)
                     envelopes.Add((source, control));
             }
-            AddWhere(open.Count == 0 ? container : open[open.Count - 1].Content, pending, IsMoveRangeStart);
+            AddPending(open.Count == 0 ? container : open[open.Count - 1].Content, pending, MoveRangeStart);
             pending.Clear();
             (open.Count == 0 ? container : open[open.Count - 1].Content).Add(node);
         }
-        AddWhere(open.Count == 0 ? container : open[open.Count - 1].Content, pending, IsMoveRangeEnd);
-        AddWhere(container, pending, e => !IsMoveRangeEnd(e));
+        AddPending(open.Count == 0 ? container : open[open.Count - 1].Content, pending, MoveRangeEnd);
+        foreach (var node in pending)
+            if (node.Parent is null)
+                container.Add(node);
         foreach (var (source, control) in envelopes)
         {
             bool deleted = layout.OneSided[source];
@@ -2482,16 +2491,20 @@ internal static partial class IrMarkupRenderer
         }
     }
 
-    private static void AddWhere(XElement parent, List<XElement> nodes, Func<XElement, bool> include)
+    private const int NotMoveRange = 0, MoveRangeStart = 1, MoveRangeEnd = 2;
+
+    /// <summary>Add the <paramref name="nodes"/> of one move-range role (<see cref="NotMoveRange"/>,
+    /// <see cref="MoveRangeStart"/> or <see cref="MoveRangeEnd"/>) to <paramref name="parent"/>, in order.</summary>
+    private static void AddPending(XElement parent, List<XElement> nodes, int role)
     {
         foreach (var node in nodes)
-            if (include(node))
+        {
+            int nodeRole = node.Name == W.moveFromRangeStart || node.Name == W.moveToRangeStart ? MoveRangeStart
+                : node.Name == W.moveFromRangeEnd || node.Name == W.moveToRangeEnd ? MoveRangeEnd : NotMoveRange;
+            if (nodeRole == role)
                 parent.Add(node);
+        }
     }
-
-    private static bool IsMoveRangeStart(XElement e) => e.Name == W.moveFromRangeStart || e.Name == W.moveToRangeStart;
-
-    private static bool IsMoveRangeEnd(XElement e) => e.Name == W.moveFromRangeEnd || e.Name == W.moveToRangeEnd;
 
     /// <summary>A row's cells in source order, including those its content controls deliver, as the reader lists
     /// them.</summary>
