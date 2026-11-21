@@ -67,6 +67,8 @@ import type {
   TableCellScope,
   TablePropertiesInfo,
   TableRowOptions,
+  TabStop,
+  TabStopsInfo,
   TableShadingScope,
   ListFormat,
   GrepOptions,
@@ -1052,6 +1054,22 @@ export class DocxSession {
   /** The Table Properties dialog's values for the cell's table, row and cell, or null outside a table. */
   getTableProperties(cellAnchorId: string): TablePropertiesInfo | null {
     return JSON.parse(this.wasm.GetTableProperties(this.handle, cellAnchorId)) as TablePropertiesInfo | null;
+  }
+
+  /** Make `stops` the paragraph's tab stops in effect, as Word does: its own w:tabs holds the stops
+   *  its styles do not give it and clears the style stops not wanted. One undo step. */
+  setTabStops(anchorId: string, stops: TabStop[]): EditResult {
+    return JSON.parse(this.wasm.SetTabStops(this.handle, anchorId, JSON.stringify(stops))) as EditResult;
+  }
+
+  /** A paragraph's tab stops, or null when the anchor is not a paragraph. */
+  getTabStops(anchorId: string): TabStopsInfo | null {
+    return JSON.parse(this.wasm.GetTabStops(this.handle, anchorId)) as TabStopsInfo | null;
+  }
+
+  /** The document's default tab interval (settings w:defaultTabStop), twips. One undo step. */
+  setDefaultTabStop(twips: number): EditResult {
+    return JSON.parse(this.wasm.SetDefaultTabStop(this.handle, twips)) as EditResult;
   }
 
   /** Apply row layout options to the row containing the canonical cell anchor. */

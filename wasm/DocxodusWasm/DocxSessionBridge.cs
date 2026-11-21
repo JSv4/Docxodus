@@ -533,6 +533,19 @@ public static partial class DocxSessionBridge
     public static string GetTableProperties(int h, string cellAnchor) =>
         DocxSessionOps.GetTableProperties(h, cellAnchor);
 
+    /// <summary>Make a JSON array of tab stops the paragraph's tab stops in effect.</summary>
+    [JSExport]
+    public static string SetTabStops(int h, string anchorId, string stopsJson) =>
+        DocxSessionOps.SetTabStops(h, anchorId, stopsJson);
+
+    /// <summary>A paragraph's tab stops (in effect, from its styles) and the default tab interval, or "null".</summary>
+    [JSExport]
+    public static string GetTabStops(int h, string anchorId) => DocxSessionOps.GetTabStops(h, anchorId);
+
+    /// <summary>The document's default tab interval, twips.</summary>
+    [JSExport]
+    public static string SetDefaultTabStop(int h, int twips) => DocxSessionOps.SetDefaultTabStop(h, twips);
+
     [JSExport]
     public static string SetTableRowOptions(int h, string cellAnchor, bool? repeatHeader,
         bool? allowBreakAcrossPages, int? heightTwips, string heightRule) =>
