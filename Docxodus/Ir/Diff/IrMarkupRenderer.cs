@@ -2140,7 +2140,7 @@ internal static partial class IrMarkupRenderer
         {
             if (tableDiff.RowOps[i] is not { Kind: IrRowOpKind.ModifyRow, CellOps: { } cellOps } || rowSources[i].Right is not { } rightRow)
                 continue;
-            if (!HasControlChild(rowSources[i].Left, rightRow))
+            if (!HasControlChild(rowSources[i].Left, rightRow, W.tc))
                 cellControls[i] = ControlLayout.None;
             // Cell ops that do not tile the rows' cells leave the row unplanned, and RenderModifyRow refuses it.
             else if (CellSources(cellOps, rowSources[i].Left, rightRow) is { } cellSources &&
@@ -2149,8 +2149,9 @@ internal static partial class IrMarkupRenderer
         }
 
         var newTbl = new XElement(W.tbl);
-        // Carry the table's non-row prelude (tblPr, tblGrid, …) from the right shell; its controls are rebuilt below.
-        foreach (var pre in rightTbl.Elements().Where(e => e.Name != W.tr && e.Name != W.sdt && !IsBlockLevelMarker(e)))
+        // Carry the table's non-row prelude (tblPr, tblGrid, …) from the right shell; the controls that deliver its rows
+        // are rebuilt below.
+        foreach (var pre in rightTbl.Elements().Where(e => e.Name != W.tr && !DeliversChildren(e, W.tr) && !IsBlockLevelMarker(e)))
             newTbl.Add(StripUnids(new XElement(pre)));
         // Table-level shell changes (block-format-change family): tblPr / tblGrid.
         ApplyTableLevelShellChanges(newTbl, leftTbl, state);
@@ -2260,14 +2261,14 @@ internal static partial class IrMarkupRenderer
     internal static ControlLayout? PlanControls(
         List<(XElement? Left, XElement? Right)> children, XElement? leftContainer, XElement rightContainer, XName childName)
     {
-        if (!HasControlChild(leftContainer, rightContainer))
+        if (!HasControlChild(leftContainer, rightContainer, childName))
             return ControlLayout.None;
         foreach (var container in new[] { leftContainer, rightContainer })
         {
             if (container is null)
                 continue;
             foreach (var child in container.Elements())
-                if (IsBlockLevelMarker(child) || child.Name == W.sdt && !RebuildableControl(child, childName, 0))
+                if (IsBlockLevelMarker(child) || DeliversChildren(child, childName) && !RebuildableControl(child, childName, 0))
                     return null;
         }
 
@@ -2347,8 +2348,27 @@ internal static partial class IrMarkupRenderer
         return new ControlLayout(chains, oneSided);
     }
 
-    private static bool HasControlChild(XElement? left, XElement right) =>
-        left?.Element(W.sdt) is not null || right.Element(W.sdt) is not null;
+    private static bool HasControlChild(XElement? left, XElement right, XName childName) =>
+        left is not null && HasControlChild(left, childName) || HasControlChild(right, childName);
+
+    private static bool HasControlChild(XElement container, XName childName)
+    {
+        foreach (var sdt in container.Elements(W.sdt))
+            if (DeliversChildren(sdt, childName))
+                return true;
+        return false;
+    }
+
+    /// <summary>Whether <paramref name="element"/> is a content control the reader takes rows or cells from. One that
+    /// delivers none (empty, or holding only a bookmark) is copied as other non-row children are.</summary>
+    private static bool DeliversChildren(XElement element, XName childName)
+    {
+        if (element.Name != W.sdt)
+            return false;
+        foreach (var _ in IrReader.UnwrapSdtChildren(element, childName))
+            return true;
+        return false;
+    }
 
     /// <summary>Whether a table- or row-level control holds only <paramref name="childName"/> children and further
     /// such controls, at least one, within the nesting the reader models.</summary>
@@ -2413,9 +2433,12 @@ internal static partial class IrMarkupRenderer
             int common = 0;
             while (common < open.Count && common < chain.Length && open[common].Source == chain[common])
                 common++;
+            // A move range's end closes with the row before it and its start opens with the row after it, so a range
+            // never crosses a control's boundary; anything else stays outside a control the next row leaves.
+            AddWhere(open.Count == 0 ? container : open[open.Count - 1].Content, pending, IsMoveRangeEnd);
             open.RemoveRange(common, open.Count - common);
-            (open.Count == 0 ? container : open[open.Count - 1].Content).Add(pending);
-            pending.Clear();
+            AddWhere(open.Count == 0 ? container : open[open.Count - 1].Content, pending,
+                e => !IsMoveRangeEnd(e) && !IsMoveRangeStart(e));
             for (int level = common; level < chain.Length; level++)
             {
                 var source = chain[level];
@@ -2438,9 +2461,12 @@ internal static partial class IrMarkupRenderer
                 if (oneSided)
                     envelopes.Add((source, control));
             }
+            AddWhere(open.Count == 0 ? container : open[open.Count - 1].Content, pending, IsMoveRangeStart);
+            pending.Clear();
             (open.Count == 0 ? container : open[open.Count - 1].Content).Add(node);
         }
-        container.Add(pending);
+        AddWhere(open.Count == 0 ? container : open[open.Count - 1].Content, pending, IsMoveRangeEnd);
+        AddWhere(container, pending, e => !IsMoveRangeEnd(e));
         foreach (var (source, control) in envelopes)
         {
             bool deleted = layout.OneSided[source];
@@ -2453,14 +2479,30 @@ internal static partial class IrMarkupRenderer
         }
     }
 
+    private static void AddWhere(XElement parent, List<XElement> nodes, Func<XElement, bool> include)
+    {
+        foreach (var node in nodes)
+            if (include(node))
+                parent.Add(node);
+    }
+
+    private static bool IsMoveRangeStart(XElement e) => e.Name == W.moveFromRangeStart || e.Name == W.moveToRangeStart;
+
+    private static bool IsMoveRangeEnd(XElement e) => e.Name == W.moveFromRangeEnd || e.Name == W.moveToRangeEnd;
+
     /// <summary>A row's cells in source order, including those its content controls deliver, as the reader lists
     /// them.</summary>
-    private static List<XElement> RowCells(XElement row)
+    private static List<XElement> RowCells(XElement row) => DeliveredChildren(row, W.tc);
+
+    /// <summary>A table's rows in source order, including those its content controls deliver.</summary>
+    private static List<XElement> TableRows(XElement table) => DeliveredChildren(table, W.tr);
+
+    private static List<XElement> DeliveredChildren(XElement parent, XName name)
     {
-        var cells = new List<XElement>();
-        foreach (var (cell, _) in IrReader.TableChildren(row, W.tc))
-            cells.Add(cell);
-        return cells;
+        var children = new List<XElement>();
+        foreach (var (child, _) in IrReader.TableChildren(parent, name))
+            children.Add(child);
+        return children;
     }
 
     /// <summary>Each cell op's source cells, in output order, or null when the ops do not tile the rows' cells.</summary>
@@ -2651,7 +2693,7 @@ internal static partial class IrMarkupRenderer
         {
             if (child.Name == W.tc)
                 cells++;
-            else if (child.Name == W.sdt)
+            else if (DeliversChildren(child, W.tc))
                 foreach (var _ in IrReader.UnwrapSdtChildren(child, W.tc))
                     cells++;
             else if (child.Name == W.tblPrEx || child.Name == W.trPr)
@@ -6602,9 +6644,10 @@ internal static partial class IrMarkupRenderer
         state.RegisterMediaReferences(newTbl);
         ApplyTableLevelShellChanges(newTbl, leftTbl, state);
 
-        // FormatOnly ⇒ ContentHash-equal ⇒ identical row/cell structure, so rows pair positionally.
-        var leftRows = leftTbl.Elements(W.tr).ToList();
-        var newRows = newTbl.Elements(W.tr).ToList();
+        // FormatOnly ⇒ ContentHash-equal ⇒ identical row/cell structure, so rows pair positionally, as the reader
+        // lists them: rows a content control delivers included (issue #1804).
+        var leftRows = TableRows(leftTbl);
+        var newRows = TableRows(newTbl);
         for (int i = 0; i < newRows.Count && i < leftRows.Count; i++)
             ApplyRowAndCellShellChanges(newRows[i], leftRows[i], state);
 
@@ -8404,8 +8447,8 @@ internal static partial class IrMarkupRenderer
         if (!state.Settings.TrackTableFormatChanges)
             return;
 
-        var leftCells = leftRow.Elements(W.tc).ToList();
-        var newCells = newRow.Elements(W.tc).ToList();
+        var leftCells = RowCells(leftRow);
+        var newCells = RowCells(newRow);
         for (int c = 0; c < newCells.Count && c < leftCells.Count; c++)
             ApplyPairedCellShellChange(newCells[c], leftCells[c], state);
     }

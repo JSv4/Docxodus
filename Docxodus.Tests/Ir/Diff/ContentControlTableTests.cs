@@ -26,7 +26,8 @@ public class ContentControlTableTests
         "<w:tr>" + string.Concat(cells.Select(c => c.StartsWith("<w:") ? c : Cell(P(c)))) + "</w:tr>";
 
     private static string Control(int id, params string[] content) =>
-        $"<w:sdt><w:sdtPr><w:alias w:val=\"Item {id}\"/><w:id w:val=\"{id}\"/></w:sdtPr><w:sdtContent>{string.Concat(content)}</w:sdtContent></w:sdt>";
+        $"<w:sdt><w:sdtPr><w:alias w:val=\"Item {id}\"/><w:id w:val=\"{id}\"/></w:sdtPr>" +
+        $"<w:sdtEndPr><w:rPr><w:i/></w:rPr></w:sdtEndPr><w:sdtContent>{string.Concat(content)}</w:sdtContent></w:sdt>";
 
     private static WmlDocument Table(params string[] children) => IrTestDocuments.FromBodyXml(
         "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr>" +
@@ -40,10 +41,13 @@ public class ContentControlTableTests
         return package.MainDocumentPart!.GetXDocument().Root!.Element(W + "body")!;
     }
 
-    /// <summary>The ids of the content controls around <paramref name="e"/>, up to its table or row, outermost first.</summary>
+    /// <summary>The content controls around <paramref name="e"/>, up to its table or row, outermost first: each one's id,
+    /// alias and end properties, which a rebuilt copy must keep.</summary>
     private static string Controls(XElement e) => string.Concat(e.Ancestors()
         .TakeWhile(a => a.Name != W + "tbl" && a.Name != W + "tr").Where(a => a.Name == W + "sdt").Reverse()
-        .Select(a => $"[{a.Element(W + "sdtPr")!.Element(W + "id")!.Attribute(W + "val")!.Value}]"));
+        .Select(a => $"[{a.Element(W + "sdtPr")!.Element(W + "id")?.Attribute(W + "val")?.Value}:" +
+                     $"{a.Element(W + "sdtPr")!.Element(W + "alias")?.Attribute(W + "val")?.Value}:" +
+                     $"{a.Element(W + "sdtEndPr")?.ToString(SaveOptions.DisableFormatting).Length}]"));
 
     /// <summary>
     /// Every table row in order, as its controls and its cells, each cell as its controls and its runs' text with
@@ -107,6 +111,8 @@ public class ContentControlTableTests
     [InlineData("control-removed")]
     [InlineData("nested")]
     [InlineData("two-controls")]
+    [InlineData("section-added")]
+    [InlineData("section-removed")]
     public void A_row_in_a_content_control_comes_out_once_inside_it(string shape)
     {
         string first = Row("Dock", "Berth one");
@@ -121,6 +127,8 @@ public class ContentControlTableTests
             "control-removed" => (Table(first, Control(9, item, Row("Barge", "Rope three"))), Table(first)),
             "nested" => (Table(first, Control(9, Control(10, item), Row("Barge", "Rope three"))),
                 Table(first, Control(9, Control(10, Row("Crane", "Hook two, spare")), Row("Barge", "Rope three")))),
+            "section-added" => (Table(first), Table(first, Control(9, Control(10, item), Control(11, Row("Barge", "Rope three"))))),
+            "section-removed" => (Table(first, Control(9, Control(10, item), Control(11, Row("Barge", "Rope three")))), Table(first)),
             _ => (Table(first, Control(9, item), Row("Mast", "Sail four"), Control(11, Row("Keel", "Hull five"))),
                 Table(first, Control(9, item), Row("Mast", "Sail four, patched"), Control(11, Row("Keel", "Hull five, tarred")))),
         };
@@ -205,6 +213,75 @@ public class ContentControlTableTests
         Assert.Equal(Layout(original), Layout(RevisionProcessor.AcceptRevisions(merged)));
         Assert.Equal(Layout(original), Layout(RevisionProcessor.RejectRevisions(merged)));
         Assert.Single(DocxDiff.GetConflicts(original, reviewers));
+    }
+
+    /// <summary>
+    /// A table-level control that delivers no row, empty or holding only a bookmark, is copied as before rather than
+    /// rebuilt, so an edit beside it stays a cell-level edit.
+    /// </summary>
+    [Theory]
+    [InlineData("<w:sdt><w:sdtPr><w:id w:val=\"5\"/></w:sdtPr><w:sdtContent/></w:sdt>")]
+    [InlineData("<w:sdt><w:sdtPr><w:id w:val=\"5\"/></w:sdtPr><w:sdtContent><w:bookmarkStart w:id=\"3\" w:name=\"Ledger\"/><w:bookmarkEnd w:id=\"3\"/></w:sdtContent></w:sdt>")]
+    public void A_control_that_holds_no_row_leaves_the_table_rendered_row_by_row(string control)
+    {
+        var left = Table(Row("Dock", "Berth one"), control, Row("Crane", "Hook two"));
+        var right = Table(Row("Dock", "Berth one, north"), control, Row("Crane", "Hook two"));
+        var redline = DocxCompare.Compare(left, right);
+        AssertRedline(left, right, redline);
+        Assert.Single(Body(redline).Element(W + "tbl")!.Elements(W + "sdt"));
+    }
+
+    [Fact]
+    public void A_row_property_change_in_a_content_control_row_is_tracked()
+    {
+        // Rows pair as the reader lists them, so a row a control delivers gets its row-property history too.
+        WmlDocument Revision(string trPr) => Table(Row("Dock", "Berth one"),
+            Control(9, Row("Crane", "Hook two").Replace("<w:tr>", "<w:tr>" + trPr)));
+        var (left, right) = (Revision(""), Revision("<w:trPr><w:cantSplit/></w:trPr>"));
+        var redline = DocxCompare.Compare(left, right);
+        Assert.Single(Body(redline).Descendants(W + "sdt").Descendants(W + "trPrChange"));
+        var (accepted, rejected) = (RevisionProcessor.AcceptRevisions(redline), RevisionProcessor.RejectRevisions(redline));
+        Assert.Empty(Body(rejected).Descendants(W + "cantSplit"));
+        Assert.Single(Body(accepted).Descendants(W + "cantSplit"));
+        Assert.Equal(Layout(left), Layout(rejected));
+        AssertValid(redline, accepted, rejected);
+    }
+
+    [Fact]
+    public void A_row_moved_inside_a_content_control_keeps_its_move_ranges_inside_it()
+    {
+        static string R(string a, string b) => Row(a, b);
+        var left = Table(Row("Dock", "Berth one"), Control(9, R("Crane", "Hook two"), R("Barge", "Rope three"),
+            R("Mast", "Sail four"), R("Keel", "Hull five")));
+        var right = Table(Row("Dock", "Berth one"), Control(9, R("Barge", "Rope three"), R("Mast", "Sail four"),
+            R("Keel", "Hull five"), R("Crane", "Hook two")));
+        var redline = DocxCompare.Compare(left, right);
+        Assert.Equal(Layout(right), Layout(RevisionProcessor.AcceptRevisions(redline)));
+        Assert.Equal(Layout(left), Layout(RevisionProcessor.RejectRevisions(redline)));
+        var markers = Body(redline).Descendants().Where(e => e.Name.LocalName.StartsWith("move") && e.Name.LocalName.Contains("Range")).ToList();
+        foreach (var start in markers.Where(e => e.Name.LocalName.EndsWith("Start")))
+        {
+            var end = Assert.Single(markers, e => e.Name.LocalName == start.Name.LocalName.Replace("Start", "End") &&
+                (string?)e.Attribute(W + "id") == (string?)start.Attribute(W + "id"));
+            Assert.Same(start.Parent, end.Parent);
+        }
+        AssertValid(redline);
+    }
+
+    [Fact]
+    public void Two_reviewers_making_the_same_edit_in_a_content_control_table_agree()
+    {
+        var original = Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two")));
+        var revised = Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two, spare")));
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Document = revised, Author = "Reviewer A" },
+            new DocxDiffReviewer { Document = revised, Author = "Reviewer B" },
+        };
+        Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
+        var merged = DocxCompare.Consolidate(original, reviewers);
+        Assert.Equal(Layout(revised), Layout(RevisionProcessor.AcceptRevisions(merged)));
+        Assert.Equal(Layout(original), Layout(RevisionProcessor.RejectRevisions(merged)));
     }
 
     /// <summary>

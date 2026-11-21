@@ -1795,11 +1795,21 @@ internal static class IrCompositeMerger
         if (!touched.All(e => IsTableContentOrShellEdit(e.Op, reviewers[e.Reviewer].Ir)) || !MovedRowsComposable(touched))
             return false;
         // The composed table is built from bare rows and cells, so a row or cell a content control delivers would
-        // lose its control, or a table-level control be copied with its rows beside them (issue #1804).
+        // lose its control, or a table-level control be copied with its rows beside them (issue #1804). Reviewers
+        // who all revised such a table identically made one edit, which renders as a single reviewer's does.
         if (IrEditScriptBuilder.HasContentControlRow(baseTable) || touched.Any(e => e.Op.RightAnchor is { } ra &&
                 reviewers[e.Reviewer].Ir.AnchorIndex.TryGetValue(ra, out var rb) && rb is IrTable rt &&
                 IrEditScriptBuilder.HasContentControlRow(rt)))
-            return false;
+        {
+            IrHash? RevisedTable((int Reviewer, IrEditOp Op) e) =>
+                IrMarkupRenderer.SourceElement(e.Op.RightAnchor, reviewers[e.Reviewer].Ir) is { } table
+                    ? IrHasher.CanonicalHash(table) : null;
+            if (RevisedTable(touched[0]) is not { } first || touched.Any(e =>
+                    e.Op.Kind != touched[0].Op.Kind || RevisedTable(e) is not { } revised || !revised.Equals(first)))
+                return false;
+            ops.Add(EmitOp(touched[0].Op, reviewers[touched[0].Reviewer].Author, touched[0].Reviewer));
+            return true;
+        }
         // Content composition over the CONTENT (ModifyBlock w/TableDiff) touchers — a pure shell
         // (FormatOnlyBlock) toucher contributes no row ops, so with only shell touchers ComposeTableDiffs
         // yields an all-EqualRow authored table onto which the shell attribution below layers the markup.
