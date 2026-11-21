@@ -252,18 +252,13 @@ internal static class IrEditScriptBuilder
         foreach (var op in bodyOps)
             if (op.Kind == IrEditOpKind.ModifyBlock && op.LeftAnchor is { } anchor)
                 modified[anchor] = op;
-        bool DrawnAsCopies(IrBlock leftBlock, IrBlock rightBlock) =>
-            modified.TryGetValue(leftBlock.Anchor.ToString(), out var op) && (op.RequiresWholeParagraphReplace ||
-                op.TextboxDiffs is { } textboxes && (leftBlock.Source.Element is not { } leftSource ||
-                    rightBlock.Source.Element is not { } rightSource ||
-                    !IrMarkupRenderer.TextboxBodiesDiffInPlace(leftSource, rightSource, textboxes.Count)));
         var sections = new List<(int, int)>();
         int currentLeft = -1, currentRight = -1, seenLeft = 0, seenRight = 0;
         foreach (var entry in RenderedGapOrder(alignment, bodyOps))
         {
             bool hasLeft = leftSections.TryGetValue(entry.Left?.Anchor.ToString() ?? "", out var l);
             bool hasRight = rightSections.TryGetValue(entry.Right?.Anchor.ToString() ?? "", out var r);
-            bool copies = hasLeft && hasRight && DrawnAsCopies(entry.Left!, entry.Right!);
+            bool copies = hasLeft && hasRight && DrawnAsCopies(modified, entry.Left!, entry.Right!);
             int rightBefore = currentRight;
             if (hasLeft) currentLeft = l.Section;
             if (hasRight) currentRight = r.Section;
@@ -302,6 +297,17 @@ internal static class IrEditScriptBuilder
             return null;
         sections.Add((leftCount, rightCount));
         return sections;
+    }
+
+    private static bool DrawnAsCopies(Dictionary<string, IrEditOp> modified, IrBlock left, IrBlock right)
+    {
+        if (!modified.TryGetValue(left.Anchor.ToString(), out var op))
+            return false;
+        if (op.RequiresWholeParagraphReplace)
+            return true;
+        return op.TextboxDiffs is { } textboxes && (left.Source.Element is not { } leftSource ||
+            right.Source.Element is not { } rightSource ||
+            !IrMarkupRenderer.TextboxBodiesDiffInPlace(leftSource, rightSource, textboxes.Count));
     }
 
     // RenderBlockOpsWordShaped emits ordinary replacement gaps insertion-first. Named moves,
@@ -441,7 +447,13 @@ internal static class IrEditScriptBuilder
         // is the revision's story inserted, as before (issue #1805 review).
         foreach (var (s, kind, story) in revisedOnly)
         {
-            var plan = plans.FirstOrDefault(p => !p.KeepsLeft && p.RightPartUri == story.Scope.PartUri);
+            HeaderFooterPairPlan? plan = null;
+            foreach (var candidate in plans)
+                if (!candidate.KeepsLeft && candidate.RightPartUri == story.Scope.PartUri)
+                {
+                    plan = candidate;
+                    break;
+                }
             if (plan is null && !plansByPair.TryGetValue((null, story.Scope.PartUri), out plan))
             {
                 plan = new HeaderFooterPairPlan(null, story);
