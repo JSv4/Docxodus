@@ -1997,8 +1997,8 @@ internal static class IrEditScriptBuilder
     /// </summary>
     internal static bool CellFormattingDiffers(IrBlock left, IrBlock right, IrDiffSettings settings)
     {
-        if (left is not IrTable lt || right is not IrTable rt ||
-            lt.Rows.Any(FromContentControl) || rt.Rows.Any(FromContentControl)) return false;
+        if (left is not IrTable lt || right is not IrTable rt || HasContentControlRow(lt) || HasContentControlRow(rt))
+            return false;
         for (int i = 0; i < Math.Min(lt.Rows.Count, rt.Rows.Count); i++)
             if (CellFormattingDiffers(lt.Rows[i], rt.Rows[i], settings)) return true;
         return false;
@@ -2021,17 +2021,35 @@ internal static class IrEditScriptBuilder
             // A nested table's stored fingerprint also holds what the policy ignores in its cells, so compare the
             // shells a table's format change tracks and the nested cells by the same rule.
             if (left.Blocks[i] is IrTable lt && right.Blocks[i] is IrTable rt
-                    ? settings.TrackTableFormatChanges && (!lt.TblPrDigest.Equals(rt.TblPrDigest) ||
-                      !lt.TblGridDigest.Equals(rt.TblGridDigest) ||
-                      lt.Rows.Zip(rt.Rows).Any(rows => !rows.First.TrPrDigest.Equals(rows.Second.TrPrDigest))) ||
-                      CellFormattingDiffers(lt, rt, settings)
+                    ? (settings.TrackTableFormatChanges && TableShellsDiffer(lt, rt)) || CellFormattingDiffers(lt, rt, settings)
                     : !IrBlockAligner.FormatEqual(left.Blocks[i], right.Blocks[i], settings))
                 return true;
         }
         return false;
     }
 
-    private static bool FromContentControl(IrRow row) => row.FromTableSdt || row.Cells.Any(cell => cell.FromRowSdt);
+    private static bool TableShellsDiffer(IrTable left, IrTable right)
+    {
+        if (!left.TblPrDigest.Equals(right.TblPrDigest) || !left.TblGridDigest.Equals(right.TblGridDigest)) return true;
+        for (int i = 0; i < Math.Min(left.Rows.Count, right.Rows.Count); i++)
+            if (!left.Rows[i].TrPrDigest.Equals(right.Rows[i].TrPrDigest)) return true;
+        return false;
+    }
+
+    private static bool HasContentControlRow(IrTable table)
+    {
+        for (int i = 0; i < table.Rows.Count; i++)
+            if (FromContentControl(table.Rows[i])) return true;
+        return false;
+    }
+
+    private static bool FromContentControl(IrRow row)
+    {
+        if (row.FromTableSdt) return true;
+        for (int i = 0; i < row.Cells.Count; i++)
+            if (row.Cells[i].FromRowSdt) return true;
+        return false;
+    }
 
     private static bool TextboxCarriersDiffer(IReadOnlyList<IrTextbox> left, IReadOnlyList<IrTextbox> right)
     {
