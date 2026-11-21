@@ -549,19 +549,9 @@ public class DocxDiffHeaderFooterReferenceTests
     [InlineData("field-and-gained-break")]
     [InlineData("index-entry")]
     [InlineData("index-entry-unchanged")]
+    [InlineData("index-entry-footer")]
     public void AParagraphReplacedWholeKeepsBothCopiesOfItsBreak(string scenario)
     {
-        static WmlDocument WithBody(WmlDocument doc, System.Action<XElement> edit)
-        {
-            using var stream = new OpenXmlMemoryStreamDocument(doc);
-            using (var package = stream.GetWordprocessingDocument())
-            {
-                var main = package.MainDocumentPart!;
-                edit(main.GetXDocument().Root!.Element(W + "body")!);
-                main.PutXDocument();
-            }
-            return stream.GetModifiedWmlDocument();
-        }
         static IEnumerable<XElement> Field(string code, bool result) => XElement.Parse(
             $"<x xmlns:w=\"{HeaderFooterFixtures.Wns}\"><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>" +
             $"<w:r><w:instrText xml:space=\"preserve\"> {code} </w:instrText></w:r>" +
@@ -584,20 +574,106 @@ public class DocxDiffHeaderFooterReferenceTests
         }
         else
         {
-            WmlDocument Make(string first, string second) => WithBody(HeaderFooterFixtures.Build(new[]
-                {
-                    new Section(new[] { first }, Headers: new[] { ("default", "a") }),
-                    new Section(new[] { bodies[1] }, Headers: new[] { ("default", "b") }),
-                    new Section(new[] { bodies[2] }, Headers: new[] { ("default", "c") }),
-                }, new Dictionary<string, string[]> { ["a"] = new[] { "Harbour notices" }, ["b"] = new[] { second }, ["c"] = new[] { "Ticket office" } }),
-                body => body.Elements(W + "p").First().Add(Field("XE \"ferry\"", false)));
+            bool footer = scenario == "index-entry-footer";
+            Section Story(string text, string id) => new(new[] { text },
+                Headers: footer ? null : new[] { ("default", id) }, Footers: footer ? new[] { ("default", id) } : null);
+            WmlDocument Make(string first, string second)
+            {
+                var parts = new Dictionary<string, string[]> { ["a"] = new[] { "Harbour notices" }, ["b"] = new[] { second }, ["c"] = new[] { "Ticket office" } };
+                return WithBody(HeaderFooterFixtures.Build(new[] { Story(first, "a"), Story(bodies[1], "b"), Story(bodies[2], "c") },
+                    footer ? null : parts, footer ? parts : null), body => body.Elements(W + "p").First().Add(Field("XE \"ferry\"", false)));
+            }
             original = Make(bodies[0], "Pier timetable");
-            revised = Make(bodies[0].Replace("October", "November"), scenario == "index-entry" ? "Pier timetable, winter" : "Pier timetable");
+            revised = Make(bodies[0].Replace("October", "November"), scenario == "index-entry-unchanged" ? "Pier timetable" : "Pier timetable, winter");
         }
-        AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), true, "default");
+        AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), scenario != "index-entry-footer", "default");
         if (scenario == "index-entry-unchanged")
             Assert.DoesNotContain(DocxDiff.GetRevisions(original, revised), r => (r.LeftAnchor ?? r.RightAnchor ?? "").Contains("hdr"));
     }
+
+    /// <summary>
+    /// The renderer also draws a paragraph as two copies when its text boxes cannot be redlined in place, though the
+    /// edit op does not mark it for whole replacement; the section map asks the renderer's own test (#1805 review).
+    /// <c>gained-text-box</c>: the first paragraph gains a text box and keeps its break, and the second gains a break
+    /// whose section has a title page. <c>marked-text-box</c>: three sections each name their own header, the first
+    /// paragraph's text box holds a bookmark between its paragraphs and its text changes, and the second header changes.
+    /// </summary>
+    [Theory]
+    [InlineData("gained-text-box")]
+    [InlineData("marked-text-box")]
+    public void AParagraphWhoseTextBoxesCannotBeRedlinedInPlaceKeepsBothCopiesOfItsBreak(string scenario)
+    {
+        static string TextBox(string first, string between) =>
+            "<w:r><w:pict><v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\" style=\"width:120pt;height:40pt\"><v:textbox><w:txbxContent>" +
+            $"<w:p><w:r><w:t>{first}</w:t></w:r></w:p>{between}<w:p><w:r><w:t>Slipway two</w:t></w:r></w:p>" +
+            "</w:txbxContent></v:textbox></v:shape></w:pict></w:r>";
+        string[] bodies = { "The ferry timetable changes in October.", "Passengers board from the eastern pier.",
+            "Tickets are sold at the harbour office." };
+        WmlDocument original, revised;
+        if (scenario == "gained-text-box")
+        {
+            var parts = new Dictionary<string, string[]> { ["a"] = new[] { "Harbour notices" } };
+            original = WithBody(HeaderFooterFixtures.Build(new[] { new Section(new[] { bodies[0] }, Headers: new[] { ("default", "a") }),
+                new Section(new[] { bodies[1], bodies[2] }) }, parts), _ => { });
+            revised = WithBody(HeaderFooterFixtures.Build(new[] { new Section(new[] { bodies[0] }, Headers: new[] { ("default", "a") }),
+                new Section(new[] { bodies[1] }), new Section(new[] { bodies[2] }) }, parts), body =>
+            {
+                body.Elements(W + "p").First().Add(Runs(TextBox("Slipway one", "")));
+                body.Elements(W + "p").ElementAt(1).Descendants(W + "sectPr").Single().Add(new XElement(W + "titlePg"));
+            });
+        }
+        else
+        {
+            const string marker = "<w:bookmarkStart w:id=\"9\" w:name=\"Pier\"/><w:bookmarkEnd w:id=\"9\"/>";
+            WmlDocument Make(string box, string second) => WithBody(HeaderFooterFixtures.Build(new[]
+                {
+                    new Section(new[] { bodies[0] }, Headers: new[] { ("default", "a") }),
+                    new Section(new[] { bodies[1] }, Headers: new[] { ("default", "b") }),
+                    new Section(new[] { bodies[2] }, Headers: new[] { ("default", "c") }),
+                }, new Dictionary<string, string[]> { ["a"] = new[] { "Harbour notices" }, ["b"] = new[] { second }, ["c"] = new[] { "Ticket office" } }),
+                body => body.Elements(W + "p").First().Add(Runs(TextBox(box, marker))));
+            original = Make("Slipway one", "Pier timetable");
+            revised = Make("Slipway one, north", "Pier timetable, winter");
+        }
+        AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), true, "default");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ABreakThatMovesToAnInsertedParagraphReportsNoStoryChange(bool header)
+    {
+        // A kept paragraph loses its break and a paragraph inserted beside it takes the break and its references.
+        // Every section shows the same stories in both documents, so none is reported as inserted (#1805 review).
+        string[] bodies = { "The ferry timetable changes in October.", "Passengers board from the eastern pier.",
+            "Tickets are sold at the harbour office." };
+        var first = new[] { ("default", "a") };
+        var second = new[] { ("default", "b") };
+        Section Story(string[] paras, (string, string)[]? refs) => new(paras, Headers: header ? refs : null, Footers: header ? null : refs);
+        var parts = new Dictionary<string, string[]> { ["a"] = new[] { "Harbour notices" }, ["b"] = new[] { "Pier timetable" } };
+        WmlDocument Document(Section[] sections) => HeaderFooterFixtures.Build(sections, header ? parts : null, header ? null : parts);
+        var original = Document(new[] { Story(new[] { bodies[0] }, first), Story(new[] { bodies[1] }, second), Story(new[] { bodies[2] }, null) });
+        var revised = Document(new[] { Story(new[] { bodies[0] }, first), Story(new[] { "Cyclists wait by the ramp." }, second),
+            Story(new[] { bodies[1], bodies[2] }, null) });
+        AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), header, "default");
+        Assert.DoesNotContain(DocxDiff.GetRevisions(original, revised),
+            r => (r.LeftAnchor ?? r.RightAnchor ?? "").Contains(header ? "hdr" : "ftr"));
+    }
+
+    private static WmlDocument WithBody(WmlDocument doc, System.Action<XElement> edit)
+    {
+        using var stream = new OpenXmlMemoryStreamDocument(doc);
+        using (var package = stream.GetWordprocessingDocument())
+        {
+            var main = package.MainDocumentPart!;
+            edit(main.GetXDocument().Root!.Element(W + "body")!);
+            main.PutXDocument();
+        }
+        return stream.GetModifiedWmlDocument();
+    }
+
+    private static IEnumerable<XElement> Runs(string xml) =>
+        XElement.Parse($"<x xmlns:w=\"{HeaderFooterFixtures.Wns}\">{xml}</x>").Elements();
 
     [Fact]
     public void RemovedBreakOnRetainedParagraph_LeavesTheRemovedSectionsOwnStoryUnrevised()
