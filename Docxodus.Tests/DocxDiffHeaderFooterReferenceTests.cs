@@ -537,6 +537,68 @@ public class DocxDiffHeaderFooterReferenceTests
         AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), true, "default");
     }
 
+    /// <summary>
+    /// A paragraph that keeps its break but whose field changes is replaced whole, so the redline holds two copies of
+    /// the break; the section map counts both (#1805 review). <c>field-and-gained-break</c>: the first paragraph's
+    /// <c>PAGE</c> field becomes <c>NUMPAGES</c> with the same result, and the second paragraph gains a break whose
+    /// section has a title page. <c>index-entry</c> and <c>index-entry-unchanged</c>: three sections each name their
+    /// own header, the first paragraph holds an index entry (a field with no result) and a word of it changes, and the
+    /// second section's header changes or not.
+    /// </summary>
+    [Theory]
+    [InlineData("field-and-gained-break")]
+    [InlineData("index-entry")]
+    [InlineData("index-entry-unchanged")]
+    public void AParagraphReplacedWholeKeepsBothCopiesOfItsBreak(string scenario)
+    {
+        static WmlDocument WithBody(WmlDocument doc, System.Action<XElement> edit)
+        {
+            using var stream = new OpenXmlMemoryStreamDocument(doc);
+            using (var package = stream.GetWordprocessingDocument())
+            {
+                var main = package.MainDocumentPart!;
+                edit(main.GetXDocument().Root!.Element(W + "body")!);
+                main.PutXDocument();
+            }
+            return stream.GetModifiedWmlDocument();
+        }
+        static IEnumerable<XElement> Field(string code, bool result) => XElement.Parse(
+            $"<x xmlns:w=\"{HeaderFooterFixtures.Wns}\"><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>" +
+            $"<w:r><w:instrText xml:space=\"preserve\"> {code} </w:instrText></w:r>" +
+            (result ? "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>1</w:t></w:r>" : "") +
+            "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r></x>").Elements();
+        string[] bodies = { "The ferry timetable changes in October.", "Passengers board from the eastern pier.",
+            "Tickets are sold at the harbour office." };
+        WmlDocument original, revised;
+        if (scenario == "field-and-gained-break")
+        {
+            var parts = new Dictionary<string, string[]> { ["a"] = new[] { "Harbour notices" } };
+            original = WithBody(HeaderFooterFixtures.Build(new[] { new Section(new[] { bodies[0] }, Headers: new[] { ("default", "a") }),
+                new Section(new[] { bodies[1], bodies[2] }) }, parts), body => body.Elements(W + "p").First().Add(Field("PAGE", true)));
+            revised = WithBody(HeaderFooterFixtures.Build(new[] { new Section(new[] { bodies[0] }, Headers: new[] { ("default", "a") }),
+                new Section(new[] { bodies[1] }), new Section(new[] { bodies[2] }) }, parts), body =>
+            {
+                body.Elements(W + "p").First().Add(Field("NUMPAGES", true));
+                body.Elements(W + "p").ElementAt(1).Descendants(W + "sectPr").Single().Add(new XElement(W + "titlePg"));
+            });
+        }
+        else
+        {
+            WmlDocument Make(string first, string second) => WithBody(HeaderFooterFixtures.Build(new[]
+                {
+                    new Section(new[] { first }, Headers: new[] { ("default", "a") }),
+                    new Section(new[] { bodies[1] }, Headers: new[] { ("default", "b") }),
+                    new Section(new[] { bodies[2] }, Headers: new[] { ("default", "c") }),
+                }, new Dictionary<string, string[]> { ["a"] = new[] { "Harbour notices" }, ["b"] = new[] { second }, ["c"] = new[] { "Ticket office" } }),
+                body => body.Elements(W + "p").First().Add(Field("XE \"ferry\"", false)));
+            original = Make(bodies[0], "Pier timetable");
+            revised = Make(bodies[0].Replace("October", "November"), scenario == "index-entry" ? "Pier timetable, winter" : "Pier timetable");
+        }
+        AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), true, "default");
+        if (scenario == "index-entry-unchanged")
+            Assert.DoesNotContain(DocxDiff.GetRevisions(original, revised), r => (r.LeftAnchor ?? r.RightAnchor ?? "").Contains("hdr"));
+    }
+
     [Fact]
     public void RemovedBreakOnRetainedParagraph_LeavesTheRemovedSectionsOwnStoryUnrevised()
     {

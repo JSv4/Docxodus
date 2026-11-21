@@ -243,16 +243,20 @@ internal static class IrEditScriptBuilder
             Internal.BlockMetadataOps.SectionBreaks(source.Root).Count(s => s.Parent?.Name == W.pPr) == count;
         if (!Complete(left, leftCount) || !Complete(right, rightCount))
             return null;
+        // A kept paragraph the redline replaces whole (its break added or removed, or a field or inline envelope
+        // changed) is drawn as its deleted copy, then its inserted copy (RenderModifyBlock's fallback), each with its
+        // own break (issue #1805).
+        var replaced = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var op in bodyOps)
+            if (op.Kind == IrEditOpKind.ModifyBlock && op.RequiresWholeParagraphReplace && op.LeftAnchor is { } anchor)
+                replaced.Add(anchor);
         var sections = new List<(int, int)>();
         int currentLeft = -1, currentRight = -1, seenLeft = 0, seenRight = 0;
         foreach (var entry in RenderedGapOrder(alignment, bodyOps))
         {
             bool hasLeft = leftSections.TryGetValue(entry.Left?.Anchor.ToString() ?? "", out var l);
             bool hasRight = rightSections.TryGetValue(entry.Right?.Anchor.ToString() ?? "", out var r);
-            // A kept paragraph that gains or loses its break is drawn as its deleted copy, then its inserted copy
-            // (StructuralCarrierDiffers), so a break only the original's copy carries ends the review section before
-            // the revision's copy, which opens the next one (issue #1805).
-            bool leftCopyEnds = hasLeft && hasRight && l.Ends && !r.Ends;
+            bool copies = hasLeft && hasRight && replaced.Contains(entry.Left!.Anchor.ToString());
             int rightBefore = currentRight;
             if (hasLeft) currentLeft = l.Section;
             if (hasRight) currentRight = r.Section;
@@ -264,14 +268,26 @@ internal static class IrEditScriptBuilder
             }
             if (!l.Ends && !r.Ends)
                 continue;
-            // Moved boundaries still need the existing grid; the projection covers inserted and deleted
-            // boundaries, alone or mixed, including the copies of a kept paragraph whose break changed.
-            if (entry.Kind is IrAlignmentKind.Moved or IrAlignmentKind.MovedModified)
+            // Moved boundaries, and a break change the redline does not draw as two copies, still need the existing
+            // grid; the projection covers inserted and deleted boundaries, alone or mixed.
+            if (entry.Kind is IrAlignmentKind.Moved or IrAlignmentKind.MovedModified ||
+                hasLeft && hasRight && l.Ends != r.Ends && !copies)
                 return null;
-            sections.Add((currentLeft, leftCopyEnds ? rightBefore : currentRight));
-            currentLeft = -1;
-            currentRight = leftCopyEnds ? r.Section : -1;
-            if (l.Ends) seenLeft++;
+            if (copies && l.Ends)
+            {
+                // The original's break ends the review section before the revision's copy, which opens the next one.
+                // When the revision's copy has a break too, that section holds only the copy, and it pairs the
+                // original section the paragraph came from, so an unchanged story is not drawn as inserted.
+                sections.Add((currentLeft, rightBefore));
+                seenLeft++;
+                currentLeft = r.Ends ? l.Section : -1;
+                if (!r.Ends)
+                    continue;
+            }
+            else if (l.Ends)
+                seenLeft++;
+            sections.Add((currentLeft, currentRight));
+            currentLeft = currentRight = -1;
             if (r.Ends) seenRight++;
         }
         if (seenLeft != leftCount || seenRight != rightCount)
