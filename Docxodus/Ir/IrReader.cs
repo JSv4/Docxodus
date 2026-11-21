@@ -2980,7 +2980,7 @@ internal static class IrReader
     /// Beyond the cap, deeper targets are simply not surfaced (the same bound the block walker uses),
     /// preserving totality against adversarial nesting.
     /// </summary>
-    private static IEnumerable<XElement> UnwrapSdtChildren(XElement sdt, XName targetName, int depth)
+    internal static IEnumerable<XElement> UnwrapSdtChildren(XElement sdt, XName targetName, int depth = 0)
     {
         if (depth >= MaxSdtDepth)
             yield break;

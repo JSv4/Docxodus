@@ -180,8 +180,9 @@ public class TableCellFormatTests
     [Fact]
     public void A_text_edit_beside_a_content_control_cell_stays_a_cell_level_edit()
     {
-        // A cell a row-level content control holds is never compared for formatting, so the row keeps the cell-level
-        // edit main makes of a text change elsewhere in the table rather than a whole-table replacement (issue #1804).
+        // A cell a row-level content control holds is compared for formatting like any other cell (issue #1804): the
+        // text change elsewhere in the table stays a cell-level edit, rather than a whole-table replacement, and the
+        // bold inside the control is tracked there.
         static WmlDocument Revision(string text, string rPr) => Document(Table("",
             Cell(Paragraph(text)) + Cell(Paragraph("B1")),
             Cell(Paragraph("A2")) + ContentControl(Cell(Paragraph("B2", rPr: rPr)))));
@@ -190,7 +191,9 @@ public class TableCellFormatTests
         var redline = DocxCompare.Compare(left, right);
         Assert.Single(Body(redline).Elements(W + "tbl"));
         Assert.Single(Body(redline).Descendants(W + "ins"));
+        Assert.Single(Body(redline).Descendants(W + "sdt").Descendants(W + "rPrChange"));
         Assert.Equal(CellParagraphs(right), CellParagraphs(RevisionProcessor.AcceptRevisions(redline)));
+        Assert.Equal(CellParagraphs(left), CellParagraphs(RevisionProcessor.RejectRevisions(redline)));
     }
 
     [Fact]
@@ -215,10 +218,10 @@ public class TableCellFormatTests
         $"<w:sdt><w:sdtPr><w:id w:val=\"9\"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>";
 
     /// <summary>
-    /// A table with a row or cell that a content control delivers is still copied whole (issue #1804): the
-    /// modified-table renderer would write such a row twice, so its cell's change stays untracked but its rows
-    /// come out once. <c>row</c> bolds a cell beside a row in a content control, <c>cell</c> bolds a cell a
-    /// row-level content control holds, and <c>noise</c> changes only a nested table's language beside such a row.
+    /// A table with a row or cell that a content control delivers keeps each row once, and its cell's formatting
+    /// change is tracked, as in any other table (issue #1804). <c>row</c> bolds a cell beside a row in a content
+    /// control, <c>cell</c> bolds a cell a row-level content control holds, and <c>noise</c> changes only a nested
+    /// table's language beside such a row, which is not tracked.
     /// </summary>
     [Theory]
     [InlineData("row", false)]
@@ -248,9 +251,13 @@ public class TableCellFormatTests
         var accepted = RevisionProcessor.AcceptRevisions(redline);
         Assert.Equal(Rows(right), Rows(accepted));
         Assert.Equal(CellParagraphs(right), CellParagraphs(accepted));
-        Assert.Equal(Rows(left), Rows(RevisionProcessor.RejectRevisions(redline)));
+        var rejected = RevisionProcessor.RejectRevisions(redline);
+        Assert.Equal(Rows(left), Rows(rejected));
+        Assert.Equal(shape == "noise" ? 0 : 1, Body(redline).Descendants(W + "tbl").Descendants(W + "rPrChange").Count());
         if (shape == "noise")
             Assert.Empty(DocxDiff.GetRevisions(left, right));
+        else
+            Assert.Equal(CellParagraphs(left), CellParagraphs(rejected));
     }
 
     [Fact]
