@@ -192,7 +192,13 @@ du -sh "$WASM_DIST"
 # CI measured the branch at 6,078,467 bytes before its rebase, 3 over 5936 KiB. 8 KiB more covers
 # the change with the spread between runners; assembly roots, dependencies and the AOT profile are
 # unchanged.
-WIRE_BUDGET_BYTES=$((5944 * 1024))
+# The comparison fixes for #1804 and #1805 add no wire size of their own: local builds of main f5cefdd1 and
+# each branch, differing only in that change, measured 6,086,099 (main), 6,086,133 (#1805) and 6,083,500
+# (#1804) bytes, and CI's build-npm job measured the #1805 branch at 6,083,474. CI's fidelity compare job,
+# on a different runner, measured the same branches at 6,087,674 and 6,090,928, up to 4,272 over 5944 KiB:
+# main had 557 bytes of headroom on local and build-npm builds, less than that spread. 8 KiB more covers it;
+# assembly roots, dependencies and the AOT profile are unchanged.
+WIRE_BUDGET_BYTES=$((5952 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""
