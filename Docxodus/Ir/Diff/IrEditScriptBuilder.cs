@@ -1991,8 +1991,9 @@ internal static class IrEditScriptBuilder
     /// cell's content hash covers its text and not its paragraphs' formatting, so without this the table, row
     /// and cell gates treat such a cell as unchanged and copy the revised one untracked. Paragraphs compare by the
     /// aligner's own format rule, so the comparison policy and tracking settings apply as they do in the body.
-    /// A table with a row or cell delivered by a content control is never flagged: the modified-table renderer does
-    /// not rebuild those controls yet (issue #1804), so a formatting change there stays untracked, as before.
+    /// A table with a row or cell delivered by a content control, and such a row or cell, are never flagged: the
+    /// modified-table renderer does not rebuild those controls yet (issue #1804), so a formatting change there stays
+    /// untracked, as before, unless the table is compared row by row for another change.
     /// </summary>
     internal static bool CellFormattingDiffers(IrBlock left, IrBlock right, IrDiffSettings settings)
     {

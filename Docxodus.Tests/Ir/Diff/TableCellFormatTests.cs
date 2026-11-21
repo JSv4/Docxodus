@@ -196,6 +196,12 @@ public class TableCellFormatTests
     [Fact]
     public void A_cell_paragraph_change_follows_the_body_when_block_format_tracking_is_off()
     {
+        // A parity pin: main already leaves these untracked. A nested table's property change is not tracked either,
+        // so it does not take the outer table apart row by row.
+        static WmlDocument Nested(string tblPr) => Document(Table("",
+            Cell(Table(tblPr, Cell(Paragraph("Inner text."))) + Paragraph(""))));
+        Assert.DoesNotContain("\"tableDiff\"", DocxDiff.GetEditScriptJson(Nested(""), Nested("<w:jc w:val=\"center\"/>"),
+            new DocxDiffSettings { TrackBlockFormatChanges = false }));
         var settings = new DocxDiffSettings { TrackBlockFormatChanges = false };
         foreach (var wrap in new System.Func<string, string>[] { p => p, p => Table("", Cell(p)) })
         {
