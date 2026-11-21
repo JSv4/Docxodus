@@ -171,7 +171,7 @@ internal static class IrCompositeRevisionRenderer
                     if (rowOp.SourceReviewer >= 0 && rowOp.SourceReviewer < reviewers.Count
                         && rowOp.RightRowAnchor is { } rra)
                     {
-                        string text = RowText(reviewers[rowOp.SourceReviewer].Ir, rra, settings);
+                        string text = IrRevisionRenderer.RowText(rra, reviewers[rowOp.SourceReviewer].Ir, settings);
                         if (text.Length > 0)
                             sink.Add((
                                 new IrRevision(IrRevisionType.Inserted, text, rowOp.Author,
@@ -186,7 +186,7 @@ internal static class IrCompositeRevisionRenderer
                     // A reviewer-deleted whole base row: one Deleted revision (text from the base row).
                     if (rowOp.BaseRowAnchor is { } bra)
                     {
-                        string text = RowText(baseIr, bra, settings);
+                        string text = IrRevisionRenderer.RowText(bra, baseIr, settings);
                         if (text.Length > 0)
                             sink.Add((
                                 new IrRevision(IrRevisionType.Deleted, text, rowOp.Author,
@@ -319,26 +319,6 @@ internal static class IrCompositeRevisionRenderer
                         return text;
             }
         return null;
-    }
-
-    /// <summary>The concatenated cell text of a row resolved by anchor, for whole-row insert/delete revision
-    /// text. A row is not in <see cref="IrDocument.AnchorIndex"/>, so walk the document's tables.</summary>
-    private static string RowText(IrDocument ir, string rowAnchor, IrDiffSettings settings)
-    {
-        foreach (var block in ir.AnchorIndex.Values)
-            if (block is IrTable tbl)
-                foreach (var row in tbl.Rows)
-                    if (row.Anchor.ToString() == rowAnchor)
-                    {
-                        var sb = new StringBuilder();
-                        foreach (var cell in row.Cells)
-                            foreach (var b in cell.Blocks)
-                                if (b is IrParagraph p)
-                                    foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
-                                        sb.Append(t.Text);
-                        return sb.ToString();
-                    }
-        return string.Empty;
     }
 
     // ------------------------------------------------------------------ single-source ops
