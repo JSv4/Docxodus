@@ -284,13 +284,82 @@ internal static class IrTableControlPlanner
         foreach (var shared in surviving) authors.Remove(shared);
         List<int>? order = null;
         if (!StayTogether(chains))
-        {
             order = KeepInsertsTogether(rows, chains);
+        var children = PlaceTableChildren(original, rows, baseRows, tables, reviewRows, ref order);
+        if (order is not null)
+        {
             chains = order.Select(i => chains[i]).ToArray();
             if (!StayTogether(chains)) return null;
         }
         var layout = chains.Any(c => c.Length > 0) ? new IrControlLayout(chains, authors.Keys.ToHashSet(), Authors: authors) : null;
-        return new IrComposedTableControls(layout, cells, order, tables.ToDictionary(t => t.Key, t => t.Value.Anchor.ToString()));
+        return new IrComposedTableControls(layout, cells, order, tables.ToDictionary(t => t.Key, t => t.Value.Anchor.ToString()), children);
+    }
+
+    /// <summary>Place each non-row child once. An empty control's position in the paired control
+    /// sequence identifies the same control in each reviewer. Two rows inserted into one base gap
+    /// can therefore lie on opposite sides of a control, regardless of reviewer order.</summary>
+    private static List<(int Child, int Before)>? PlaceTableChildren(IrTable original,
+        List<IrAuthoredRowOp> rows, Dictionary<string, int> baseRows, IReadOnlyDictionary<int, IrTable> tables,
+        Dictionary<int, Dictionary<string, int>> reviewRows, ref List<int>? order)
+    {
+        if (original.ChildOrder is not { } source) return null;
+        var extras = new List<int>();
+        var empty = new List<int>();
+        for (int i = 0; i < source.Children.Count; i++)
+        {
+            var child = source.Children[i];
+            if (child.Parent >= 0 || child.MemberCount > 0 || child.Name == W.tblPr || child.Name == W.tblGrid)
+                continue;
+            extras.Add(i);
+            if (child.Name == W.sdt) empty.Add(i);
+        }
+        if (extras.Count == 0) return null;
+
+        var boundary = new int[rows.Count];
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            if (row.BaseRowAnchor is { } anchor)
+                boundary[i] = source.Members[baseRows[anchor]];
+            else
+            {
+                boundary[i] = -1;
+                if (empty.Count == 0 || tables[row.SourceReviewer].ChildOrder is not { } other) continue;
+                int position = reviewRows[row.SourceReviewer][row.RightRowAnchor!];
+                int prior = 0;
+                foreach (var control in other.EmptyControls)
+                    if (control.FirstMember <= position) prior++;
+                if (prior > 0 && prior <= empty.Count)
+                    boundary[i] = empty[prior - 1];
+            }
+        }
+        var placed = new List<(int, int)>(extras.Count);
+        var drawOrder = order;
+        int SourceIndex(int i) => drawOrder?[i] ?? i;
+        int next = 0;
+        for (int i = 0; i < rows.Count;)
+        {
+            int end = i + 1;
+            if (rows[SourceIndex(i)].Kind == IrRowOpKind.InsertRow)
+            {
+                while (end < rows.Count && rows[SourceIndex(end)].Kind == IrRowOpKind.InsertRow) end++;
+                bool inverted = false;
+                for (int j = i + 1; j < end; j++)
+                    if (boundary[SourceIndex(j - 1)] > boundary[SourceIndex(j)]) inverted = true;
+                if (inverted)
+                {
+                    drawOrder ??= Enumerable.Range(0, rows.Count).ToList();
+                    var sorted = drawOrder.GetRange(i, end - i).OrderBy(index => boundary[index]).ToArray();
+                    for (int j = 0; j < sorted.Length; j++) drawOrder[i + j] = sorted[j];
+                }
+            }
+            for (; i < end; i++)
+                while (next < extras.Count && extras[next] <= boundary[SourceIndex(i)])
+                    placed.Add((extras[next++], i));
+        }
+        while (next < extras.Count) placed.Add((extras[next++], rows.Count));
+        order = drawOrder;
+        return placed;
     }
 
     /// <summary>
@@ -331,4 +400,5 @@ internal static class IrTableControlPlanner
 }
 
 internal sealed record IrComposedTableControls(IrControlLayout? Rows,
-    Dictionary<string, (int Row, IrControlLayout Layout)> Cells, List<int>? Order, Dictionary<int, string> TableAnchors);
+    Dictionary<string, (int Row, IrControlLayout Layout)> Cells, List<int>? Order, Dictionary<int, string> TableAnchors,
+    List<(int Child, int Before)>? Children);
