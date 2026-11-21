@@ -2123,15 +2123,41 @@ internal static partial class IrMarkupRenderer
         var leftRowsByAnchor = IndexRows(ResolveBlock(op.LeftAnchor, state.Left) as IrTable);
         var rightRowsByAnchor = IndexRows(ResolveBlock(op.RightAnchor, state.RightSource) as IrTable);
 
+        // Each row op's source rows, in output order; a moved row's two halves each have one side.
+        var rowSources = new List<(XElement? Left, XElement? Right)>(tableDiff.RowOps.Count);
+        foreach (var row in tableDiff.RowOps)
+            rowSources.Add((
+                row.Kind == IrRowOpKind.MovedRow && row.IsMoveSource != true ? null : leftRowsByAnchor.GetValueOrDefault(row.LeftRowAnchor ?? ""),
+                row.Kind == IrRowOpKind.MovedRow && row.IsMoveSource == true ? null : rightRowsByAnchor.GetValueOrDefault(row.RightRowAnchor ?? "")));
+
+        // Rows and cells that content controls deliver go back into copies of their controls (issue #1804). A table
+        // whose controls cannot be rebuilt exactly falls back to the whole-table pair before anything is rendered.
+        var rowControls = PlanControls(rowSources, leftTbl, rightTbl, W.tr);
+        if (rowControls is null)
+            return false;
+        var cellControls = new ControlLayout?[tableDiff.RowOps.Count];
+        for (int i = 0; i < tableDiff.RowOps.Count; i++)
+        {
+            if (tableDiff.RowOps[i] is not { Kind: IrRowOpKind.ModifyRow, CellOps: { } cellOps } || rowSources[i].Right is not { } rightRow)
+                continue;
+            if (!HasControlChild(rowSources[i].Left, rightRow))
+                cellControls[i] = ControlLayout.None;
+            // Cell ops that do not tile the rows' cells leave the row unplanned, and RenderModifyRow refuses it.
+            else if (CellSources(cellOps, rowSources[i].Left, rightRow) is { } cellSources &&
+                     (cellControls[i] = PlanControls(cellSources, rowSources[i].Left, rightRow, W.tc)) is null)
+                return false;
+        }
+
         var newTbl = new XElement(W.tbl);
-        // Carry the table's non-row prelude (tblPr, tblGrid, …) from the right shell.
-        foreach (var pre in rightTbl.Elements().Where(e => e.Name != W.tr && !IsBlockLevelMarker(e)))
+        // Carry the table's non-row prelude (tblPr, tblGrid, …) from the right shell; its controls are rebuilt below.
+        foreach (var pre in rightTbl.Elements().Where(e => e.Name != W.tr && e.Name != W.sdt && !IsBlockLevelMarker(e)))
             newTbl.Add(StripUnids(new XElement(pre)));
         // Table-level shell changes (block-format-change family): tblPr / tblGrid.
         ApplyTableLevelShellChanges(newTbl, leftTbl, state);
 
-        foreach (var rowOp in tableDiff.RowOps)
+        for (int rowIndex = 0; rowIndex < tableDiff.RowOps.Count; rowIndex++)
         {
+            var rowOp = tableDiff.RowOps[rowIndex];
             switch (rowOp.Kind)
             {
                 case IrRowOpKind.EqualRow:
@@ -2169,7 +2195,7 @@ internal static partial class IrMarkupRenderer
                 {
                     if (!rightRowsByAnchor.TryGetValue(rowOp.RightRowAnchor ?? "", out var rightSrc)) return false;
                     XElement? leftRowSrc = rowOp.LeftRowAnchor is { } mla && leftRowsByAnchor.TryGetValue(mla, out var ml) ? ml : null;
-                    if (!RenderModifyRow(rowOp, rightSrc, leftRowSrc, state, newTbl))
+                    if (!RenderModifyRow(rowOp, rightSrc, leftRowSrc, cellControls[rowIndex], state, newTbl))
                         return false;
                     break;
                 }
@@ -2206,20 +2232,273 @@ internal static partial class IrMarkupRenderer
         }
 
         if (leftTbl.Elements().Any(IsBlockLevelMarker) || rightTbl.Elements().Any(IsBlockLevelMarker))
-            ReconcileTableStreamMarkers(newTbl, tableDiff.RowOps.Select(row => (
-                row.Kind == IrRowOpKind.MovedRow && row.IsMoveSource != true ? null : leftRowsByAnchor.GetValueOrDefault(row.LeftRowAnchor ?? ""),
-                row.Kind == IrRowOpKind.MovedRow && row.IsMoveSource == true ? null : rightRowsByAnchor.GetValueOrDefault(row.RightRowAnchor ?? "")))
-                .ToList(), state);
+            ReconcileTableStreamMarkers(newTbl, rowSources, state);
+        RewrapInControls(newTbl, W.tr, rowControls, state);
         sink.Add(newTbl);
         return true;
+    }
+
+    /// <summary>
+    /// Where each row of a rebuilt table, or cell of a rebuilt row, goes among the content controls that deliver them
+    /// (issue #1804): for each child in output order, the source controls around it, outermost first; and the
+    /// controls only one side has, true for the original's. A control both sides have is written once, from the
+    /// revision.
+    /// </summary>
+    internal sealed record ControlLayout(XElement[][] Chains, Dictionary<XElement, bool> OneSided)
+    {
+        public static readonly ControlLayout None = new(Array.Empty<XElement[]>(), new());
+    }
+
+    /// <summary>
+    /// Plan <see cref="RewrapInControls"/> for a table's rows or a row's cells, given each output child's left and
+    /// right source. Two paired children name the same control at each level of their nesting: one control on each
+    /// side, with the same properties, paired with no other. Null when the controls cannot be rebuilt exactly: a
+    /// control holding anything but such children and further controls, or nested past the reader's cap, a
+    /// container with bookmarks or comment ranges between its children, controls whose properties differ, or a
+    /// control whose children would not come out next to each other.
+    /// </summary>
+    internal static ControlLayout? PlanControls(
+        List<(XElement? Left, XElement? Right)> children, XElement? leftContainer, XElement rightContainer, XName childName)
+    {
+        if (!HasControlChild(leftContainer, rightContainer))
+            return ControlLayout.None;
+        foreach (var container in new[] { leftContainer, rightContainer })
+        {
+            if (container is null)
+                continue;
+            foreach (var child in container.Elements())
+                if (IsBlockLevelMarker(child) || child.Name == W.sdt && !RebuildableControl(child, childName, 0))
+                    return null;
+        }
+
+        var leftToRight = new Dictionary<XElement, XElement>();
+        var rightToLeft = new Dictionary<XElement, XElement>();
+        foreach (var (left, right) in children)
+        {
+            if (left is null || right is null)
+                continue;
+            var leftChain = ControlChain(left, leftContainer!);
+            var rightChain = ControlChain(right, rightContainer);
+            if (leftChain.Length != rightChain.Length)
+                return null;
+            for (int level = 0; level < leftChain.Length; level++)
+            {
+                var (l, r) = (leftChain[level], rightChain[level]);
+                if (leftToRight.TryGetValue(l, out var paired))
+                {
+                    if (paired != r)
+                        return null;
+                }
+                else if (rightToLeft.ContainsKey(r) ||
+                         IrHasher.CanonicalHash(ControlShell(l)) != IrHasher.CanonicalHash(ControlShell(r)))
+                    return null;
+                else
+                {
+                    leftToRight.Add(l, r);
+                    rightToLeft.Add(r, l);
+                }
+            }
+        }
+
+        // A left-only child goes into the revision's copy of a control both sides have; a control only one side has
+        // holds only that side's children.
+        var chains = new XElement[children.Count][];
+        var oneSided = new Dictionary<XElement, bool>();
+        for (int i = 0; i < children.Count; i++)
+        {
+            var (left, right) = children[i];
+            var chain = right is not null ? ControlChain(right, rightContainer)
+                : left is not null ? ControlChain(left, leftContainer!) : Array.Empty<XElement>();
+            for (int level = 0; level < chain.Length; level++)
+            {
+                if (right is not null)
+                {
+                    if (left is null && !rightToLeft.ContainsKey(chain[level]))
+                        oneSided[chain[level]] = false;
+                }
+                else if (leftToRight.TryGetValue(chain[level], out var shared))
+                    chain[level] = shared;
+                else
+                    oneSided[chain[level]] = true;
+            }
+            chains[i] = chain;
+        }
+
+        // Each control's children must be adjacent in the output, or it would be written twice.
+        var open = new List<XElement>();
+        var closed = new HashSet<XElement>();
+        foreach (var chain in chains)
+        {
+            int common = 0;
+            while (common < open.Count && common < chain.Length && open[common] == chain[common])
+                common++;
+            for (int k = open.Count - 1; k >= common; k--)
+            {
+                closed.Add(open[k]);
+                open.RemoveAt(k);
+            }
+            for (int k = common; k < chain.Length; k++)
+            {
+                if (closed.Contains(chain[k]))
+                    return null;
+                open.Add(chain[k]);
+            }
+        }
+        return new ControlLayout(chains, oneSided);
+    }
+
+    private static bool HasControlChild(XElement? left, XElement right) =>
+        left?.Element(W.sdt) is not null || right.Element(W.sdt) is not null;
+
+    /// <summary>Whether a table- or row-level control holds only <paramref name="childName"/> children and further
+    /// such controls, at least one, within the nesting the reader models.</summary>
+    private static bool RebuildableControl(XElement sdt, XName childName, int depth)
+    {
+        if (depth >= IrReader.MaxSdtDepth || sdt.Element(W.sdtContent) is not { } content || !content.HasElements)
+            return false;
+        foreach (var part in sdt.Elements())
+            if (part.Name != W.sdtPr && part.Name != W.sdtEndPr && part.Name != W.sdtContent)
+                return false;
+        foreach (var child in content.Elements())
+            if (child.Name != childName && !(child.Name == W.sdt && RebuildableControl(child, childName, depth + 1)))
+                return false;
+        return true;
+    }
+
+    /// <summary>The content controls between <paramref name="child"/> and its table or row, outermost first.</summary>
+    private static XElement[] ControlChain(XElement child, XElement container)
+    {
+        int depth = 0;
+        for (var a = child.Parent; a is not null && a != container; a = a.Parent)
+            if (a.Name == W.sdt)
+                depth++;
+        if (depth == 0)
+            return Array.Empty<XElement>();
+        var chain = new XElement[depth];
+        for (var a = child.Parent; a is not null && a != container; a = a.Parent)
+            if (a.Name == W.sdt)
+                chain[--depth] = a;
+        return chain;
+    }
+
+    /// <summary>A control without its content: its attributes and properties, which a rebuilt copy keeps.</summary>
+    private static XElement ControlShell(XElement sdt) =>
+        new(W.sdt, sdt.Attributes(), sdt.Element(W.sdtPr), sdt.Element(W.sdtEndPr));
+
+    /// <summary>
+    /// Put the rows (or cells) of a rebuilt <paramref name="container"/> into copies of the controls
+    /// <paramref name="layout"/> gives them. Every other child (properties, bookmarks, move ranges) stays in place,
+    /// inside a control only when the children on both sides of it are. A control only one side has is marked with
+    /// the custom-XML ranges Word writes around an inserted or deleted control, so the view without it removes the
+    /// control along with its rows or cells, which are marked themselves.
+    /// </summary>
+    private static void RewrapInControls(XElement container, XName childName, ControlLayout layout, RenderState state)
+    {
+        if (ReferenceEquals(layout, ControlLayout.None))
+            return;
+        var nodes = container.Elements().ToList();
+        container.RemoveNodes();
+        var open = new List<(XElement Source, XElement Content)>();
+        var pending = new List<XElement>();
+        var envelopes = new List<(XElement Source, XElement Control)>();
+        int index = 0;
+        foreach (var node in nodes)
+        {
+            if (node.Name != childName)
+            {
+                pending.Add(node);
+                continue;
+            }
+            var chain = layout.Chains[index++];
+            int common = 0;
+            while (common < open.Count && common < chain.Length && open[common].Source == chain[common])
+                common++;
+            open.RemoveRange(common, open.Count - common);
+            (open.Count == 0 ? container : open[open.Count - 1].Content).Add(pending);
+            pending.Clear();
+            for (int level = common; level < chain.Length; level++)
+            {
+                var source = chain[level];
+                bool oneSided = layout.OneSided.TryGetValue(source, out var deleted);
+                var control = new XElement(W.sdt,
+                    source.Attributes().Where(a => a.Name.Namespace != PtOpenXml.pt && a.Name != PtOpenXml.Unid));
+                foreach (var part in source.Elements())
+                {
+                    if (part.Name == W.sdtContent)
+                        continue;
+                    var clone = StripUnids(new XElement(part));
+                    if (!deleted)
+                        state.RegisterMediaReferences(clone);
+                    control.Add(clone);
+                }
+                var content = new XElement(W.sdtContent);
+                control.Add(content);
+                (open.Count == 0 ? container : open[open.Count - 1].Content).Add(control);
+                open.Add((source, content));
+                if (oneSided)
+                    envelopes.Add((source, control));
+            }
+            (open.Count == 0 ? container : open[open.Count - 1].Content).Add(node);
+        }
+        container.Add(pending);
+        foreach (var (source, control) in envelopes)
+        {
+            bool deleted = layout.OneSided[source];
+            var (before, after) = Internal.StructuredRevisionOps.AddCrossBoundaryMarkers(control.Element(W.sdtContent)!,
+                deleted ? W.customXmlDelRangeStart : W.customXmlInsRangeStart,
+                deleted ? W.customXmlDelRangeEnd : W.customXmlInsRangeEnd,
+                name => new XElement(name, state.RevisionAttributes()));
+            control.AddBeforeSelf(before);
+            control.AddAfterSelf(after);
+        }
+    }
+
+    /// <summary>A row's cells in source order, including those its content controls deliver, as the reader lists
+    /// them.</summary>
+    private static List<XElement> RowCells(XElement row)
+    {
+        var cells = new List<XElement>();
+        foreach (var (cell, _) in IrReader.TableChildren(row, W.tc))
+            cells.Add(cell);
+        return cells;
+    }
+
+    /// <summary>Each cell op's source cells, in output order, or null when the ops do not tile the rows' cells.</summary>
+    private static List<(XElement? Left, XElement? Right)>? CellSources(
+        IReadOnlyList<IrCellOp> cellOps, XElement? leftRow, XElement rightRow)
+    {
+        var rightCells = RowCells(rightRow);
+        var leftCells = leftRow is null ? null : RowCells(leftRow);
+        int leftIndex = 0, rightIndex = 0;
+        var sources = new List<(XElement? Left, XElement? Right)>(cellOps.Count);
+        foreach (var cellOp in cellOps)
+        {
+            XElement? left = null, right = null;
+            if (cellOp.LeftCellAnchor is not null && leftCells is not null)
+            {
+                if (leftIndex >= leftCells.Count)
+                    return null;
+                left = leftCells[leftIndex++];
+            }
+            if (cellOp.RightCellAnchor is not null)
+            {
+                if (rightIndex >= rightCells.Count)
+                    return null;
+                right = rightCells[rightIndex++];
+            }
+            sources.Add((left, right));
+        }
+        return rightIndex == rightCells.Count && (leftCells is null || leftIndex == leftCells.Count) ? sources : null;
     }
 
     /// <summary>Render a ModifyRow: build the new row from the RIGHT row shell, replacing each paired cell's
     /// content per its block ops, and whole-marking an unpaired (column-surplus) cell. When
     /// <paramref name="leftRowSrc"/> is supplied, the row's <c>w:trPr</c> and each paired cell's <c>w:tcPr</c>
-    /// shell change is tracked (block-format-change family). Returns false to bail to the caller's fallback if
-    /// the structure can't be resolved.</summary>
-    private static bool RenderModifyRow(IrRowOp rowOp, XElement rightRowSrc, XElement? leftRowSrc, RenderState state, XElement newTbl)
+    /// shell change is tracked (block-format-change family). Cells that row-level content controls deliver go back
+    /// into copies of those controls, as <paramref name="cellControls"/> plans (issue #1804). Returns false to bail
+    /// to the caller's fallback if the structure can't be resolved.</summary>
+    private static bool RenderModifyRow(IrRowOp rowOp, XElement rightRowSrc, XElement? leftRowSrc, ControlLayout? cellControls,
+        RenderState state, XElement newTbl)
     {
         // Without a per-cell op list, emit the right row as-is (content-equal row that fell into a ModifyRow by
         // row-property change only) — still round-trips.
@@ -2236,8 +2515,8 @@ internal static partial class IrMarkupRenderer
             return true;
         }
 
-        var rightCells = rightRowSrc.Elements(W.tc).ToList();
-        var leftCells = leftRowSrc?.Elements(W.tc).ToList();
+        var rightCells = RowCells(rightRowSrc);
+        var leftCells = leftRowSrc is null ? null : RowCells(leftRowSrc);
         // A monotone cell-op sequence is renderable whenever every output (right) cell is represented once
         // and every left cell is represented once. This includes an ordinary-grid insertion at the head or
         // in the middle — build from the accepted right grid, mark only the right-only cell w:cellIns, and
@@ -2248,7 +2527,7 @@ internal static partial class IrMarkupRenderer
         // with its content deleted rather than lowering the whole table to a delete + insert pair.
         if (rowOp.CellOps.Count(c => c.RightCellAnchor != null) != rightCells.Count ||
             (leftCells != null && rowOp.CellOps.Count(c => c.LeftCellAnchor != null) != leftCells.Count) ||
-            (leftCells == null && rowOp.CellOps.Any(c => c.RightCellAnchor == null)))
+            (leftCells == null && rowOp.CellOps.Any(c => c.RightCellAnchor == null)) || cellControls is null)
             return false;
 
         // Only the RIGHT-sourced pieces of the row are registered for media import — never the assembled row,
@@ -2349,11 +2628,9 @@ internal static partial class IrMarkupRenderer
             newRow.Add(newCell);
         }
         PlaceRightMarkersBefore(int.MaxValue);
-        leftIndex = rightIndex = 0;
         if (rightRowSrc.Elements().Any(IsBlockLevelMarker) || leftRowSrc?.Elements().Any(IsBlockLevelMarker) == true)
-            ReconcileTableStreamMarkers(newRow, rowOp.CellOps.Select(cell => (
-                cell.LeftCellAnchor is null ? null : leftCells?[leftIndex++],
-                cell.RightCellAnchor is null ? null : rightCells[rightIndex++])).ToList(), state);
+            ReconcileTableStreamMarkers(newRow, CellSources(rowOp.CellOps, leftRowSrc, rightRowSrc)!, state);
+        RewrapInControls(newRow, W.tc, cellControls, state);
         // The paired tcPr histories were applied per cell above; row shells remain one per row.
         if (leftRowSrc != null)
             ApplyRowShellChanges(newRow, leftRowSrc, state);
@@ -2362,8 +2639,8 @@ internal static partial class IrMarkupRenderer
     }
 
     /// <summary>A source row's non-cell children: its properties (<c>w:tblPrEx</c>, <c>w:trPr</c>), and every
-    /// other child with the number of <c>w:tc</c> before it, so a rebuilt row can put it back between the same
-    /// cells (issue #864).</summary>
+    /// other child with the number of cells before it, so a rebuilt row can put it back between the same
+    /// cells (issue #864). A content control delivering cells counts as its cells, which are rebuilt with it.</summary>
     private sealed record RowShell(List<XElement> Properties, List<(XElement Element, int CellsBefore)> Markers);
 
     private static RowShell SplitRowShell(XElement row)
@@ -2374,6 +2651,9 @@ internal static partial class IrMarkupRenderer
         {
             if (child.Name == W.tc)
                 cells++;
+            else if (child.Name == W.sdt)
+                foreach (var _ in IrReader.UnwrapSdtChildren(child, W.tc))
+                    cells++;
             else if (child.Name == W.tblPrEx || child.Name == W.trPr)
                 shell.Properties.Add(child);
             else

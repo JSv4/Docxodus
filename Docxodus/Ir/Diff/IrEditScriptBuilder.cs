@@ -1991,13 +1991,10 @@ internal static class IrEditScriptBuilder
     /// cell's content hash covers its text and not its paragraphs' formatting, so without this the table, row
     /// and cell gates treat such a cell as unchanged and copy the revised one untracked. Paragraphs compare by the
     /// aligner's own format rule, so the comparison policy and tracking settings apply as they do in the body.
-    /// A table with a row or cell delivered by a content control, and such a row or cell, are never flagged: the
-    /// modified-table renderer does not rebuild those controls yet (issue #1804), so a formatting change there stays
-    /// untracked, as before, unless the table is compared row by row for another change.
     /// </summary>
     internal static bool CellFormattingDiffers(IrBlock left, IrBlock right, IrDiffSettings settings)
     {
-        if (left is not IrTable lt || right is not IrTable rt || HasContentControlRow(lt) || HasContentControlRow(rt))
+        if (left is not IrTable lt || right is not IrTable rt)
             return false;
         for (int i = 0; i < Math.Min(lt.Rows.Count, rt.Rows.Count); i++)
             if (CellFormattingDiffers(lt.Rows[i], rt.Rows[i], settings)) return true;
@@ -2006,7 +2003,6 @@ internal static class IrEditScriptBuilder
 
     internal static bool CellFormattingDiffers(IrRow left, IrRow right, IrDiffSettings settings)
     {
-        if (FromContentControl(left) || FromContentControl(right)) return false;
         for (int i = 0; i < Math.Min(left.Cells.Count, right.Cells.Count); i++)
             if (CellFormattingDiffers(left.Cells[i], right.Cells[i], settings)) return true;
         return false;
@@ -2015,7 +2011,7 @@ internal static class IrEditScriptBuilder
     internal static bool CellFormattingDiffers(IrCell left, IrCell right, IrDiffSettings settings)
     {
         // Equal stored fingerprints are format-equal, as in the aligner's first anchor pass.
-        if (left.FromRowSdt || right.FromRowSdt || left.FormatFingerprint.Equals(right.FormatFingerprint)) return false;
+        if (left.FormatFingerprint.Equals(right.FormatFingerprint)) return false;
         for (int i = 0; i < Math.Min(left.Blocks.Count, right.Blocks.Count); i++)
         {
             // A nested table's stored fingerprint also holds what the policy ignores in its cells, so compare the
@@ -2036,7 +2032,8 @@ internal static class IrEditScriptBuilder
         return false;
     }
 
-    private static bool HasContentControlRow(IrTable table)
+    /// <summary>Whether a content control delivers one of the table's rows, or a cell of one.</summary>
+    internal static bool HasContentControlRow(IrTable table)
     {
         for (int i = 0; i < table.Rows.Count; i++)
             if (FromContentControl(table.Rows[i])) return true;

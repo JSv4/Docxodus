@@ -1794,6 +1794,12 @@ internal static class IrCompositeMerger
     {
         if (!touched.All(e => IsTableContentOrShellEdit(e.Op, reviewers[e.Reviewer].Ir)) || !MovedRowsComposable(touched))
             return false;
+        // The composed table is built from bare rows and cells, so a row or cell a content control delivers would
+        // lose its control, or a table-level control be copied with its rows beside them (issue #1804).
+        if (IrEditScriptBuilder.HasContentControlRow(baseTable) || touched.Any(e => e.Op.RightAnchor is { } ra &&
+                reviewers[e.Reviewer].Ir.AnchorIndex.TryGetValue(ra, out var rb) && rb is IrTable rt &&
+                IrEditScriptBuilder.HasContentControlRow(rt)))
+            return false;
         // Content composition over the CONTENT (ModifyBlock w/TableDiff) touchers — a pure shell
         // (FormatOnlyBlock) toucher contributes no row ops, so with only shell touchers ComposeTableDiffs
         // yields an all-EqualRow authored table onto which the shell attribution below layers the markup.
