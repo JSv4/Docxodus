@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using Docxodus.Verification;
 using Xunit;
 
 namespace Docxodus.Tests.Ir.Diff;
@@ -135,6 +136,9 @@ public class ConsolidateReviewerMarkerTests
         var original = PaymentTerm(controlled, "thirty days", null, inside, partial);
         var reviewed = PaymentTerm(controlled, "thirty days", annotation, inside, partial);
         Assert.Empty(DocxDiff.GetRevisions(original, reviewed));
+        var changes = DocxDiff.GetSemanticChanges(original, reviewed).Changes;
+        Assert.Contains(changes, c => c.Family == (annotation == "comment" ? SemanticChangeFamily.Comment : SemanticChangeFamily.Bookmark));
+        Assert.DoesNotContain(changes, c => c.Family is SemanticChangeFamily.Text or SemanticChangeFamily.BlockStructure or SemanticChangeFamily.ContentControl);
         var reviewers = new[] { new DocxDiffReviewer { Author = "Reviewer B", Document = reviewed } };
         Assert.Empty(DocxDiff.GetConsolidatedRevisions(original, reviewers));
         foreach (var (product, redline) in new[] { ("Compare", DocxCompare.Compare(original, reviewed)), ("Consolidate", DocxCompare.Consolidate(original, reviewers)) })
