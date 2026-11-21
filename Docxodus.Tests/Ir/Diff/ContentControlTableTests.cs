@@ -260,20 +260,24 @@ public class ContentControlTableTests
     /// Two reviewers who edit a content-control table are recorded as a conflict, as for any table the merge cannot
     /// compose, even when their tables look alike: <c>alike</c> makes the same edit in two separately saved copies, one
     /// with another <c>w14:textId</c>; <c>bookmark</c> also adds a bookmark in the second copy, which a shortcut that
-    /// kept one reviewer's table would drop. Nothing is lost: the base is kept and the conflict names both reviewers.
+    /// kept one reviewer's table would drop; <c>bookmark-only</c> has the second reviewer only add that bookmark, which the
+    /// merge would otherwise hand to the one reviewer who edited the table and drop. Nothing is lost: the base is kept
+    /// and the conflict names both reviewers.
     /// </summary>
     [Theory]
     [InlineData("alike")]
     [InlineData("bookmark")]
+    [InlineData("bookmark-only")]
     public void Two_reviewers_editing_a_content_control_table_alike_record_a_conflict(string shape)
     {
         const string w14 = "xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\"";
         var original = Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two")));
         var a = Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two, spare")));
-        var b = Table(Row("Dock", shape == "bookmark"
+        var b = Table(Row("Dock", shape is "bookmark" or "bookmark-only"
                 ? Cell("<w:p><w:bookmarkStart w:id=\"4\" w:name=\"Berth\"/><w:r><w:t>Berth one</w:t></w:r><w:bookmarkEnd w:id=\"4\"/></w:p>")
                 : Cell(P("Berth one"))),
-            Control(9, Row("Crane", Cell(P("Hook two, spare").Replace("<w:p>", $"<w:p {w14} w14:textId=\"22222222\">")))));
+            Control(9, Row("Crane", Cell(P(shape == "bookmark-only" ? "Hook two" : "Hook two, spare")
+                .Replace("<w:p>", $"<w:p {w14} w14:textId=\"22222222\">")))));
         var reviewers = new[]
         {
             new DocxDiffReviewer { Document = a, Author = "Reviewer A" },
@@ -284,6 +288,30 @@ public class ContentControlTableTests
         var merged = DocxCompare.Consolidate(original, reviewers);
         var (accepted, rejected) = (RevisionProcessor.AcceptRevisions(merged), RevisionProcessor.RejectRevisions(merged));
         Assert.Equal(Layout(original), Layout(accepted));
+        Assert.Equal(Layout(original), Layout(rejected));
+        AssertValid(merged, accepted, rejected);
+    }
+
+    [Fact]
+    public void A_bookmark_only_reviewer_listed_first_wins_a_content_control_table_under_first_reviewer_wins()
+    {
+        // The reviewer who only adds a bookmark competes in the conflict in list order, so FirstReviewerWins keeps
+        // that reviewer's table, bookmark and all, rather than the later reviewer's edit.
+        var original = Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two")));
+        var marked = Table(Row("Dock", Cell("<w:p><w:bookmarkStart w:id=\"4\" w:name=\"Berth\"/><w:r><w:t>Berth one</w:t></w:r><w:bookmarkEnd w:id=\"4\"/></w:p>")),
+            Control(9, Row("Crane", "Hook two")));
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Document = marked, Author = "Reviewer B" },
+            new DocxDiffReviewer { Document = Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two, spare"))), Author = "Reviewer A" },
+        };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.FirstReviewerWins };
+        var conflict = Assert.Single(DocxDiff.GetConflicts(original, reviewers, settings));
+        Assert.Equal(new[] { "Reviewer B", "Reviewer A" }, conflict.Competitors.Select(c => c.Author));
+        var merged = DocxCompare.Consolidate(original, reviewers, settings);
+        var (accepted, rejected) = (RevisionProcessor.AcceptRevisions(merged), RevisionProcessor.RejectRevisions(merged));
+        Assert.Equal(Layout(original), Layout(accepted));
+        Assert.Single(Body(accepted).Descendants(W + "bookmarkStart"), b => (string?)b.Attribute(W + "name") == "Berth");
         Assert.Equal(Layout(original), Layout(rejected));
         AssertValid(merged, accepted, rejected);
     }

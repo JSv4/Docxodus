@@ -1158,10 +1158,18 @@ internal static class IrCompositeMerger
 
         // Marker-only reviewers contribute even when several other reviewers edit the table's cells.
         if (baseIr.AnchorIndex.TryGetValue(anchor, out var editedBlock) && editedBlock is IrTable editedTable &&
-            MarkerOnlyTableReviewers(anchor, editedTable, touched[0], entries, reviewers) is { Count: > 0 } promoted &&
-            ComposeTable(anchor, editedTable, touched.Concat(promoted).ToList(), reviewers, baseIr, policy, settings,
-                ops, conflicts, ref nextConflictId))
-            return;
+            MarkerOnlyTableReviewers(anchor, editedTable, touched[0], entries, reviewers) is { Count: > 0 } promoted)
+        {
+            var withMarkers = touched.Concat(promoted).ToList();
+            if (ComposeTable(anchor, editedTable, withMarkers, reviewers, baseIr, policy, settings,
+                    ops, conflicts, ref nextConflictId))
+                return;
+            // A table with content-control rows or cells is never composed (issue #1804). The one-reviewer emit below
+            // would then drop the marker-only reviewers' bookmarks or comments, so they compete in the table's
+            // block-level conflict instead.
+            if (HoldsContentControlRows(editedTable, withMarkers, reviewers))
+                touched = withMarkers.OrderBy(e => e.Reviewer).ToList();
+        }
 
         // Same-shell wrappers already expose their child comparisons. Merge those children through the
         // same dispatch as body and cell blocks, including a marker-only reviewer's equal paragraphs.
@@ -1799,9 +1807,7 @@ internal static class IrCompositeMerger
         // is recorded as a conflict, as any table the merge cannot compose is, even when the reviewers' tables look
         // alike: a shortcut that took one reviewer's table could drop what only another's holds (a bookmark, a
         // comment, a text box's formatting), and a recorded conflict loses nothing.
-        if (IrEditScriptBuilder.HasContentControlRow(baseTable) || touched.Any(e => e.Op.RightAnchor is { } ra &&
-                reviewers[e.Reviewer].Ir.AnchorIndex.TryGetValue(ra, out var rb) && rb is IrTable rt &&
-                IrEditScriptBuilder.HasContentControlRow(rt)))
+        if (HoldsContentControlRows(baseTable, touched, reviewers))
             return false;
         // Content composition over the CONTENT (ModifyBlock w/TableDiff) touchers — a pure shell
         // (FormatOnlyBlock) toucher contributes no row ops, so with only shell touchers ComposeTableDiffs
@@ -1987,6 +1993,20 @@ internal static class IrCompositeMerger
         }
 
         return new IrTableDiff(IrNodeList.From(mergedRowOps));
+    }
+
+    /// <summary>Whether the base table or a touching reviewer's revised table has a row or cell a content control
+    /// delivers, which the composed-table renderer cannot rebuild (issue #1804).</summary>
+    private static bool HoldsContentControlRows(IrTable baseTable, List<(int Reviewer, IrEditOp Op)> touched,
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers)
+    {
+        if (IrEditScriptBuilder.HasContentControlRow(baseTable))
+            return true;
+        foreach (var (reviewer, op) in touched)
+            if (op.RightAnchor is { } ra && reviewers[reviewer].Ir.AnchorIndex.TryGetValue(ra, out var block) &&
+                block is IrTable table && IrEditScriptBuilder.HasContentControlRow(table))
+                return true;
+        return false;
     }
 
     /// <summary>True when <paramref name="op"/> is a table CONTENT edit (a ModifyBlock carrying a TableDiff) or
