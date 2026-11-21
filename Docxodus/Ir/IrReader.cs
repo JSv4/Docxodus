@@ -965,14 +965,76 @@ internal static class IrReader
         {
             stream.Add(new XElement("carrier",
                 new XAttribute("path", InlineElementPath(paragraph, envelope)),
-                new XElement(envelope)));
+                envelope));
         }
         AppendTextboxGraphCarrierEntries(paragraph, ctx, stream);
         AppendTextboxInlineEnvelopeEntries(inlines, "", stream);
         if (!stream.Elements().Any())
             return default;
-        return IrHasher.CanonicalHash(stream, ctx.RelResolver);
+        return IrHasher.CanonicalHash(stream, ctx.RelResolver, canonical =>
+        {
+            foreach (var carrier in canonical.Elements("carrier").Elements())
+                NormalizeEnvelopeAnnotations(carrier);
+        });
     }
+
+    // Work on the hash's canonical copy, where transient run identifiers and revision-session
+    // attributes have already been removed. Keep opaque descendant markup untouched.
+    private static void NormalizeEnvelopeAnnotations(XElement container)
+    {
+        XElement? firstRun = null;
+        System.Text.StringBuilder? joined = null;
+        void Flush()
+        {
+            if (firstRun?.Element(W + "t") is { } text)
+            {
+                if (joined is not null) text.Value = joined.ToString();
+                text.SetAttributeValue(XNamespace.Xml + "space", XmlUtil.GetXmlSpaceAttribute(text.Value)?.Value);
+            }
+            firstRun = null;
+            joined = null;
+        }
+        foreach (var child in container.Elements().ToList())
+        {
+            if (IsRangeAnnotation(child) || IsAnnotationReferenceRun(child))
+            {
+                child.Remove();
+                continue;
+            }
+            if (child.Name == W + "r")
+            {
+                child.Elements(W + "commentReference").Remove();
+                if (child.Element(W + "t") is { } text && child.Elements().All(e => e == text || e.Name == W + "rPr") &&
+                    text.Attributes().All(a => a.Name == XNamespace.Xml + "space"))
+                {
+                    if (firstRun is not null && WordprocessingMLUtil.CanCoalesceAdjacent(firstRun, child) &&
+                        firstRun.Attributes().Select(a => (a.Name, a.Value)).SequenceEqual(child.Attributes().Select(a => (a.Name, a.Value))))
+                    {
+                        joined ??= new System.Text.StringBuilder(firstRun.Element(W + "t")!.Value);
+                        joined.Append(text.Value);
+                        child.Remove();
+                        continue;
+                    }
+                    Flush();
+                    firstRun = child;
+                    continue;
+                }
+            }
+            Flush();
+            if (child.Name == W + "sdtContent" || IsInlineEnvelope(child) || child.Name == W + "hyperlink" ||
+                child.Name == W + "fldSimple" || child.Name == W + "ins" || child.Name == W + "del")
+                NormalizeEnvelopeAnnotations(child);
+        }
+        Flush();
+    }
+
+    internal static bool IsRangeAnnotation(XElement element) =>
+        element.Name == W + "bookmarkStart" || element.Name == W + "bookmarkEnd" ||
+        element.Name == W + "commentRangeStart" || element.Name == W + "commentRangeEnd";
+
+    private static bool IsAnnotationReferenceRun(XElement element) =>
+        element.Name == W + "r" && element.Element(W + "commentReference") is not null &&
+        element.Elements().All(e => e.Name == W + "rPr" || e.Name == W + "commentReference");
 
     private static bool IsOutermostInlineEnvelope(XElement paragraph, XElement envelope) =>
         envelope.Ancestors(W + "p").FirstOrDefault() == paragraph &&
@@ -1293,7 +1355,7 @@ internal static class IrReader
     private static readonly HashSet<XName> PlainRunChildNames = new()
     {
         W + "rPr", W + "t", W + "tab", W + "br", W + "cr", W + "noBreakHyphen",
-        W + "softHyphen", W + "sym", W + "lastRenderedPageBreak",
+        W + "softHyphen", W + "sym", W + "lastRenderedPageBreak", W + "commentReference",
     };
 
     private static bool IsPlainTextRun(XElement element) =>
@@ -1306,6 +1368,8 @@ internal static class IrReader
         bool previousWasPlainRun = false;
         foreach (var sibling in element.Parent!.Elements())
         {
+            if (IsRangeAnnotation(sibling) || IsAnnotationReferenceRun(sibling) || sibling.Name == W + "commentReference")
+                continue;
             bool plain = IsPlainTextRun(sibling);
             if (!(plain && previousWasPlainRun)) position++;
             previousWasPlainRun = plain;

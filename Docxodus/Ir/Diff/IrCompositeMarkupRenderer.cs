@@ -728,9 +728,14 @@ internal static class IrCompositeMarkupRenderer
                     counterparts.Select(c => (c.Reviewer, c.Source)).ToList(),
                     AuthorsByReviewer(reviewerMarkers, reviewerIrs.Count), state);
             else if (!baseSourced && op.Kind != IrEditOpKind.DeleteBlock)
-                IrMarkupRenderer.CarryReviewerComments(sink.GetRange(emittedFrom, sink.Count - emittedFrom),
-                    counterparts.Select(c => c.Source), baseIr, IrMarkupRenderer.SourceElement(op.LeftAnchor, baseIr), state,
-                    originalView: false);
+            {
+                var emitted = sink.GetRange(emittedFrom, sink.Count - emittedFrom);
+                IrMarkupRenderer.CarryReviewerComments(emitted, counterparts.Select(c => c.Source), baseIr,
+                    IrMarkupRenderer.SourceElement(op.LeftAnchor, baseIr), state, originalView: false);
+                if (reviewerMarkers.Any(r => r.ReplacementPositions is not null))
+                    foreach (var paragraph in emitted.Where(e => e.Name == W.p && e.Element(W.pPr)?.Element(W.rPr)?.Element(W.ins) is not null))
+                        IrMarkupRenderer.WriteReplacementAnnotations(paragraph, reviewerMarkers, baseIr, reviewerIrs, state);
+            }
         }
 
         // Restore the shared state so a CELL recursion does not leak its per-op source into the surrounding

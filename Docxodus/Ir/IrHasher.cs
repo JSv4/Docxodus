@@ -105,10 +105,13 @@ internal static class IrHasher
     /// materializing them: the canonical XML is encoded straight into a pooled buffer. Every paragraph,
     /// run and section read takes this path, so the per-call array mattered.
     /// </remarks>
-    public static IrHash CanonicalHash(XElement element, IrRelResolver? resolver)
+    public static IrHash CanonicalHash(XElement element, IrRelResolver? resolver) => CanonicalHash(element, resolver, null);
+
+    internal static IrHash CanonicalHash(XElement element, IrRelResolver? resolver, Action<XElement>? normalize)
     {
         var clone = new XElement(element);
         Clean(clone, resolver);
+        normalize?.Invoke(clone);
         return IrHash.ComputeUtf8(clone.ToXmlString(SaveOptions.DisableFormatting));
     }
 

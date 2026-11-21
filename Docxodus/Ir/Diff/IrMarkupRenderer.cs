@@ -9,6 +9,7 @@ using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus.Ir;
 using Docxodus.Internal;
+using static Docxodus.Ir.Diff.IrTokenText;
 
 namespace Docxodus.Ir.Diff;
 
@@ -5163,7 +5164,7 @@ internal static partial class IrMarkupRenderer
     /// hash and must NOT be reconciled; neither is one inside an inline <c>w:customXml</c>, which the fine path
     /// emits whole inside a single <c>w:ins</c>/<c>w:del</c> so its markers already toggle with that copy and
     /// cannot be lifted out of it.</summary>
-    private static bool IsRunLevelCommentMarker(XElement marker)
+    internal static bool IsRunLevelCommentMarker(XElement marker)
     {
         static bool IsBlockCustomXml(XElement e) => e.Name == W.customXml && !e.Ancestors(W.p).Any();
         for (var a = marker.Parent; a != null; a = a.Parent)
@@ -5399,11 +5400,12 @@ internal static partial class IrMarkupRenderer
                 || !runLevelEnds.TryGetValue(IdOf(start) ?? "", out var end))
                 continue;
             var kind = rightNames.Contains(name) ? RevKind.Ins : RevKind.Del;
-            var (startTracked, endTracked) = (IsTrackedBookmarkMarker(start), IsTrackedBookmarkMarker(end));
-            if (startTracked == endTracked)
-                continue;
-            WrapMarkerInRevision(startTracked ? end : start, kind, state);
-            changed = true;
+            foreach (var marker in new[] { start, end })
+                if (!IsTrackedBookmarkMarker(marker))
+                {
+                    WrapMarkerInRevision(marker, kind, state);
+                    changed = true;
+                }
         }
 
         // (C) Reconcile pairing — GUARANTEE every run-level bookmarkStart has a matching bookmarkEnd and vice
@@ -5588,6 +5590,44 @@ internal static partial class IrMarkupRenderer
                         }
                     }
                     if (child.Name == W.t) offset += child.Value.Length;
+                }
+            }
+        }
+        state.AuthorOverride = savedAuthor;
+    }
+
+    /// <summary>Write the retained ranges the planner placed on the accepted copy of a replaced paragraph.</summary>
+    internal static void WriteReplacementAnnotations(XElement target, IEnumerable<IrEqualReviewerMarkers> reviewers,
+        IrDocument baseIr, IReadOnlyList<IrDocument> reviewerIrs, RenderState state)
+    {
+        var baseComments = BaseCommentAnchors(baseIr, state);
+        state.BaseBookmarkNames ??= BodyBookmarkNames(baseIr);
+        var savedAuthor = state.AuthorOverride;
+        foreach (var reviewer in reviewers)
+        {
+            if (reviewer.ReplacementPositions is not { } positions ||
+                SourceElement(reviewer.Anchor, reviewerIrs[reviewer.Reviewer]) is not { } source)
+                continue;
+            var markers = IrReplacementAnnotations.Markers(source).Select(m => m.Element).ToArray();
+            var projected = positions.Select(p => (Element: markers[p.Ordinal], p.Offset)).ToList();
+            var comments = projected.Where(p => IsCommentMarker(p.Element) &&
+                (string?)p.Element.Attribute(W.id) is { } id && !baseComments.ContainsKey(id));
+            state.AuthorOverride = reviewer.Author;
+            CarryCommentMarkers(target, comments.Select(p => (p.Element, p.Offset, false)), nextId: state.NextId);
+
+            foreach (var range in projected.Where(p => p.Element.Name == W.bookmarkStart || p.Element.Name == W.bookmarkEnd)
+                         .GroupBy(p => (string?)p.Element.Attribute(W.id)))
+            {
+                var start = range.FirstOrDefault(p => p.Element.Name == W.bookmarkStart).Element;
+                if (start?.Attribute(W.name)?.Value is not { } name || state.BaseBookmarkNames.Contains(name) ||
+                    state.CompositeBookmarks?.Allows(reviewer.Reviewer, start) == false ||
+                    target.Descendants(W.bookmarkStart).Any(e => (string?)e.Attribute(W.name) == name))
+                    continue;
+                foreach (var (element, offset) in range)
+                {
+                    var marker = StripUnids(new XElement(element));
+                    InsertAtTextOffset(target, marker, offset, nextId: state.NextId);
+                    WrapMarkerInRevision(marker, RevKind.Ins, state);
                 }
             }
         }
@@ -8102,14 +8142,6 @@ internal static partial class IrMarkupRenderer
         return before;
     }
 
-    /// <summary>An Equal or FormatChanged span whose raw text is identical on both sides: it emits the revision's
-    /// runs unwrapped.</summary>
-    private static bool KeepsTextUnchanged(
-        IrTokenOp op, IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens) =>
-        op.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged &&
-        string.Equals(RawSpanText(leftTokens, op.LeftStart, op.LeftEnd),
-            RawSpanText(rightTokens, op.RightStart, op.RightEnd), StringComparison.Ordinal);
-
     /// <summary>
     /// Merge consecutive <c>w:hyperlink</c> siblings that are PIECES OF ONE SOURCE LINK back into a single
     /// <c>w:hyperlink</c>. The token-op walk slices a hyperlink whose anchor is edited INTERNALLY into one wrapper
@@ -8267,42 +8299,6 @@ internal static partial class IrMarkupRenderer
                 return false;
         }
         return true;
-    }
-
-    /// <summary>Concatenate the RAW token text over a half-open token-index span (empty span ⇒ "").</summary>
-    private static string RawSpanText(IReadOnlyList<IrDiffToken> tokens, int start, int end)
-    {
-        if (start >= end)
-            return string.Empty;
-        var sb = new System.Text.StringBuilder();
-        for (int i = start; i < end; i++)
-            sb.Append(tokens[i].Text);
-        return sb.ToString();
-    }
-
-    /// <summary>Right char span of a token op: empty (zero-width at the right anchor) for a Delete op.</summary>
-    private static (int Start, int End) RightSpanPositions(IReadOnlyList<IrDiffToken> tokens, IrTokenOp op)
-    {
-        if (op.RightStart >= op.RightEnd)
-        {
-            // Empty right span: position is the start-char of the right anchor token (or end-of-paragraph).
-            int at = op.RightStart < tokens.Count ? tokens[op.RightStart].StartChar
-                   : (tokens.Count > 0 ? tokens[^1].EndChar : 0);
-            return (at, at);
-        }
-        return (tokens[op.RightStart].StartChar, tokens[op.RightEnd - 1].EndChar);
-    }
-
-    /// <summary>Left char span of a token op: empty (zero-width) for an Insert op.</summary>
-    private static (int Start, int End) LeftSpanPositions(IReadOnlyList<IrDiffToken> tokens, IrTokenOp op)
-    {
-        if (op.LeftStart >= op.LeftEnd)
-        {
-            int at = op.LeftStart < tokens.Count ? tokens[op.LeftStart].StartChar
-                   : (tokens.Count > 0 ? tokens[^1].EndChar : 0);
-            return (at, at);
-        }
-        return (tokens[op.LeftStart].StartChar, tokens[op.LeftEnd - 1].EndChar);
     }
 
     /// <summary>

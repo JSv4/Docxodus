@@ -326,11 +326,15 @@ internal static class IrCompositeMerger
                 MergeOneBaseBlock(anchor, byBase, reviewers, baseIr, policy, settings, ops, conflicts, ref nextConflictId);
                 if (ops.Count == first + 1 && ops[first].EqualReviewerMarkers is null &&
                     byBase.TryGetValue(anchor, out var entries) && entries.Any(e => e.Op.Kind != IrEditOpKind.EqualBlock))
-                    ops[first] = ops[first] with
-                    {
-                        EqualReviewerMarkers = EqualOp(anchor,
-                            entries.Where(e => e.Op.Kind == IrEditOpKind.EqualBlock).ToList(), reviewers, baseIr).EqualReviewerMarkers,
-                    };
+                {
+                    var markers = EqualOp(anchor, entries.Where(e => e.Op.Kind == IrEditOpKind.EqualBlock).ToList(),
+                        reviewers, baseIr).EqualReviewerMarkers;
+                    if (markers is not null)
+                        ops[first] = ops[first] with
+                        {
+                            EqualReviewerMarkers = IrReplacementAnnotations.Plan(ops[first], markers, baseIr, reviewers, settings),
+                        };
+                }
             }
             // A merge-consumed anchor emits no block op, but its pending inserts still slot here.
             EmitInsertsAt(insertsAfter, anchor, reviewers, ops, suppressedRelocations);

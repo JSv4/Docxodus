@@ -103,6 +103,76 @@ public class ConsolidateReviewerMarkerTests
         }
     }
 
+    private static WmlDocument PaymentTerm(bool controlled, string term, string? annotation, bool inside = false, bool partial = false)
+    {
+        string Annotate(string text) => annotation switch
+        {
+            "comment" => Commented(text),
+            "bookmark" => Marked(text),
+            _ => Run(text),
+        };
+        string value = inside && partial && annotation is not null
+            ? Annotate(term[..term.IndexOf(' ')]) + Run(term[term.IndexOf(' ')..])
+            : inside ? Annotate(term) : Run(term);
+        if (controlled)
+            value = "<w:sdt><w:sdtPr><w:alias w:val='Term'/></w:sdtPr><w:sdtContent>" + value + "</w:sdtContent></w:sdt>";
+        string xml = P(inside ? Run("Payment") : Annotate("Payment"), " is due within ", value, " of the invoice date.") +
+            P("Late payments accrue interest.");
+        return annotation == "comment" ? CommentDoc(xml) : Doc(xml);
+    }
+
+    [Theory]
+    [InlineData(true, "comment", false)]
+    [InlineData(true, "bookmark", false)]
+    [InlineData(true, "comment", true)]
+    [InlineData(true, "bookmark", true)]
+    [InlineData(true, "comment", true, true)]
+    [InlineData(true, "bookmark", true, true)]
+    [InlineData(false, "comment", false)]
+    [InlineData(false, "bookmark", false)]
+    public void An_annotation_keeps_the_paragraph_and_its_inline_control(bool controlled, string annotation, bool inside, bool partial = false)
+    {
+        var original = PaymentTerm(controlled, "thirty days", null, inside, partial);
+        var reviewed = PaymentTerm(controlled, "thirty days", annotation, inside, partial);
+        Assert.Empty(DocxDiff.GetRevisions(original, reviewed));
+        var reviewers = new[] { new DocxDiffReviewer { Author = "Reviewer B", Document = reviewed } };
+        Assert.Empty(DocxDiff.GetConsolidatedRevisions(original, reviewers));
+        foreach (var (product, redline) in new[] { ("Compare", DocxCompare.Compare(original, reviewed)), ("Consolidate", DocxCompare.Consolidate(original, reviewers)) })
+        {
+            var accepted = RevisionProcessor.AcceptRevisions(redline);
+            var rejected = RevisionProcessor.RejectRevisions(redline);
+            Assert.DoesNotContain(Body(redline).Descendants(), e => e.Name == W + "delText" ||
+                (e.Name == W + "ins" && e.Descendants(W + "t").Any()));
+            Assert.Equal(View(reviewed), View(accepted));
+            Assert.True(View(original) == View(rejected), $"Rejecting {product} gave {View(rejected)}");
+            Assert.All(new[] { redline, accepted, rejected }, doc =>
+                Assert.Equal(controlled ? 1 : 0, Body(doc).Descendants(W + "sdt").Count()));
+            if (annotation == "comment")
+                Assert.Equal(CommentTexts(reviewed), CommentTexts(accepted));
+            AssertValid(redline, accepted, rejected);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Orders))]
+    public void An_annotation_beside_an_edited_inline_control_composes(ConflictResolution policy, bool editorFirst)
+    {
+        var original = PaymentTerm(true, "thirty days", null);
+        var editor = PaymentTerm(true, "forty days", null);
+        foreach (var annotation in new[] { "bookmark", "comment" })
+        {
+            var reviewer = PaymentTerm(true, "thirty days", annotation);
+            var expected = PaymentTerm(true, "forty days", annotation);
+            var reviewers = InOrder(editorFirst, editor, reviewer);
+            var accepted = AssertMerged(original, expected, policy, reviewers);
+            var revisions = DocxDiff.GetConsolidatedRevisions(original, reviewers, new DocxDiffConsolidateSettings { ConflictResolution = policy });
+            Assert.NotEmpty(revisions);
+            Assert.All(revisions, revision => Assert.Equal("Reviewer A", revision.Author));
+            Assert.Equal("forty days", Assert.Single(Body(accepted).Descendants(W + "sdtContent")).Value);
+            Assert.Equal(CommentTexts(expected), CommentTexts(accepted));
+        }
+    }
+
     public static IEnumerable<object[]> Orders() =>
         from policy in new[] { ConflictResolution.BaseWins, ConflictResolution.FirstReviewerWins, ConflictResolution.StackAll }
         from editorFirst in new[] { true, false }
@@ -165,7 +235,8 @@ public class ConsolidateReviewerMarkerTests
     /// Reviewer A deletes, moves or replaces what reviewer B comments on. <c>words-deleted</c>: A deletes the commented
     /// words, and B's comment stays on them in the redline; <c>replaced-whole</c>: A changes a field, which redlines the
     /// paragraph as a deleted and an inserted copy with the same text, and the comment goes on the inserted copy, once.
-    /// <c>paragraph-deleted</c>, <c>rewritten-whole</c> (the field changes and so does the text) and <c>moved</c>: no
+    /// <c>rewritten-whole</c> changes the field and adjacent text while preserving the commented words.
+    /// <c>paragraph-deleted</c>, <c>covered-words-rewritten</c> and <c>moved</c>: no
     /// copy that survives accepting holds the commented text as written, so the comment is not carried, and accepting
     /// gives A's document exactly, with no stray marker or paragraph. <c>editor-comments-too</c> is a control: A comments
     /// on another paragraph and edits none, which main already merged. In every case rejecting gives the base and each
@@ -176,6 +247,7 @@ public class ConsolidateReviewerMarkerTests
     [InlineData("replaced-whole")]
     [InlineData("paragraph-deleted")]
     [InlineData("rewritten-whole")]
+    [InlineData("covered-words-rewritten")]
     [InlineData("moved")]
     [InlineData("editor-comments-too")]
     public void A_comment_on_text_another_reviewer_deletes_moves_or_replaces(string shape)
@@ -191,13 +263,14 @@ public class ConsolidateReviewerMarkerTests
             "words-deleted" => Doc(P("The register loan of the winter term to the members of the society.") + P(next) + P(last)),
             "replaced-whole" => Doc(P(commented, field) + P(next) + P(last)),
             "paragraph-deleted" => Doc(P(next) + P(last)),
+            "covered-words-rewritten" => Doc(P("The ledger counts each loan of the winter term to the members of the society.", field) + P(next) + P(last)),
             "rewritten-whole" => Doc(P("The ledger lists every loan of the winter term to the members of the society.", field) + P(next) + P(last)),
             "moved" => Doc(P(next) + P(last) + P(commented)),
             _ => IrTestDocuments.WithComment("Reviewer A", "A", "2026-03-02T00:00:00Z", "Check the due day",
                 P(commented) + P(Commented("Returns"), " are due on Fridays.") + P(last)),
         };
         var marker = CommentDoc(P("The register ", Commented("lists every"), " loan of the winter term to the members of the society.") + P(next) + P(last));
-        bool carried = shape is "words-deleted" or "replaced-whole" or "editor-comments-too";
+        bool carried = shape is "words-deleted" or "replaced-whole" or "rewritten-whole" or "editor-comments-too";
         foreach (var policy in new[] { ConflictResolution.BaseWins, ConflictResolution.StackAll })
             foreach (var reviewers in new[] { InOrder(true, editor, marker), InOrder(false, editor, marker) })
             {
@@ -209,8 +282,8 @@ public class ConsolidateReviewerMarkerTests
                     Assert.Contains("Confirm the loan period", CommentTexts(merged));
                 else
                     Assert.Equal(View(editor), View(accepted));
-                if (shape == "replaced-whole")
-                    Assert.Equal(View(CommentDoc(P("The register ", Commented("lists every"), " loan of the winter term to the members of the society.") +
+                if (shape is "replaced-whole" or "rewritten-whole")
+                    Assert.Equal(View(CommentDoc(P(shape == "rewritten-whole" ? "The ledger " : "The register ", Commented("lists every"), " loan of the winter term to the members of the society.") +
                         P(next) + P(last))), View(accepted));
                 Assert.Equal(View(original), View(rejected));
                 Assert.Equal(string.Concat(Body(editor).Descendants(W + "t").Select(t => t.Value)),
