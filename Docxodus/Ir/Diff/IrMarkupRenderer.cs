@@ -2047,12 +2047,33 @@ internal static partial class IrMarkupRenderer
             // fall through to the conservative fallback if the fine table path bailed
         }
 
-        // Conservative fallback: delete the left block, insert the right block. Order matters only for human
-        // reading; accept→right, reject→left both hold. A missing side (shouldn't happen for Modify) is skipped.
+        // Conservative fallback: delete the left block, insert the right block; accept→right, reject→left both hold.
+        // The header/footer section map relies on this order: a kept paragraph replaced here keeps its section break
+        // in each copy, and IrEditScriptBuilder.MatchSectionBoundaries puts the deleted copy's break before the
+        // inserted copy (issue #1805). A missing side (shouldn't happen for Modify) is skipped.
         if (op.LeftAnchor != null)
             EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
         if (op.RightAnchor != null)
             EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+    }
+
+    /// <summary>
+    /// Whether a paragraph pair's text boxes can be redlined inside the paragraph, as
+    /// <see cref="RenderModifiedTextboxParagraph"/> does: each side has <paramref name="textboxes"/> boxes, none holds
+    /// a bookmark or comment range between its paragraphs or a field spanning them, and no relationship sits on the
+    /// containers between a box and its paragraph. Otherwise the pair is drawn as a deleted and an inserted copy, which
+    /// the header and footer section map counts (issue #1805).
+    /// </summary>
+    internal static bool TextboxBodiesDiffInPlace(XElement left, XElement right, int textboxes)
+    {
+        var leftBodies = IrReader.OutermostTextboxBodies(left).ToArray();
+        var rightBodies = IrReader.OutermostTextboxBodies(right).ToArray();
+        if (leftBodies.Length != textboxes || rightBodies.Length != textboxes) return false;
+        foreach (var body in leftBodies.Concat(rightBodies))
+            if (IrReader.ScanWrapperContent(body.Elements()) is (true, _) or (_, true) ||
+                body.Ancestors().TakeWhile(e => !ReferenceEquals(e, left) && !ReferenceEquals(e, right))
+                    .Attributes().Any(a => a.Name.Namespace == R.r)) return false;
+        return true;
     }
 
     private static bool RenderModifiedTextboxParagraph(
@@ -2061,14 +2082,7 @@ internal static partial class IrMarkupRenderer
         var diffs = op.TextboxDiffs!;
         var left = SourceElement(op.LeftAnchor, state.Left);
         var right = SourceElement(op.RightAnchor, state.RightSource);
-        if (left is null || right is null) return false;
-        var leftBodies = IrReader.OutermostTextboxBodies(left).ToArray();
-        var rightBodies = IrReader.OutermostTextboxBodies(right).ToArray();
-        if (leftBodies.Length != diffs.Count || rightBodies.Length != diffs.Count) return false;
-        foreach (var body in leftBodies.Concat(rightBodies))
-            if (IrReader.ScanWrapperContent(body.Elements()) is (true, _) or (_, true) ||
-                body.Ancestors().TakeWhile(e => !ReferenceEquals(e, left) && !ReferenceEquals(e, right))
-                    .Attributes().Any(a => a.Name.Namespace == R.r)) return false;
+        if (left is null || right is null || !TextboxBodiesDiffInPlace(left, right, diffs.Count)) return false;
 
         // The host's masked textbox tokens preserve each unchanged carrier once, including
         // every physical Choice/Fallback copy. Only its bodies receive the nested revisions.

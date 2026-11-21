@@ -243,12 +243,22 @@ internal static class IrEditScriptBuilder
             Internal.BlockMetadataOps.SectionBreaks(source.Root).Count(s => s.Parent?.Name == W.pPr) == count;
         if (!Complete(left, leftCount) || !Complete(right, rightCount))
             return null;
+        // A kept paragraph the redline replaces whole is drawn as its deleted copy, then its inserted copy
+        // (RenderModifyBlock's fallback), each with its own break (issue #1805): one the edit op marks for whole
+        // replacement, and one whose text boxes cannot be redlined in place (TextboxBodiesDiffInPlace, the renderer's
+        // own test).
+        var modified = new Dictionary<string, IrEditOp>(StringComparer.Ordinal);
+        foreach (var op in bodyOps)
+            if (op.Kind == IrEditOpKind.ModifyBlock && op.LeftAnchor is { } anchor)
+                modified[anchor] = op;
         var sections = new List<(int, int)>();
         int currentLeft = -1, currentRight = -1, seenLeft = 0, seenRight = 0;
         foreach (var entry in RenderedGapOrder(alignment, bodyOps))
         {
             bool hasLeft = leftSections.TryGetValue(entry.Left?.Anchor.ToString() ?? "", out var l);
             bool hasRight = rightSections.TryGetValue(entry.Right?.Anchor.ToString() ?? "", out var r);
+            bool copies = hasLeft && hasRight && DrawnAsCopies(modified, entry.Left!, entry.Right!);
+            int rightBefore = currentRight;
             if (hasLeft) currentLeft = l.Section;
             if (hasRight) currentRight = r.Section;
             if (entry.MultiBlocks is { Count: > 0 } members)
@@ -259,20 +269,43 @@ internal static class IrEditScriptBuilder
             }
             if (!l.Ends && !r.Ends)
                 continue;
-            // Moved boundaries and changed retained carriers still need the existing grid; the
-            // projection covers inserted and deleted boundaries, alone or mixed.
+            // Moved boundaries, and a break change the redline does not draw as two copies, still need the existing
+            // grid; the projection covers inserted and deleted boundaries, alone or mixed.
             if (entry.Kind is IrAlignmentKind.Moved or IrAlignmentKind.MovedModified ||
-                hasLeft && hasRight && l.Ends != r.Ends)
+                hasLeft && hasRight && l.Ends != r.Ends && !copies)
                 return null;
+            if (copies && l.Ends)
+            {
+                // The original's break ends the review section before the revision's copy, which opens the next one.
+                // When the revision's copy has a break too, that section holds only the copy, and it pairs the
+                // original section the paragraph came from, so an unchanged story is not drawn as inserted.
+                sections.Add((currentLeft, rightBefore));
+                seenLeft++;
+                currentLeft = r.Ends ? l.Section : -1;
+                if (!r.Ends)
+                    continue;
+            }
+            else if (l.Ends)
+                seenLeft++;
             sections.Add((currentLeft, currentRight));
             currentLeft = currentRight = -1;
-            if (l.Ends) seenLeft++;
             if (r.Ends) seenRight++;
         }
         if (seenLeft != leftCount || seenRight != rightCount)
             return null;
         sections.Add((leftCount, rightCount));
         return sections;
+    }
+
+    private static bool DrawnAsCopies(Dictionary<string, IrEditOp> modified, IrBlock left, IrBlock right)
+    {
+        if (!modified.TryGetValue(left.Anchor.ToString(), out var op))
+            return false;
+        if (op.RequiresWholeParagraphReplace)
+            return true;
+        return op.TextboxDiffs is { } textboxes && (left.Source.Element is not { } leftSource ||
+            right.Source.Element is not { } rightSource ||
+            !IrMarkupRenderer.TextboxBodiesDiffInPlace(leftSource, rightSource, textboxes.Count));
     }
 
     // RenderBlockOpsWordShaped emits ordinary replacement gaps insertion-first. Named moves,
@@ -363,6 +396,7 @@ internal static class IrEditScriptBuilder
         var plansByPair = new Dictionary<(Uri? Left, Uri? Right), HeaderFooterPairPlan>();
         var plansByCell = new Dictionary<(int Section, IrHeaderFooterKind Kind), HeaderFooterPairPlan>();
         var originalOnly = new List<(int Section, IrHeaderFooterKind Kind, IrHeaderFooter Story)>();
+        var revisedOnly = new List<(int Section, IrHeaderFooterKind Kind, IrHeaderFooter Story)>();
         for (int s = 0; s < sectionCount; s++)
         {
             foreach (var kind in HeaderFooterKinds)
@@ -374,6 +408,11 @@ internal static class IrEditScriptBuilder
                 if (sections is not null && sections[s].Right < 0)
                 {
                     originalOnly.Add((s, kind, leftStory!));
+                    continue;
+                }
+                if (sections is not null && sections[s].Left < 0)
+                {
+                    revisedOnly.Add((s, kind, rightStory!));
                     continue;
                 }
 
@@ -397,6 +436,28 @@ internal static class IrEditScriptBuilder
             var plan = plans.FirstOrDefault(p => p.LeftPartUri == story.Scope.PartUri);
             if (plan is null)
                 plans.Add(plan = new HeaderFooterPairPlan(story, null) { KeepsLeft = true });
+            plan.Cells.Add((s, kind));
+            plansByCell.Add((s, kind), plan);
+        }
+
+        // Symmetrically, a review section holding only revised content disappears on reject, so its story need only
+        // accept to the revision's: it shares the output of any pair that already holds that revised story, else it
+        // is the revision's story inserted, as before (issue #1805 review).
+        foreach (var (s, kind, story) in revisedOnly)
+        {
+            HeaderFooterPairPlan? plan = null;
+            foreach (var candidate in plans)
+                if (!candidate.KeepsLeft && candidate.RightPartUri == story.Scope.PartUri)
+                {
+                    plan = candidate;
+                    break;
+                }
+            if (plan is null && !plansByPair.TryGetValue((null, story.Scope.PartUri), out plan))
+            {
+                plan = new HeaderFooterPairPlan(null, story);
+                plansByPair.Add((null, story.Scope.PartUri), plan);
+                plans.Add(plan);
+            }
             plan.Cells.Add((s, kind));
             plansByCell.Add((s, kind), plan);
         }
