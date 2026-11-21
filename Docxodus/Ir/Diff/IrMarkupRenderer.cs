@@ -3374,7 +3374,7 @@ internal static partial class IrMarkupRenderer
         };
         string relationshipId = main.GetIdOfPart(part);
         var existing = sectPr.Elements(refName)
-            .Where(reference => (string?)reference.Attribute(W.type) == typeValue)
+            .Where(reference => IrReader.ReferenceKind(reference) == kind)
             .ToList();
         if (existing.Count > 0)
         {
@@ -3460,7 +3460,7 @@ internal static partial class IrMarkupRenderer
             _ => "default",
         };
         if (sectPrs.Take(idx + 1).Any(s =>
-                s.Elements(refName).Any(e => (string?)e.Attribute(W.type) == typeValue)))
+                s.Elements(refName).Any(e => IrReader.ReferenceKind(e) == diff.Kind)))
             return;
         sectPrs[idx].AddFirst(new XElement(refName,
             new XAttribute(W.type, typeValue),
