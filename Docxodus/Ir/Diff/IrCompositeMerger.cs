@@ -1796,16 +1796,18 @@ internal static class IrCompositeMerger
             return false;
         // The composed table is built from bare rows and cells, so a row or cell a content control delivers would
         // lose its control, or a table-level control be copied with its rows beside them (issue #1804). Reviewers
-        // who all revised such a table identically made one edit, which renders as a single reviewer's does.
-        if (IrEditScriptBuilder.HasContentControlRow(baseTable) || touched.Any(e => e.Op.RightAnchor is { } ra &&
-                reviewers[e.Reviewer].Ir.AnchorIndex.TryGetValue(ra, out var rb) && rb is IrTable rt &&
-                IrEditScriptBuilder.HasContentControlRow(rt)))
+        // who all revised such a table identically made one edit, which renders as a single reviewer's does: their
+        // tables compare by content and formatting as the IR reads them (relationships resolved, so two pictures
+        // under one id differ) and by where their controls sit.
+        IrTable? RevisedTable((int Reviewer, IrEditOp Op) e) => e.Op.RightAnchor is { } ra &&
+            reviewers[e.Reviewer].Ir.AnchorIndex.TryGetValue(ra, out var rb) ? rb as IrTable : null;
+        if (IrEditScriptBuilder.HasContentControlRow(baseTable) ||
+            touched.Any(e => RevisedTable(e) is { } rt && IrEditScriptBuilder.HasContentControlRow(rt)))
         {
-            IrHash? RevisedTable((int Reviewer, IrEditOp Op) e) =>
-                IrMarkupRenderer.SourceElement(e.Op.RightAnchor, reviewers[e.Reviewer].Ir) is { } table
-                    ? IrHasher.CanonicalHash(table) : null;
-            if (RevisedTable(touched[0]) is not { } first || touched.Any(e =>
-                    e.Op.Kind != touched[0].Op.Kind || RevisedTable(e) is not { } revised || !revised.Equals(first)))
+            if (RevisedTable(touched[0]) is not { Source.Element: { } firstSource } first || touched.Any(e =>
+                    e.Op.Kind != touched[0].Op.Kind || RevisedTable(e) is not { Source.Element: { } source } revised ||
+                    !revised.ContentHash.Equals(first.ContentHash) || !revised.FormatFingerprint.Equals(first.FormatFingerprint) ||
+                    !IrMarkupRenderer.ControlLayoutDigest(source).Equals(IrMarkupRenderer.ControlLayoutDigest(firstSource))))
                 return false;
             ops.Add(EmitOp(touched[0].Op, reviewers[touched[0].Reviewer].Author, touched[0].Reviewer));
             return true;

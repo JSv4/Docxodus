@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -47,7 +48,7 @@ public class ContentControlTableTests
         .TakeWhile(a => a.Name != W + "tbl" && a.Name != W + "tr").Where(a => a.Name == W + "sdt").Reverse()
         .Select(a => $"[{a.Element(W + "sdtPr")!.Element(W + "id")?.Attribute(W + "val")?.Value}:" +
                      $"{a.Element(W + "sdtPr")!.Element(W + "alias")?.Attribute(W + "val")?.Value}:" +
-                     $"{a.Element(W + "sdtEndPr")?.ToString(SaveOptions.DisableFormatting).Length}]"));
+                     $"{string.Join("/", a.Element(W + "sdtEndPr")?.Descendants().Select(d => d.Name.LocalName) ?? Array.Empty<string>())}]"));
 
     /// <summary>
     /// Every table row in order, as its controls and its cells, each cell as its controls and its runs' text with
@@ -60,7 +61,10 @@ public class ContentControlTableTests
         var rows = body.Descendants(W + "tr").Select(tr => Controls(tr) + "{" + string.Join("|", tr.Descendants(W + "tc")
             .Select(tc => Controls(tc) + string.Concat(tc.Descendants(W + "r").Select(r =>
                 (r.Element(W + "rPr")?.Element(W + "b") is null ? "" : "*") + string.Concat(r.Elements(W + "t").Select(t => t.Value)))))) + "}");
-        return rows.Append($"controls:{body.Descendants(W + "sdt").Count()}").ToArray();
+        // Each table's own children in order, so a control that moves among the rows shows too.
+        var tables = body.Descendants(W + "tbl").Select(t => "tbl:" + string.Join(",", t.Elements()
+            .Where(e => e.Name == W + "tr" || e.Name == W + "sdt").Select(e => e.Name == W + "tr" ? "tr" : Controls(e.Elements().First()))));
+        return rows.Concat(tables).Append($"controls:{body.Descendants(W + "sdt").Count()}").ToArray();
     }
 
     /// <summary>The text the redline marks inserted or deleted, in document order.</summary>
@@ -215,22 +219,6 @@ public class ContentControlTableTests
         Assert.Single(DocxDiff.GetConflicts(original, reviewers));
     }
 
-    /// <summary>
-    /// A table-level control that delivers no row, empty or holding only a bookmark, is copied as before rather than
-    /// rebuilt, so an edit beside it stays a cell-level edit.
-    /// </summary>
-    [Theory]
-    [InlineData("<w:sdt><w:sdtPr><w:id w:val=\"5\"/></w:sdtPr><w:sdtContent/></w:sdt>")]
-    [InlineData("<w:sdt><w:sdtPr><w:id w:val=\"5\"/></w:sdtPr><w:sdtContent><w:bookmarkStart w:id=\"3\" w:name=\"Ledger\"/><w:bookmarkEnd w:id=\"3\"/></w:sdtContent></w:sdt>")]
-    public void A_control_that_holds_no_row_leaves_the_table_rendered_row_by_row(string control)
-    {
-        var left = Table(Row("Dock", "Berth one"), control, Row("Crane", "Hook two"));
-        var right = Table(Row("Dock", "Berth one, north"), control, Row("Crane", "Hook two"));
-        var redline = DocxCompare.Compare(left, right);
-        AssertRedline(left, right, redline);
-        Assert.Single(Body(redline).Element(W + "tbl")!.Elements(W + "sdt"));
-    }
-
     [Fact]
     public void A_row_property_change_in_a_content_control_row_is_tracked()
     {
@@ -268,20 +256,77 @@ public class ContentControlTableTests
         AssertValid(redline);
     }
 
-    [Fact]
-    public void Two_reviewers_making_the_same_edit_in_a_content_control_table_agree()
+    private const string PictureNamespaces =
+        "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" " +
+        "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"";
+
+    private static string Picture(string relId) =>
+        $"<w:p><w:r><w:drawing><wp:inline {PictureNamespaces}><wp:extent cx=\"9525\" cy=\"9525\"/><wp:docPr id=\"7\" name=\"Stamp\"/>" +
+        "<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">" +
+        "<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:nvPicPr><pic:cNvPr id=\"7\" name=\"Stamp\"/><pic:cNvPicPr/></pic:nvPicPr>" +
+        $"<pic:blipFill><a:blip r:embed=\"{relId}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>" +
+        "<pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"9525\" cy=\"9525\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr>" +
+        "</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>";
+
+    /// <summary>
+    /// Reviewers who revised a content-control table identically made one edit, as reviewers of any other block do,
+    /// even when their copies spell it differently: <c>text-id</c> gives the second reviewer's paragraph another
+    /// <c>w14:textId</c>, as Word writes on saving, and <c>run-split</c> splits its text into two runs. Two pictures
+    /// under one relationship id are not the same edit (<c>pictures</c>), nor is the same text where one reviewer also
+    /// removed the control (<c>controls-differ</c>): the merge records the conflict rather than keep one reviewer's.
+    /// </summary>
+    [Theory]
+    [InlineData("text-id")]
+    [InlineData("run-split")]
+    [InlineData("pictures")]
+    [InlineData("controls-differ")]
+    public void Two_reviewers_making_the_same_edit_in_a_content_control_table_agree(string shape)
     {
+        const string w14 = "xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\"";
+        static string Cell2(string content) => Cell(content);
         var original = Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two")));
-        var revised = Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two, spare")));
+        WmlDocument a, b;
+        if (shape == "pictures")
+        {
+            WmlDocument WithPicture(byte last)
+            {
+                var png = Convert.FromBase64String(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+                var bytes = png.Concat(new[] { last }).ToArray();
+                return IrTestDocuments.FromBodyXmlWithImageParts(
+                    "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"2400\"/><w:gridCol w:w=\"2400\"/></w:tblGrid>" +
+                    Row("Dock", "Berth one") + Control(9, Row("Crane", Cell2(P("Hook two") + Picture("rId51")))) + "</w:tbl>" +
+                    P("The register closes here."), ("rId51", bytes));
+            }
+            (a, b) = (WithPicture(0xA1), WithPicture(0xB2));
+        }
+        else
+        {
+            a = Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two, spare")));
+            b = shape == "controls-differ" ? Table(Row("Dock", "Berth one"), Row("Crane", "Hook two, spare"))
+                : shape == "text-id"
+                ? Table(Row("Dock", "Berth one"), Control(9, Row("Crane", Cell2(P("Hook two, spare").Replace("<w:p>", $"<w:p {w14} w14:textId=\"22222222\">")))))
+                : Table(Row("Dock", "Berth one"), Control(9, Row("Crane", Cell2("<w:p><w:r><w:t>Hook two</w:t></w:r><w:r><w:t xml:space=\"preserve\">, spare</w:t></w:r></w:p>"))));
+        }
         var reviewers = new[]
         {
-            new DocxDiffReviewer { Document = revised, Author = "Reviewer A" },
-            new DocxDiffReviewer { Document = revised, Author = "Reviewer B" },
+            new DocxDiffReviewer { Document = a, Author = "Reviewer A" },
+            new DocxDiffReviewer { Document = b, Author = "Reviewer B" },
         };
-        Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
         var merged = DocxCompare.Consolidate(original, reviewers);
-        Assert.Equal(Layout(revised), Layout(RevisionProcessor.AcceptRevisions(merged)));
-        Assert.Equal(Layout(original), Layout(RevisionProcessor.RejectRevisions(merged)));
+        var (accepted, rejected) = (RevisionProcessor.AcceptRevisions(merged), RevisionProcessor.RejectRevisions(merged));
+        Assert.Equal(Layout(original), Layout(rejected));
+        if (shape is "pictures" or "controls-differ")
+        {
+            Assert.Single(DocxDiff.GetConflicts(original, reviewers));
+            Assert.Equal(Layout(original), Layout(accepted));
+            return;
+        }
+        Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
+        Assert.Equal(Layout(a), Layout(accepted));
+        Assert.All(Body(merged).Descendants(W + "ins"), ins => Assert.Equal("Reviewer A", (string?)ins.Attribute(W + "author")));
+        AssertValid(merged, accepted, rejected);
     }
 
     /// <summary>
@@ -293,12 +338,28 @@ public class ContentControlTableTests
     [Theory]
     [InlineData("renamed")]
     [InlineData("row-leaves")]
+    [InlineData("empty-control")]
+    [InlineData("bookmark-control")]
+    [InlineData("empty-control-removed")]
+    [InlineData("empty-control-added")]
     public void A_table_whose_content_controls_cannot_be_rebuilt_is_replaced_whole(string shape)
     {
-        var left = Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two"), Row("Barge", "Rope three")));
-        var right = shape == "renamed"
-            ? Table(Row("Dock", "Berth one, north"), Control(9, Row("Crane", "Hook two"), Row("Barge", "Rope three")).Replace("Item 9", "Spare item 9"))
-            : Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two")), Row("Lighthouse", "Lamp oil"));
+        // A control that holds no row (empty, or only a bookmark) cannot go back among the rows from the row ops, and
+        // copying it from the revision would move it to the head of the table, so it too keeps the table whole.
+        var empty = "<w:sdt><w:sdtPr><w:id w:val=\"5\"/></w:sdtPr><w:sdtContent/></w:sdt>";
+        var bookmark = "<w:sdt><w:sdtPr><w:id w:val=\"5\"/></w:sdtPr><w:sdtContent><w:bookmarkStart w:id=\"3\" w:name=\"Ledger\"/><w:bookmarkEnd w:id=\"3\"/></w:sdtContent></w:sdt>";
+        string inner = shape == "bookmark-control" ? bookmark : empty;
+        WmlDocument Plain(string first, bool control) => Table(Row("Dock", first), control ? inner : "", Row("Crane", "Hook two"));
+        var (left, right) = shape switch
+        {
+            "renamed" => (Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two"), Row("Barge", "Rope three"))),
+                Table(Row("Dock", "Berth one, north"), Control(9, Row("Crane", "Hook two"), Row("Barge", "Rope three")).Replace("Item 9", "Spare item 9"))),
+            "row-leaves" => (Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two"), Row("Barge", "Rope three"))),
+                Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two")), Row("Lighthouse", "Lamp oil"))),
+            "empty-control-removed" => (Plain("Berth one", true), Plain("Berth one, north", false)),
+            "empty-control-added" => (Plain("Berth one", false), Plain("Berth one, north", true)),
+            _ => (Plain("Berth one", true), Plain("Berth one, north", true)),
+        };
         var redline = DocxCompare.Compare(left, right);
         Assert.Equal(2, Body(redline).Elements(W + "tbl").Count());
         var (accepted, rejected) = (RevisionProcessor.AcceptRevisions(redline), RevisionProcessor.RejectRevisions(redline));

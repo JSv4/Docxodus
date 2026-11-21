@@ -2140,7 +2140,7 @@ internal static partial class IrMarkupRenderer
         {
             if (tableDiff.RowOps[i] is not { Kind: IrRowOpKind.ModifyRow, CellOps: { } cellOps } || rowSources[i].Right is not { } rightRow)
                 continue;
-            if (!HasControlChild(rowSources[i].Left, rightRow, W.tc))
+            if (!HasControlChild(rowSources[i].Left, rightRow))
                 cellControls[i] = ControlLayout.None;
             // Cell ops that do not tile the rows' cells leave the row unplanned, and RenderModifyRow refuses it.
             else if (CellSources(cellOps, rowSources[i].Left, rightRow) is { } cellSources &&
@@ -2149,9 +2149,8 @@ internal static partial class IrMarkupRenderer
         }
 
         var newTbl = new XElement(W.tbl);
-        // Carry the table's non-row prelude (tblPr, tblGrid, …) from the right shell; the controls that deliver its rows
-        // are rebuilt below.
-        foreach (var pre in rightTbl.Elements().Where(e => e.Name != W.tr && !DeliversChildren(e, W.tr) && !IsBlockLevelMarker(e)))
+        // Carry the table's non-row prelude (tblPr, tblGrid, …) from the right shell; its controls are rebuilt below.
+        foreach (var pre in rightTbl.Elements().Where(e => e.Name != W.tr && e.Name != W.sdt && !IsBlockLevelMarker(e)))
             newTbl.Add(StripUnids(new XElement(pre)));
         // Table-level shell changes (block-format-change family): tblPr / tblGrid.
         ApplyTableLevelShellChanges(newTbl, leftTbl, state);
@@ -2261,14 +2260,14 @@ internal static partial class IrMarkupRenderer
     internal static ControlLayout? PlanControls(
         List<(XElement? Left, XElement? Right)> children, XElement? leftContainer, XElement rightContainer, XName childName)
     {
-        if (!HasControlChild(leftContainer, rightContainer, childName))
+        if (!HasControlChild(leftContainer, rightContainer))
             return ControlLayout.None;
         foreach (var container in new[] { leftContainer, rightContainer })
         {
             if (container is null)
                 continue;
             foreach (var child in container.Elements())
-                if (IsBlockLevelMarker(child) || DeliversChildren(child, childName) && !RebuildableControl(child, childName, 0))
+                if (IsBlockLevelMarker(child) || child.Name == W.sdt && !RebuildableControl(child, childName, 0))
                     return null;
         }
 
@@ -2348,27 +2347,8 @@ internal static partial class IrMarkupRenderer
         return new ControlLayout(chains, oneSided);
     }
 
-    private static bool HasControlChild(XElement? left, XElement right, XName childName) =>
-        left is not null && HasControlChild(left, childName) || HasControlChild(right, childName);
-
-    private static bool HasControlChild(XElement container, XName childName)
-    {
-        foreach (var sdt in container.Elements(W.sdt))
-            if (DeliversChildren(sdt, childName))
-                return true;
-        return false;
-    }
-
-    /// <summary>Whether <paramref name="element"/> is a content control the reader takes rows or cells from. One that
-    /// delivers none (empty, or holding only a bookmark) is copied as other non-row children are.</summary>
-    private static bool DeliversChildren(XElement element, XName childName)
-    {
-        if (element.Name != W.sdt)
-            return false;
-        foreach (var _ in IrReader.UnwrapSdtChildren(element, childName))
-            return true;
-        return false;
-    }
+    private static bool HasControlChild(XElement? left, XElement right) =>
+        left?.Element(W.sdt) is not null || right.Element(W.sdt) is not null;
 
     /// <summary>Whether a table- or row-level control holds only <paramref name="childName"/> children and further
     /// such controls, at least one, within the nesting the reader models.</summary>
@@ -2399,6 +2379,29 @@ internal static partial class IrMarkupRenderer
             if (a.Name == W.sdt)
                 chain[--depth] = a;
         return chain;
+    }
+
+    /// <summary>A digest of where a table's content controls sit: the properties of every control around each row and
+    /// each cell, outermost first, in reading order. Two tables with the same rows and cells but controls in other
+    /// places or with other properties differ.</summary>
+    internal static IrHash ControlLayoutDigest(XElement table)
+    {
+        var layout = new XElement("controls");
+        foreach (var (row, _) in IrReader.TableChildren(table, W.tr))
+        {
+            var entry = new XElement("row");
+            foreach (var control in ControlChain(row, table))
+                entry.Add(ControlShell(control));
+            foreach (var (cell, _) in IrReader.TableChildren(row, W.tc))
+            {
+                var cellEntry = new XElement("cell");
+                foreach (var control in ControlChain(cell, row))
+                    cellEntry.Add(ControlShell(control));
+                entry.Add(cellEntry);
+            }
+            layout.Add(entry);
+        }
+        return IrHasher.CanonicalHash(layout);
     }
 
     /// <summary>A control without its content: its attributes and properties, which a rebuilt copy keeps.</summary>
@@ -2693,7 +2696,7 @@ internal static partial class IrMarkupRenderer
         {
             if (child.Name == W.tc)
                 cells++;
-            else if (DeliversChildren(child, W.tc))
+            else if (child.Name == W.sdt)
                 foreach (var _ in IrReader.UnwrapSdtChildren(child, W.tc))
                     cells++;
             else if (child.Name == W.tblPrEx || child.Name == W.trPr)
