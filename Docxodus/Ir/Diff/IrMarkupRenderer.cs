@@ -2389,29 +2389,6 @@ internal static partial class IrMarkupRenderer
         return chain;
     }
 
-    /// <summary>A digest of where a table's content controls sit: the properties of every control around each row and
-    /// each cell, outermost first, in reading order. Two tables with the same rows and cells but controls in other
-    /// places or with other properties differ.</summary>
-    internal static IrHash ControlLayoutDigest(XElement table)
-    {
-        var layout = new XElement("controls");
-        foreach (var (row, _) in IrReader.TableChildren(table, W.tr))
-        {
-            var entry = new XElement("row");
-            foreach (var control in ControlChain(row, table))
-                entry.Add(ControlShell(control));
-            foreach (var (cell, _) in IrReader.TableChildren(row, W.tc))
-            {
-                var cellEntry = new XElement("cell");
-                foreach (var control in ControlChain(cell, row))
-                    cellEntry.Add(ControlShell(control));
-                entry.Add(cellEntry);
-            }
-            layout.Add(entry);
-        }
-        return IrHasher.CanonicalHash(layout);
-    }
-
     /// <summary>A control without its content: its attributes and properties, which a rebuilt copy keeps.</summary>
     private static XElement ControlShell(XElement sdt) =>
         new(W.sdt, sdt.Attributes(), sdt.Element(W.sdtPr), sdt.Element(W.sdtEndPr));
@@ -2701,6 +2678,15 @@ internal static partial class IrMarkupRenderer
     /// cells (issue #864). A content control delivering cells counts as its cells, which are rebuilt with it.</summary>
     private sealed record RowShell(List<XElement> Properties, List<(XElement Element, int CellsBefore)> Markers);
 
+    /// <summary>Whether a row-level control holds a cell. One that holds none stays a marker, which the composed
+    /// table's rows (built from the base row's shell) put back between the same cells.</summary>
+    private static bool DeliversCells(XElement sdt)
+    {
+        foreach (var _ in IrReader.UnwrapSdtChildren(sdt, W.tc))
+            return true;
+        return false;
+    }
+
     private static RowShell SplitRowShell(XElement row)
     {
         var shell = new RowShell(new List<XElement>(), new List<(XElement, int)>());
@@ -2709,7 +2695,7 @@ internal static partial class IrMarkupRenderer
         {
             if (child.Name == W.tc)
                 cells++;
-            else if (child.Name == W.sdt)
+            else if (child.Name == W.sdt && DeliversCells(child))
                 foreach (var _ in IrReader.UnwrapSdtChildren(child, W.tc))
                     cells++;
             else if (child.Name == W.tblPrEx || child.Name == W.trPr)

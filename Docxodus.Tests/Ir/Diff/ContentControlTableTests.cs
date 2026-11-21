@@ -256,76 +256,60 @@ public class ContentControlTableTests
         AssertValid(redline);
     }
 
-    private const string PictureNamespaces =
-        "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" " +
-        "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
-        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"";
-
-    private static string Picture(string relId) =>
-        $"<w:p><w:r><w:drawing><wp:inline {PictureNamespaces}><wp:extent cx=\"9525\" cy=\"9525\"/><wp:docPr id=\"7\" name=\"Stamp\"/>" +
-        "<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">" +
-        "<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:nvPicPr><pic:cNvPr id=\"7\" name=\"Stamp\"/><pic:cNvPicPr/></pic:nvPicPr>" +
-        $"<pic:blipFill><a:blip r:embed=\"{relId}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>" +
-        "<pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"9525\" cy=\"9525\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr>" +
-        "</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>";
-
     /// <summary>
-    /// Reviewers who revised a content-control table identically made one edit, as reviewers of any other block do,
-    /// even when their copies spell it differently: <c>text-id</c> gives the second reviewer's paragraph another
-    /// <c>w14:textId</c>, as Word writes on saving, and <c>run-split</c> splits its text into two runs. Two pictures
-    /// under one relationship id are not the same edit (<c>pictures</c>), nor is the same text where one reviewer also
-    /// removed the control (<c>controls-differ</c>): the merge records the conflict rather than keep one reviewer's.
+    /// Two reviewers who edit a content-control table are recorded as a conflict, as for any table the merge cannot
+    /// compose, even when their tables look alike: <c>alike</c> makes the same edit in two separately saved copies, one
+    /// with another <c>w14:textId</c>; <c>bookmark</c> also adds a bookmark in the second copy, which a shortcut that
+    /// kept one reviewer's table would drop. Nothing is lost: the base is kept and the conflict names both reviewers.
     /// </summary>
     [Theory]
-    [InlineData("text-id")]
-    [InlineData("run-split")]
-    [InlineData("pictures")]
-    [InlineData("controls-differ")]
-    public void Two_reviewers_making_the_same_edit_in_a_content_control_table_agree(string shape)
+    [InlineData("alike")]
+    [InlineData("bookmark")]
+    public void Two_reviewers_editing_a_content_control_table_alike_record_a_conflict(string shape)
     {
         const string w14 = "xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\"";
-        static string Cell2(string content) => Cell(content);
         var original = Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two")));
-        WmlDocument a, b;
-        if (shape == "pictures")
-        {
-            WmlDocument WithPicture(byte last)
-            {
-                var png = Convert.FromBase64String(
-                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
-                var bytes = png.Concat(new[] { last }).ToArray();
-                return IrTestDocuments.FromBodyXmlWithImageParts(
-                    "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"2400\"/><w:gridCol w:w=\"2400\"/></w:tblGrid>" +
-                    Row("Dock", "Berth one") + Control(9, Row("Crane", Cell2(P("Hook two") + Picture("rId51")))) + "</w:tbl>" +
-                    P("The register closes here."), ("rId51", bytes));
-            }
-            (a, b) = (WithPicture(0xA1), WithPicture(0xB2));
-        }
-        else
-        {
-            a = Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two, spare")));
-            b = shape == "controls-differ" ? Table(Row("Dock", "Berth one"), Row("Crane", "Hook two, spare"))
-                : shape == "text-id"
-                ? Table(Row("Dock", "Berth one"), Control(9, Row("Crane", Cell2(P("Hook two, spare").Replace("<w:p>", $"<w:p {w14} w14:textId=\"22222222\">")))))
-                : Table(Row("Dock", "Berth one"), Control(9, Row("Crane", Cell2("<w:p><w:r><w:t>Hook two</w:t></w:r><w:r><w:t xml:space=\"preserve\">, spare</w:t></w:r></w:p>"))));
-        }
+        var a = Table(Row("Dock", "Berth one"), Control(9, Row("Crane", "Hook two, spare")));
+        var b = Table(Row("Dock", shape == "bookmark"
+                ? Cell("<w:p><w:bookmarkStart w:id=\"4\" w:name=\"Berth\"/><w:r><w:t>Berth one</w:t></w:r><w:bookmarkEnd w:id=\"4\"/></w:p>")
+                : Cell(P("Berth one"))),
+            Control(9, Row("Crane", Cell(P("Hook two, spare").Replace("<w:p>", $"<w:p {w14} w14:textId=\"22222222\">")))));
         var reviewers = new[]
         {
             new DocxDiffReviewer { Document = a, Author = "Reviewer A" },
             new DocxDiffReviewer { Document = b, Author = "Reviewer B" },
         };
+        var conflict = Assert.Single(DocxDiff.GetConflicts(original, reviewers));
+        Assert.Equal(new[] { "Reviewer A", "Reviewer B" }, conflict.Competitors.Select(c => c.Author));
         var merged = DocxCompare.Consolidate(original, reviewers);
         var (accepted, rejected) = (RevisionProcessor.AcceptRevisions(merged), RevisionProcessor.RejectRevisions(merged));
+        Assert.Equal(Layout(original), Layout(accepted));
         Assert.Equal(Layout(original), Layout(rejected));
-        if (shape is "pictures" or "controls-differ")
+        AssertValid(merged, accepted, rejected);
+    }
+
+    [Fact]
+    public void Consolidating_a_row_with_a_control_that_holds_no_cell_keeps_the_control_in_place()
+    {
+        // No row or cell is delivered by a control here, so two reviewers' edits compose; the composed row is built
+        // from the base row's shell and keeps the empty control between the same cells.
+        const string empty = "<w:sdt><w:sdtPr><w:id w:val=\"5\"/></w:sdtPr><w:sdtContent/></w:sdt>";
+        WmlDocument Make(string berth, string hook) => Table(
+            "<w:tr>" + Cell(P("Dock")) + empty + Cell(P(berth)) + "</w:tr>", Row("Crane", hook));
+        var original = Make("Berth one", "Hook two");
+        var reviewers = new[]
         {
-            Assert.Single(DocxDiff.GetConflicts(original, reviewers));
-            Assert.Equal(Layout(original), Layout(accepted));
-            return;
-        }
-        Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
-        Assert.Equal(Layout(a), Layout(accepted));
-        Assert.All(Body(merged).Descendants(W + "ins"), ins => Assert.Equal("Reviewer A", (string?)ins.Attribute(W + "author")));
+            new DocxDiffReviewer { Document = Make("Berth one, north", "Hook two"), Author = "Reviewer A" },
+            new DocxDiffReviewer { Document = Make("Berth one", "Hook two, spare"), Author = "Reviewer B" },
+        };
+        var merged = DocxCompare.Consolidate(original, reviewers);
+        var (accepted, rejected) = (RevisionProcessor.AcceptRevisions(merged), RevisionProcessor.RejectRevisions(merged));
+        static string[] FirstRow(WmlDocument doc) => Body(doc).Descendants(W + "tr").First().Elements()
+            .Select(e => e.Name.LocalName + ":" + string.Concat(e.Descendants(W + "t").Select(t => t.Value))).ToArray();
+        Assert.Equal(FirstRow(original), FirstRow(rejected));
+        Assert.Equal(FirstRow(Make("Berth one, north", "Hook two, spare")), FirstRow(accepted));
+        Assert.Equal(Layout(Make("Berth one, north", "Hook two, spare")), Layout(accepted));
+        Assert.Equal(Layout(original), Layout(rejected));
         AssertValid(merged, accepted, rejected);
     }
 
