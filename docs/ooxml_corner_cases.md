@@ -9672,7 +9672,8 @@ none beside the untyped reference, and added one: the section then had two defau
 same part, or after a new section break to two different parts. Both now compare
 `IrReader.ReferenceKind`. Binding prefers a typed reference of the story's kind; when the section has
 none, it rebinds the untyped one and writes `w:type` on it, so LibreOffice and the HTML converter show
-the redlined story too. Only another reference of the kind to the same part is removed as a duplicate. A
+the redlined story too. Besides the typed duplicates it already removed, only another reference of the
+kind to the same part is removed as a duplicate. A
 reference the comparison does not bind keeps its bytes, missing attribute included.
 
 Tests: `UntypedStoryReferenceTests`.

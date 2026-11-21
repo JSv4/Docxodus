@@ -177,6 +177,49 @@ public class UntypedStoryReferenceTests
         Assert.Contains(references, reference => (string?)reference.Attribute(R + "id") == "rIdA" && reference.Attribute(W + "type") is null);
     }
 
+    /// <summary>
+    /// After binding, another reference of the story's kind is a duplicate when it names the part the bound reference
+    /// named before (<c>split</c>: two sections share part <c>a</c>, each referencing it typed and untyped, and the
+    /// revision gives the second section a part of its own, so that section's story is bound to a copy) or the part
+    /// it names now (<c>planned</c>: the section names part <c>A</c> untyped and <c>B</c> typed, and <c>A</c>,
+    /// first in the package, is the story the comparison redlines, so the typed reference is bound to it).
+    /// </summary>
+    [Theory]
+    [InlineData("split")]
+    [InlineData("planned")]
+    public void A_reference_left_naming_the_bound_part_is_removed(string shape)
+    {
+        static void Twin(XElement body)
+        {
+            foreach (var reference in StoryReferences(body).ToList())
+                reference.AddAfterSelf(new XElement(reference.Name, reference.Attribute(R + "id")));
+        }
+        WmlDocument left, right;
+        int section;
+        if (shape == "split")
+        {
+            left = EditBody(Build(new[] { new Section(new[] { "First section text" }, Headers: new[] { ("default", "a") }),
+                new Section(new[] { "Second section text" }, Headers: new[] { ("default", "a") }) },
+                headerParts: new Dictionary<string, string[]> { ["a"] = new[] { "Shared" } }), Twin);
+            right = EditBody(Build(new[] { new Section(new[] { "First section text" }, Headers: new[] { ("default", "a") }),
+                new Section(new[] { "Second section text" }, Headers: new[] { ("default", "c") }) },
+                headerParts: new Dictionary<string, string[]> { ["a"] = new[] { "Shared" }, ["c"] = new[] { "Shared changed" } }), Twin);
+            section = 1;
+        }
+        else
+        {
+            static WmlDocument Pair(string story) => EditBody(Build(
+                new[] { new Section(new[] { "Body" }, Headers: new[] { ("default", "B") }) },
+                headerParts: new Dictionary<string, string[]> { ["A"] = new[] { story }, ["B"] = new[] { "Bravo story" } }),
+                body => body.Element(W + "sectPr")!.AddFirst(new XElement(W + "headerReference", new XAttribute(R + "id", "A"))));
+            (left, right, section) = (Pair("Alpha story"), Pair("Alpha story changed"), 0);
+        }
+
+        var redline = DocxCompare.Compare(left, right);
+        var sections = Body(redline).Descendants(W + "sectPr").Where(s => s.Parent!.Name != W + "sectPrChange").ToList();
+        Assert.Single(sections[section].Elements(W + "headerReference"));
+    }
+
     [Fact]
     public void A_changed_story_referenced_with_and_without_its_type_comes_out_with_one_reference()
     {
