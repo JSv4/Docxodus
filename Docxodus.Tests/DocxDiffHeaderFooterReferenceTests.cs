@@ -492,6 +492,32 @@ public class DocxDiffHeaderFooterReferenceTests
     }
 
     /// <summary>
+    /// #1805 with three paragraphs, each section naming its own story, where main gave a section the wrong story
+    /// rather than none. <c>moves-down</c>: the break moves from the first paragraph to the second, so the second
+    /// paragraph's copy without it opens a section that holds the revision's first section; <c>middle-removed</c>:
+    /// the second of three sections' break goes, and the revision's last section names the second's story.
+    /// </summary>
+    [Theory]
+    [InlineData("moves-down")]
+    [InlineData("middle-removed")]
+    public void RemovedBreakOnRetainedParagraph_KeepsEachSectionsOwnStory(string scenario)
+    {
+        string[] bodies = { "The ferry timetable changes in October.", "Passengers board from the eastern pier.",
+            "Tickets are sold at the harbour office." };
+        Section Story(string[] paras, string? id) => new(paras, Headers: id is null ? null : new[] { ("default", id) });
+        var (original, revised) = scenario == "moves-down"
+            ? (HeaderFooterFixtures.Build(new[] { Story(new[] { bodies[0] }, "a"), Story(new[] { bodies[1], bodies[2] }, "c") },
+                    new Dictionary<string, string[]> { ["a"] = new[] { "Harbour notices" }, ["c"] = new[] { "Pier timetable" } }),
+                HeaderFooterFixtures.Build(new[] { Story(new[] { bodies[0], bodies[1] }, "a"), Story(new[] { bodies[2] }, "c") },
+                    new Dictionary<string, string[]> { ["a"] = new[] { "Harbour notices, winter" }, ["c"] = new[] { "Pier timetable" } }))
+            : (HeaderFooterFixtures.Build(new[] { Story(new[] { bodies[0] }, "a"), Story(new[] { bodies[1] }, "b"), Story(new[] { bodies[2] }, null) },
+                    new Dictionary<string, string[]> { ["a"] = new[] { "Harbour notices" }, ["b"] = new[] { "Pier timetable" } }),
+                HeaderFooterFixtures.Build(new[] { Story(new[] { bodies[0] }, "a"), Story(new[] { bodies[1], bodies[2] }, "b") },
+                    new Dictionary<string, string[]> { ["a"] = new[] { "Harbour notices" }, ["b"] = new[] { "Pier timetable, winter" } }));
+        AssertStoryEndpoints(original, revised, DocxCompare.Compare(original, revised), true, "default");
+    }
+
+    /// <summary>
     /// Controls for #1805: the paragraph holding the break is deleted with it, which main already handled, and the
     /// revision drops the story along with the break, so neither view of the merged section has one to keep.
     /// </summary>

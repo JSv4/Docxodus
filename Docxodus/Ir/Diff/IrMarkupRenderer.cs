@@ -2047,8 +2047,10 @@ internal static partial class IrMarkupRenderer
             // fall through to the conservative fallback if the fine table path bailed
         }
 
-        // Conservative fallback: delete the left block, insert the right block. Order matters only for human
-        // reading; accept→right, reject→left both hold. A missing side (shouldn't happen for Modify) is skipped.
+        // Conservative fallback: delete the left block, insert the right block; accept→right, reject→left both hold.
+        // The header/footer section map relies on this order: a kept paragraph whose section break changed is
+        // replaced here, and IrEditScriptBuilder.MatchSectionBoundaries puts the deleted copy's break before the
+        // inserted copy (issue #1805). A missing side (shouldn't happen for Modify) is skipped.
         if (op.LeftAnchor != null)
             EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
         if (op.RightAnchor != null)
