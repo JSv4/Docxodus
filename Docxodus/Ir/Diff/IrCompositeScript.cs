@@ -158,7 +158,8 @@ internal sealed record IrCompositeOp(
     IrComposedTableShell? TableShell = null,
     IrNodeList<IrEqualReviewerMarkers>? EqualReviewerMarkers = null,
     IrNodeList<IrReviewerTable>? ReviewerTables = null,
-    IrNodeList<IrCompositeOp>? AuthoredWrapperOps = null);
+    IrNodeList<IrCompositeOp>? AuthoredWrapperOps = null,
+    IrComposedTableControls? ControlPlacement = null);
 
 /// <summary>
 /// One reviewer's competing result for a conflicted span. <see cref="Author"/> is the reviewer

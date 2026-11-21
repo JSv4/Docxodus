@@ -2954,22 +2954,6 @@ internal static class IrReader
         return false;
     }
 
-    /// <summary>Whether a table- or row-level control holds only <paramref name="childName"/> children and further
-    /// such controls, at least one, within the nesting the reader models: a control the redline can rebuild around
-    /// the rows or cells it delivers.</summary>
-    internal static bool RebuildableControl(XElement sdt, XName childName, int depth = 0)
-    {
-        if (depth >= MaxSdtDepth || sdt.Element(W + "sdtContent") is not { } content || !content.HasElements)
-            return false;
-        foreach (var part in sdt.Elements())
-            if (part.Name != W + "sdtPr" && part.Name != W + "sdtEndPr" && part.Name != W + "sdtContent")
-                return false;
-        foreach (var child in content.Elements())
-            if (child.Name != childName && !(child.Name == W + "sdt" && RebuildableControl(child, childName, depth + 1)))
-                return false;
-        return true;
-    }
-
     // Ordinary tables need only the existing flat rows and cells. For the other containers, one
     // bounded walk records both their members and everything interleaved with those members.
     private static IrTableOrder? ReadTableOrder(XElement container, XName memberName, ReadContext ctx,

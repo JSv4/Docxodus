@@ -2279,10 +2279,15 @@ internal static partial class IrMarkupRenderer
 
     private static ControlLayout BindControlLayout(IrControlLayout? plan, IrTableOrder? left, IrTableOrder? right)
     {
+        return BindControlLayout(plan, id => (id.Left ? left : right)!.Children[id.Entry].Source.Element!);
+    }
+
+    private static ControlLayout BindControlLayout(IrControlLayout? plan, Func<IrTableControlId, XElement> source)
+    {
         if (plan is null) return ControlLayout.None;
-        XElement Source(IrTableControlId id) => (id.Left ? left : right)!.Children[id.Entry].Source.Element!;
-        return new ControlLayout(plan.Chains.Select(chain => chain.Select(Source).ToArray()).ToArray(),
-            plan.OneSided.ToDictionary(Source, id => id.Left));
+        return new ControlLayout(plan.Chains.Select(chain => chain.Select(source).ToArray()).ToArray(),
+            plan.OneSided.ToDictionary(source, id => id.Left),
+            plan.Authors?.ToDictionary(p => source(p.Key), p => p.Value));
     }
 
     /// <summary>
@@ -2309,284 +2314,6 @@ internal static partial class IrMarkupRenderer
 
         public static readonly ControlLayout None = new(Array.Empty<XElement[]>(), new());
     }
-
-    /// <summary>
-    /// Plan <see cref="RewrapInControls"/> for a table's rows or a row's cells, given each output child's left and
-    /// right source. Two paired children name the same control at each level of their nesting: one control on each
-    /// side, with the same properties, paired with no other. Null when the controls cannot be rebuilt exactly: a
-    /// control holding anything but such children and further controls, or nested past the reader's cap, a
-    /// container with bookmarks or comment ranges between its children, controls whose properties differ, or a
-    /// control whose children would not come out next to each other.
-    /// </summary>
-    internal static ControlLayout? PlanControls(
-        List<(XElement? Left, XElement? Right)> children, XElement? leftContainer, XElement rightContainer, XName childName) =>
-        PlanControlChains(children, leftContainer, rightContainer, childName) is { } layout && ChildrenStayTogether(layout.Chains)
-            ? layout : null;
-
-    /// <summary><see cref="PlanControls"/> without the check that each control's children come out together.</summary>
-    private static ControlLayout? PlanControlChains(
-        List<(XElement? Left, XElement? Right)> children, XElement? leftContainer, XElement rightContainer, XName childName)
-    {
-        if (!HasControlChild(leftContainer, rightContainer, childName))
-            return ControlLayout.None;
-        // The same test the comparison makes (IrTableDiffer.ControlsDrawable), which replaces such a table whole. A
-        // control that delivers no child is not planned: the caller keeps it in place (issue #1810).
-        foreach (var container in new[] { leftContainer, rightContainer })
-        {
-            if (container is null)
-                continue;
-            foreach (var child in container.Elements())
-                if (IsBlockLevelMarker(child) || child.Name == W.sdt && IrReader.DeliversAny(child, childName) &&
-                    !IrReader.RebuildableControl(child, childName))
-                    return null;
-        }
-
-        var leftToRight = new Dictionary<XElement, XElement>();
-        var rightToLeft = new Dictionary<XElement, XElement>();
-        foreach (var (left, right) in children)
-        {
-            if (left is null || right is null)
-                continue;
-            var leftChain = ControlChain(left, leftContainer!);
-            var rightChain = ControlChain(right, rightContainer);
-            if (leftChain.Length != rightChain.Length)
-                return null;
-            for (int level = 0; level < leftChain.Length; level++)
-            {
-                var (l, r) = (leftChain[level], rightChain[level]);
-                if (leftToRight.TryGetValue(l, out var paired))
-                {
-                    if (paired != r)
-                        return null;
-                }
-                else if (rightToLeft.ContainsKey(r) ||
-                         IrHasher.CanonicalHash(ControlShell(l)) != IrHasher.CanonicalHash(ControlShell(r)))
-                    return null;
-                else
-                {
-                    leftToRight.Add(l, r);
-                    rightToLeft.Add(r, l);
-                }
-            }
-        }
-
-        // A left-only child goes into the revision's copy of a control both sides have; a control only one side has
-        // holds only that side's children.
-        var chains = new XElement[children.Count][];
-        var oneSided = new Dictionary<XElement, bool>();
-        for (int i = 0; i < children.Count; i++)
-        {
-            var (left, right) = children[i];
-            var chain = right is not null ? ControlChain(right, rightContainer)
-                : left is not null ? ControlChain(left, leftContainer!) : Array.Empty<XElement>();
-            for (int level = 0; level < chain.Length; level++)
-            {
-                if (right is not null)
-                {
-                    if (left is null && !rightToLeft.ContainsKey(chain[level]))
-                        oneSided[chain[level]] = false;
-                }
-                else if (leftToRight.TryGetValue(chain[level], out var shared))
-                    chain[level] = shared;
-                else
-                    oneSided[chain[level]] = true;
-            }
-            chains[i] = chain;
-        }
-
-        return new ControlLayout(chains, oneSided);
-    }
-
-    /// <summary>Whether each control's children are adjacent in the output, so it is written once.</summary>
-    private static bool ChildrenStayTogether(XElement[][] chains)
-    {
-        var open = new List<XElement>();
-        var closed = new HashSet<XElement>();
-        foreach (var chain in chains)
-        {
-            int common = 0;
-            while (common < open.Count && common < chain.Length && open[common] == chain[common])
-                common++;
-            for (int k = open.Count - 1; k >= common; k--)
-            {
-                closed.Add(open[k]);
-                open.RemoveAt(k);
-            }
-            for (int k = common; k < chain.Length; k++)
-            {
-                if (closed.Contains(chain[k]))
-                    return false;
-                open.Add(chain[k]);
-            }
-        }
-        return true;
-    }
-
-    /// <summary>
-    /// The content-control layout of a composed table's rows (issue #1810), or null when the controls cannot be rebuilt
-    /// around them: each base row in its base controls; a reviewer's inserted row in the base controls that reviewer's
-    /// own comparison pairs with the controls around it, or else in copies of the reviewer's, marked as that reviewer's
-    /// insertion; and a base control none of whose rows survives accepting (each deleted, none inserted into it) marked
-    /// as deleted by the first reviewer who deleted one. Each control's rows must come out together.
-    /// <see cref="ControlLayout.None"/> when no table holds a control. The merger composes the table only when this is
-    /// not null, and the composed table's renderer rebuilds the same layout.
-    /// </summary>
-    internal static ControlLayout? PlanComposedControls(XElement baseTbl, IrTable baseTable,
-        IReadOnlyList<IrAuthoredRowOp> rows, IReadOnlyList<IrReviewerTable>? reviewerTables, IReadOnlyList<IrDocument> reviewerIrs) =>
-        PlanComposedControls(baseTbl, baseTable, rows, reviewerTables, reviewerIrs, out _);
-
-    /// <summary><see cref="PlanComposedControls(XElement, IrTable, IReadOnlyList{IrAuthoredRowOp}, IReadOnlyList{IrReviewerTable}?, IReadOnlyList{IrDocument})"/>,
-    /// with <paramref name="order"/> the order to put <paramref name="rows"/> in when the rows several reviewers insert
-    /// in one place must be merged to keep each control's rows together (each reviewer's rows in that reviewer's
-    /// order); null when they keep their order.</summary>
-    internal static ControlLayout? PlanComposedControls(XElement baseTbl, IrTable baseTable,
-        IReadOnlyList<IrAuthoredRowOp> rows, IReadOnlyList<IrReviewerTable>? reviewerTables, IReadOnlyList<IrDocument> reviewerIrs,
-        out List<int>? order)
-    {
-        order = null;
-        static XElement? TableOf(XElement row) => row.Ancestors(W.tbl).FirstOrDefault();
-        var baseRows = IndexRows(baseTable);
-        bool controlled = baseTbl.Element(W.sdt) is not null;
-        // Each reviewer's controls map to the base's through the rows their own comparison pairs.
-        var toBase = new Dictionary<XElement, XElement>();
-        foreach (var table in reviewerTables ?? (IReadOnlyList<IrReviewerTable>)Array.Empty<IrReviewerTable>())
-            foreach (var op in table.Diff.RowOps)
-            {
-                if (op.Kind is not (IrRowOpKind.EqualRow or IrRowOpKind.ModifyRow) || op.LeftRowAnchor is not { } la ||
-                    op.RightRowAnchor is not { } ra || !baseRows.TryGetValue(la, out var baseRow) ||
-                    FindRowSource(reviewerIrs[table.Reviewer], ra) is not { } reviewerRow || TableOf(reviewerRow) is not { } reviewerTbl)
-                    continue;
-                controlled |= reviewerTbl.Element(W.sdt) is not null;
-                var (baseChain, reviewerChain) = (ControlChain(baseRow, baseTbl), ControlChain(reviewerRow, reviewerTbl));
-                if (baseChain.Length != reviewerChain.Length)
-                    return null;
-                for (int level = 0; level < baseChain.Length; level++)
-                    if (!toBase.TryAdd(reviewerChain[level], baseChain[level]) && toBase[reviewerChain[level]] != baseChain[level])
-                        return null;
-            }
-
-        var chains = new XElement[rows.Count][];
-        var oneSided = new Dictionary<XElement, bool>();
-        var authors = new Dictionary<XElement, string>();
-        var surviving = new HashSet<XElement>();
-        var deletedBy = new Dictionary<XElement, string>();
-        for (int i = 0; i < rows.Count; i++)
-        {
-            var row = rows[i];
-            if (row.Kind == IrRowOpKind.InsertRow)
-            {
-                if (row.SourceReviewer < 0 || row.SourceReviewer >= reviewerIrs.Count || row.RightRowAnchor is not { } ra ||
-                    FindRowSource(reviewerIrs[row.SourceReviewer], ra) is not { } inserted || TableOf(inserted) is not { } reviewerTbl)
-                    return null;
-                controlled |= reviewerTbl.Element(W.sdt) is not null;
-                var chain = ControlChain(inserted, reviewerTbl);
-                for (int level = 0; level < chain.Length; level++)
-                {
-                    if (toBase.TryGetValue(chain[level], out var shared))
-                    {
-                        chain[level] = shared;
-                        surviving.Add(shared);
-                    }
-                    else
-                    {
-                        oneSided[chain[level]] = false;
-                        authors[chain[level]] = row.Author;
-                    }
-                }
-                chains[i] = chain;
-                continue;
-            }
-            if (row.BaseRowAnchor is not { } anchor || !baseRows.TryGetValue(anchor, out var source))
-                return null;
-            chains[i] = ControlChain(source, baseTbl);
-            foreach (var control in chains[i])
-                if (row.Kind == IrRowOpKind.DeleteRow)
-                    deletedBy.TryAdd(control, row.Author);
-                else
-                    surviving.Add(control);
-        }
-        if (!controlled)
-            return ControlLayout.None;
-        foreach (var (control, author) in deletedBy)
-            if (!surviving.Contains(control))
-            {
-                oneSided[control] = true;
-                authors[control] = author;
-            }
-        if (ChildrenStayTogether(chains))
-            return new ControlLayout(chains, oneSided, authors);
-        order = KeepInsertsTogether(rows, chains);
-        var reordered = order.Select(i => chains[i]).ToArray();
-        return ChildrenStayTogether(reordered) ? new ControlLayout(reordered, oneSided, authors) : null;
-    }
-
-    /// <summary>
-    /// An order for a composed table's rows that keeps each control's rows together: each run of rows that reviewers
-    /// insert in one place is merged, each reviewer's in that reviewer's order, taking next the row whose controls go on
-    /// from the row before it, then the one that shares less with the row after the run, then the earlier reviewer's.
-    /// </summary>
-    private static List<int> KeepInsertsTogether(IReadOnlyList<IrAuthoredRowOp> rows, XElement[][] chains)
-    {
-        static int Common(XElement[] a, XElement[] b)
-        {
-            int k = 0;
-            while (k < a.Length && k < b.Length && a[k] == b[k])
-                k++;
-            return k;
-        }
-        var order = new List<int>(rows.Count);
-        for (int i = 0; i < rows.Count;)
-        {
-            if (rows[i].Kind != IrRowOpKind.InsertRow)
-            {
-                order.Add(i++);
-                continue;
-            }
-            int end = i;
-            while (end < rows.Count && rows[end].Kind == IrRowOpKind.InsertRow)
-                end++;
-            var queues = Enumerable.Range(i, end - i).GroupBy(k => rows[k].SourceReviewer).OrderBy(g => g.Key)
-                .Select(g => new Queue<int>(g)).ToList();
-            var open = order.Count > 0 ? chains[order[^1]] : Array.Empty<XElement>();
-            var next = end < rows.Count ? chains[end] : Array.Empty<XElement>();
-            while (queues.Any(q => q.Count > 0))
-            {
-                var pick = queues.Where(q => q.Count > 0)
-                    .OrderByDescending(q => Common(open, chains[q.Peek()])).ThenBy(q => Common(next, chains[q.Peek()])).First();
-                int row = pick.Dequeue();
-                order.Add(row);
-                open = chains[row];
-            }
-            i = end;
-        }
-        return order;
-    }
-
-    /// <summary>Whether either container has a content control that delivers <paramref name="childName"/> children: one
-    /// the redline rebuilds around them. A control that delivers none stays in place as it is (issue #1810).</summary>
-    private static bool HasControlChild(XElement? left, XElement right, XName childName) =>
-        left?.Elements(W.sdt).Any(c => IrReader.DeliversAny(c, childName)) == true ||
-        right.Elements(W.sdt).Any(c => IrReader.DeliversAny(c, childName));
-
-    /// <summary>The content controls between <paramref name="child"/> and its table or row, outermost first.</summary>
-    private static XElement[] ControlChain(XElement child, XElement container)
-    {
-        int depth = 0;
-        for (var a = child.Parent; a is not null && a != container; a = a.Parent)
-            if (a.Name == W.sdt)
-                depth++;
-        if (depth == 0)
-            return Array.Empty<XElement>();
-        var chain = new XElement[depth];
-        for (var a = child.Parent; a is not null && a != container; a = a.Parent)
-            if (a.Name == W.sdt)
-                chain[--depth] = a;
-        return chain;
-    }
-
-    /// <summary>A control without its content: its attributes and properties, which a rebuilt copy keeps.</summary>
-    private static XElement ControlShell(XElement sdt) =>
-        new(W.sdt, sdt.Attributes(), sdt.Element(W.sdtPr), sdt.Element(W.sdtEndPr));
 
     /// <summary>
     /// Put the rows (or cells) of a rebuilt <paramref name="container"/> into copies of the controls
@@ -3104,19 +2831,25 @@ internal static partial class IrMarkupRenderer
 
         // The rows and cells were built bare; their content controls go back around them last, once the markers among
         // them are placed (issue #1810). The merger composed the table only because this layout exists.
-        var tableControls = PlanComposedControls(baseTbl, baseTblBlock, authoredRows, op.ReviewerTables, reviewerIrs)
-            ?? throw new DocxodusException("RenderComposedTable: the merger composed a table whose content controls cannot be rebuilt.");
-        var outputRows = newTbl.Elements(W.tr).ToList();
-        for (int i = 0; i < authoredRows.Count && i < outputRows.Count; i++)
-            if (authoredRows[i] is { Kind: IrRowOpKind.ModifyRow, BaseRowAnchor: { } rowAnchor, ComposedCells: { } cells } &&
-                baseRowsByAnchor.TryGetValue(rowAnchor, out var baseRowSrc) && baseRowSrc.Element(W.sdt) is not null)
+        if (op.ControlPlacement is { } placement)
+        {
+            if (placement.Cells.Count > 0)
             {
-                var cellSources = cells.Where(c => c.BaseCellAnchor is not null && baseCellsByAnchor.ContainsKey(c.BaseCellAnchor))
-                    .Select(c => ((XElement?)baseCellsByAnchor[c.BaseCellAnchor!], (XElement?)baseCellsByAnchor[c.BaseCellAnchor!])).ToList();
-                RewrapInControls(outputRows[i], W.tc, PlanControls(cellSources, baseRowSrc, baseRowSrc, W.tc)
-                    ?? throw new DocxodusException("RenderComposedTable: the merger composed a row whose content controls cannot be rebuilt."), state);
+                var outputRows = newTbl.Elements(W.tr).ToList();
+                for (int i = 0; i < authoredRows.Count; i++)
+                    if (authoredRows[i].BaseRowAnchor is { } anchor && placement.Cells.TryGetValue(anchor, out var cell))
+                        RewrapInControls(outputRows[i], W.tc,
+                            BindControlLayout(cell.Layout, baseTblBlock.Rows[cell.Row].ChildOrder, null), state);
             }
-        RewrapInControls(newTbl, W.tr, tableControls, state);
+            if (placement.Rows is not null)
+            {
+                var orders = placement.TableAnchors.ToDictionary(t => t.Key,
+                    t => ((IrTable)reviewerIrs[t.Key].AnchorIndex[t.Value]).ChildOrder);
+                var tableControls = BindControlLayout(placement.Rows,
+                    id => (id.Left ? baseTblBlock.ChildOrder : orders[id.Source])!.Children[id.Entry].Source.Element!);
+                RewrapInControls(newTbl, W.tr, tableControls, state);
+            }
+        }
         sink.Add(newTbl);
     }
 
