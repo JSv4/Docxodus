@@ -137,6 +137,72 @@ public class TableCellFormatTests
     }
 
     [Fact]
+    public void An_unmodeled_change_in_a_nested_table_leaves_the_table_unmodified()
+    {
+        // Control: a nested table's language change is not a format change of the outer table's cell, so the
+        // outer table is not taken apart row by row for it.
+        static WmlDocument Nested(string rPr) => Document(Table("",
+            Cell(Table("", Cell(Paragraph("Inner text.", rPr: rPr))) + Paragraph(""))));
+        var (left, right) = (Nested(""), Nested("<w:lang w:val=\"nb-NO\"/>"));
+        Assert.Empty(DocxDiff.GetRevisions(left, right));
+        Assert.DoesNotContain("\"tableDiff\"", DocxDiff.GetEditScriptJson(left, right));
+    }
+
+    [Fact]
+    public void A_cell_paragraph_change_follows_the_body_when_block_format_tracking_is_off()
+    {
+        var settings = new DocxDiffSettings { TrackBlockFormatChanges = false };
+        foreach (var wrap in new System.Func<string, string>[] { p => p, p => Table("", Cell(p)) })
+        {
+            var (left, right) = (Document(wrap(Paragraph("Cell text."))), Document(wrap(Paragraph("Cell text.", "<w:jc w:val=\"center\"/>"))));
+            Assert.Empty(DocxDiff.GetRevisions(left, right, settings));
+            Assert.Empty(Body(DocxCompare.Compare(left, right, settings)).Descendants(W + "pPrChange"));
+        }
+    }
+
+    private static string ContentControl(string content) =>
+        $"<w:sdt><w:sdtPr><w:id w:val=\"9\"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>";
+
+    /// <summary>
+    /// A table with a row or cell that a content control delivers is still copied whole (issue #1804): the
+    /// modified-table renderer would write such a row twice, so its cell's change stays untracked but its rows
+    /// come out once. <c>row</c> bolds a cell beside a row in a content control, <c>cell</c> bolds a cell a
+    /// row-level content control holds, and <c>noise</c> changes only a nested table's language beside such a row.
+    /// </summary>
+    [Theory]
+    [InlineData("row", false)]
+    [InlineData("row", true)]
+    [InlineData("cell", false)]
+    [InlineData("noise", false)]
+    public void A_table_with_a_content_control_row_or_cell_keeps_each_row_once(string shape, bool consolidate)
+    {
+        WmlDocument Revision(bool revised)
+        {
+            string bold = revised && shape != "noise" ? "<w:b/>" : "";
+            string inner = Table("", Cell(Paragraph("Inner text.", rPr: revised && shape == "noise" ? "<w:lang w:val=\"nb-NO\"/>" : "")));
+            string first = Cell(Paragraph("A1")) + (shape == "cell"
+                ? ContentControl(Cell(Paragraph("B1", rPr: bold)))
+                : Cell(Paragraph("B1", rPr: bold) + (shape == "noise" ? inner + Paragraph("") : "")));
+            string table = Table("", first);
+            return Document(shape == "cell" ? table : table.Replace("</w:tbl>",
+                ContentControl($"<w:tr>{Cell(Paragraph("A2"))}{Cell(Paragraph("B2"))}</w:tr>") + "</w:tbl>"));
+        }
+        var (left, right) = (Revision(false), Revision(true));
+        var redline = consolidate
+            ? DocxCompare.Consolidate(left, new[] { new DocxDiffReviewer { Document = right, Author = "Reviewer A" } })
+            : DocxCompare.Compare(left, right);
+
+        static int Rows(WmlDocument doc) => Body(doc).Descendants(W + "tr").Count();
+        Assert.DoesNotContain(Body(redline).Descendants(W + "tbl").Descendants(), e => e.Name == W + "ins" || e.Name == W + "del");
+        var accepted = RevisionProcessor.AcceptRevisions(redline);
+        Assert.Equal(Rows(right), Rows(accepted));
+        Assert.Equal(CellParagraphs(right), CellParagraphs(accepted));
+        Assert.Equal(Rows(left), Rows(RevisionProcessor.RejectRevisions(redline)));
+        if (shape == "noise")
+            Assert.Empty(DocxDiff.GetRevisions(left, right));
+    }
+
+    [Fact]
     public void Consolidating_a_cell_format_change_tracks_it_under_the_reviewer()
     {
         var original = Document(Table("", Cell(Paragraph("A1")) + Cell(Paragraph("B1"))));

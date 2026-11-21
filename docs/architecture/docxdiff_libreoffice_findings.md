@@ -151,8 +151,9 @@ Fix: `IrRevisionRenderer.RenderModifyBlock` now detects the same unpaired-cell c
 > **Table column add/remove rendering** (both ours and LibreOffice): a single-column change renders as a
 > WHOLE-TABLE delete + whole-table insert in BOTH engines — not column-precise. They are equivalent in
 > crudeness here; column-precise table markup is a deferred v1 limitation
-> (`ir_diff_engine.md`). **Format changes inside table cells** are reported by neither ours nor the oracle
-> (`table-cell-format`: 0/0) — oracle-consistent, not a defect.
+> (`ir_diff_engine.md`). **Format changes inside table cells** were reported by neither ours nor the oracle
+> (`table-cell-format`: 0/0) when this was written. That was a defect in ours: rejecting the redline kept the
+> revised formatting. Docxodus now tracks them as it does in a body paragraph (#1797).
 
 ### header-edit / footer-edit — documented limitation (matches oracle)
 
