@@ -190,6 +190,8 @@ internal static class IrEditScriptJson
         foreach (var rowOp in diff.RowOps)
             WriteRowOp(writer, rowOp);
         writer.WriteEndArray();
+        if (diff.ReplaceWhole)
+            writer.WriteBoolean("replaceWhole", true);
         writer.WriteEndObject();
     }
 
@@ -406,7 +408,8 @@ internal static class IrEditScriptJson
         var rowOps = new List<IrRowOp>();
         foreach (var rowElement in element.GetProperty("rowOps").EnumerateArray())
             rowOps.Add(ReadRowOp(rowElement));
-        return new IrTableDiff(IrNodeList.From(rowOps));
+        return new IrTableDiff(IrNodeList.From(rowOps),
+            ReplaceWhole: element.TryGetProperty("replaceWhole", out var whole) && whole.GetBoolean());
     }
 
     private static IrRowOp ReadRowOp(JsonElement element)

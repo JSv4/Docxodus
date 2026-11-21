@@ -422,14 +422,14 @@ internal static partial class IrMarkupRenderer
             if (row.Kind != IrRowOpKind.EqualRow && row.Kind != IrRowOpKind.ModifyRow ||
                 row.BaseRowAnchor is not { } anchor || !baseRows.TryGetValue(anchor, out var source))
                 continue;
-            var baseRowCells = source.Elements(W.tc).ToList();
+            var baseRowCells = RowCells(source);
             var cellReviews = new List<MarkerStreamReview>();
             foreach (var table in tables)
             {
                 var pair = table.Diff.RowOps.FirstOrDefault(r => r.LeftRowAnchor == anchor);
                 if (pair is null || RightRow(table.Reviewer, pair.RightRowAnchor) is not { } right)
                     continue;
-                var rightCells = right.Elements(W.tc).ToList();
+                var rightCells = RowCells(right);
                 int l = 0, r = 0;
                 var pairs = pair.CellOps is { } cells
                     ? cells.Select(c => (c.LeftCellAnchor is null ? null : baseRowCells[l++],

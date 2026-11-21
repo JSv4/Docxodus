@@ -881,13 +881,13 @@ internal static class IrRelocationPairer
                 return rewritten;
             return rewritten with
             {
-                TableDiff = new IrTableDiff(IrNodeList.From(table.RowOps.Select(row => row.CellOps is { } cells
+                TableDiff = table with { RowOps = IrNodeList.From(table.RowOps.Select(row => row.CellOps is { } cells
                     ? row with
                     {
                         CellOps = IrNodeList.From(cells.Select(c =>
                             c.BlockOps is { } blockOps ? c with { BlockOps = Rewrite(blockOps, replaced) } : c)),
                     }
-                    : row))),
+                    : row)) },
             };
         }));
 }

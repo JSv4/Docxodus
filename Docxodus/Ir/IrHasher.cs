@@ -618,6 +618,9 @@ internal sealed class IrContentHashBuilder
     // a code/wrapper-only edit cannot make the entire table align Equal.
     public const byte StructureInlineCarrier = 0x13;
     public const byte StructureFieldCarrier = 0x14;
+    // Closes a content control's children in a table's or row's control layout (IrRow.ControlDigest), so a control
+    // nested in another and one following it hash apart.
+    public const byte StructureSdtEnd = 0x15;
 
     private const byte SentinelLead = 0x01;
     private const byte StructureLead = 0x02;
