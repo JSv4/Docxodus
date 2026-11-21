@@ -3355,7 +3355,7 @@ internal static class IrReader
                 var targets = tracker.TargetsFor(commentId);
 
                 comments.Add(new IrComment(anchor, author, initials, date,
-                    IrNodeList.From(blocks), IrNodeList.From(targets)));
+                    IrNodeList.From(blocks), IrNodeList.From(targets)) { PackageId = commentId });
             }
 
             if (retain)

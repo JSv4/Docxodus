@@ -448,6 +448,89 @@ public class DocxDiffCommentStructureTests
         }
     }
 
+    [Theory]
+    [InlineData("rewritten", false)]
+    [InlineData("rewritten", true)]
+    [InlineData("reanchored", false)]
+    [InlineData("reanchored", true)]
+    [InlineData("reanchored-edited", false)]
+    [InlineData("reanchored-edited", true)]
+    [InlineData("reanchored-mixed-reference", false)]
+    [InlineData("reanchored-mixed-reference", true)]
+    [InlineData("reanchored-preserved", false)]
+    [InlineData("stationary", false)]
+    [InlineData("stationary", true)]
+    public void A_comments_reference_follows_its_range_in_both_views(string shape, bool consolidate)
+    {
+        static string Run(string text) => $"<w:r><w:t xml:space='preserve'>{text}</w:t></w:r>";
+        WmlDocument Document(bool revised)
+        {
+            bool onSecond = revised && shape.StartsWith("reanchored", StringComparison.Ordinal);
+            var body = "<w:p>" + Run("Alpha ") + CommentRun(revised && shape == "rewritten" ? "zeta" : "beta", onSecond ? null : "0") +
+                Run(revised && shape == "stationary" ? " delta." : " gamma.") + "</w:p><w:p>" +
+                CommentRun("Returns", onSecond ? "0" : null) +
+                Run(revised && shape == "reanchored-edited" ? " are due on Mondays." : " are due on Fridays.") + "</w:p>";
+            if (shape == "reanchored-mixed-reference")
+                body = body.Replace("<w:commentReference w:id=\"0\"/></w:r><w:r>", "<w:commentReference w:id=\"0\"/>");
+            if (shape == "reanchored-preserved" && revised)
+                body += "<w:p><w:ins w:id='72' w:author='Earlier'>" + Run("Pending note.") + "</w:ins></w:p>";
+            return IrTestDocuments.WithComment("Cedar", "C", "2026-01-01T00:00:00Z", "Check the term.", body);
+        }
+        var original = Document(false);
+        var revised = Document(true);
+        var reviewers = new[] { new DocxDiffReviewer { Document = revised, Author = "Reviewer" } };
+        var settings = new DocxDiffSettings { PreserveInputRevisions = shape == "reanchored-preserved" };
+        var marked = consolidate ? DocxCompare.Consolidate(original, reviewers) : DocxCompare.Compare(original, revised, settings);
+        var revisions = consolidate ? DocxDiff.GetConsolidatedRevisions(original, reviewers).Select(r => r.Text)
+            : DocxDiff.GetRevisions(original, revised).Select(r => r.Text);
+        if (shape is "reanchored" or "reanchored-mixed-reference") Assert.Empty(revisions);
+        else Assert.NotEmpty(revisions);
+        if (shape.StartsWith("reanchored", StringComparison.Ordinal))
+            Assert.Contains(DocxDiff.GetSemanticChanges(original, revised).Changes,
+                change => change.Family == Docxodus.Verification.SemanticChangeFamily.Comment);
+        if (shape == "reanchored-preserved")
+        {
+            using var session = new DocxSession(marked.DocumentByteArray);
+            foreach (var revision in session.ListRevisions().Where(r => r.Author != "Earlier").ToList())
+                Assert.True(session.AcceptRevision(revision.Id).Success);
+            Assert.Equal("Earlier", Assert.Single(session.ListRevisions()).Author);
+            Assert.Equal(RangeCoverage(revised, true), RangeCoverage(new WmlDocument("selective.docx", session.Save()), true));
+        }
+        foreach (var (doc, expected) in new[] { (marked, (WmlDocument?)null),
+            (RevisionProcessor.RejectRevisions(marked), original), (RevisionProcessor.AcceptRevisions(marked), revised) })
+        {
+            Assert.Empty(SchemaErrors(doc));
+            using var stream = new MemoryStream(doc.DocumentByteArray);
+            using var package = WordprocessingDocument.Open(stream, false);
+            var main = package.MainDocumentPart!;
+            var markers = main.GetXDocument().Descendants().Where(e =>
+                e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference)
+                .GroupBy(e => (string)e.Attribute(W.id)!).ToList();
+            Assert.NotEmpty(markers);
+            if (expected is null && shape.StartsWith("reanchored", StringComparison.Ordinal))
+            {
+                Assert.Equal(2, markers.Count);
+                if (consolidate)
+                    Assert.All(markers.SelectMany(g => g), marker => Assert.Equal("Reviewer",
+                        (string?)marker.Ancestors().First(a => a.Name == W.ins || a.Name == W.del).Attribute(W.author)));
+                if (shape == "reanchored-preserved")
+                    Assert.Contains(main.GetXDocument().Descendants(W.ins), e => (string?)e.Attribute(W.author) == "Earlier");
+            }
+            foreach (var comment in markers)
+            {
+                Assert.Equal(new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference }, comment.Select(m => m.Name));
+                Assert.Single(main.WordprocessingCommentsPart!.GetXDocument().Root!.Elements(W.comment),
+                    c => (string?)c.Attribute(W.id) == comment.Key);
+            }
+            if (expected is not null)
+            {
+                Assert.Single(markers);
+                Assert.Equal(RangeCoverage(expected, true), RangeCoverage(doc, true));
+                Assert.Equal(BodyText(expected), BodyText(doc));
+            }
+        }
+    }
+
     private static string CommentRun(string text, string? id) => id is null ? $"<w:r><w:t>{text}</w:t></w:r>"
         : $"<w:commentRangeStart w:id=\"{id}\"/><w:r><w:t>{text}</w:t></w:r>"
             + $"<w:commentRangeEnd w:id=\"{id}\"/><w:r><w:commentReference w:id=\"{id}\"/></w:r>";

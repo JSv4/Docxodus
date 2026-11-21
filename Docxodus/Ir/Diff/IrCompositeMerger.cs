@@ -102,7 +102,8 @@ internal static class IrCompositeMerger
         // bookmarks and comment ranges a reviewer has between blocks (rule N3), and placing them needs that
         // reviewer's alignment with the base, in the body and in each note (issues #1149, #1175).
         return new IrCompositeScript(IrNodeList.From(ops), IrNodeList.From(conflicts), noteOps, noteIdMaps, trailingSectPr,
-            IrNodeList.From(scripts.Select(script => new IrReviewerComparison(script.Operations, script.NoteOps))), bookmarks);
+            IrNodeList.From(scripts.Select(script => new IrReviewerComparison(script.Operations, script.NoteOps))), bookmarks,
+            reviewers.Count == 1 ? rawScripts[0].CommentAttachments : null);
     }
 
     // ---- N-way note-scope merge ----

@@ -242,7 +242,10 @@ internal static partial class IrMarkupRenderer
             irRight = IrReader.Read(right, readOpts);
         }
 
-        var state = new RenderState(irLeft, irRight, settings);
+        var state = new RenderState(irLeft, irRight, settings)
+        {
+            CommentAttachments = script.CommentAttachments ?? IrCommentAttachments.Plan(irLeft, irRight, script.Operations),
+        };
         state.RightSource = ProjectConsumerDocDefaults(left, right, state);
         state.RightSource = ProjectTableStyleMargins(left, right, state);
         state.LeftStyleIds = ReadStyleIds(left);
@@ -957,7 +960,9 @@ internal static partial class IrMarkupRenderer
                 CloseGap();
             if (markers is not null)
                 sink.AddRange(markers.PrefixOf(op));
+            int start = sink.Count;
             RenderBlockOp(op, state, sink);
+            ApplyCommentAttachments(op, state, sink, start);
         }
         FlushGap(storyEnd: true);
         CloseGap();
@@ -1577,6 +1582,22 @@ internal static partial class IrMarkupRenderer
             case IrEditOpKind.CrossParagraphRunBlock:
                 RenderCrossParagraphRun(op, state, sink);
                 break;
+        }
+    }
+
+    internal static void ApplyCommentAttachments(IrEditOp op, RenderState state, List<XElement> sink, int start)
+    {
+        if (state.CommentAttachments?.For(op.LeftAnchor) is not { } placements ||
+            sink.Count != start + 1 || sink[start].Name != W.p)
+            return;
+        foreach (var (id, insert) in placements)
+        {
+            var kind = insert ? RevKind.Ins : RevKind.Del;
+            var markers = sink[start].Descendants().Where(e => IsCommentMarker(e) &&
+                (string?)e.Attribute(W.id) == id && IsRunLevelCommentMarker(e)).ToList();
+            foreach (var marker in markers)
+                if (CommentMarkerView(marker) is null)
+                    WrapMarkerInRevision(marker, kind, state);
         }
     }
 
@@ -4474,12 +4495,27 @@ internal static partial class IrMarkupRenderer
             if (!all.Any(InBothViews))
                 continue; // every marker toggles with a revision (rewritten anchor, replaced wrapper) → (B)
             collapsed.Add(id);
+            XElement? rangeEnd = null, reference = null;
             foreach (var kind in new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference })
             {
                 // A view's own whole copy between blocks stays that view's (issues #1174, #1175).
                 var kinds = all.Where(m => m.Name == kind && !(keepBlockCopies && IsBlockLevelRevisionMarker(m))).ToList();
-                if (kinds.Count > 0 && CollapseToSurvivor(kinds) is { Changed: true })
-                    changed = true;
+                if (kinds.Count == 0) continue;
+                var survivor = CollapseToSurvivor(kinds);
+                changed |= survivor.Changed;
+                if (kind == W.commentRangeEnd) rangeEnd = survivor.Survivor;
+                if (kind == W.commentReference) reference = survivor.Survivor;
+            }
+            if (rangeEnd is not null && reference?.Parent is { } run && run.Name == W.r &&
+                rangeEnd.Ancestors(W.p).FirstOrDefault() is { } paragraph && reference.Ancestors(W.p).FirstOrDefault() == paragraph &&
+                XNode.CompareDocumentOrder(reference, rangeEnd) < 0 && InBothViews(reference) && InBothViews(rangeEnd))
+            {
+                // A shared range surrounds the inserted and deleted copies of the edited word.
+                // Its reference follows both copies. A reference run may contain other run content.
+                var referenceRun = IsolateReferenceRun(reference, state);
+                referenceRun.Remove();
+                rangeEnd.AddAfterSelf(referenceRun);
+                changed = true;
             }
         }
 
@@ -5248,8 +5284,12 @@ internal static partial class IrMarkupRenderer
     /// revision side (a right-added or left-deleted comment or bookmark whose marker landed in equal content). The <c>commentReference</c>'s
     /// host <c>w:r</c> is wrapped (a marker element is wrapped directly); both are valid children of
     /// <c>w:ins</c>/<c>w:del</c>.</summary>
-    private static void WrapMarkerInRevision(XElement marker, RevKind kind, RenderState state) =>
+    private static void WrapMarkerInRevision(XElement marker, RevKind kind, RenderState state)
+    {
+        if (marker.Name == W.commentReference && marker.Parent?.Name == W.r)
+            IsolateReferenceRun(marker, state);
         WrapMarkerInRevision(marker, kind, state.RevisionAttributes());
+    }
 
     /// <summary>As <see cref="WrapMarkerInRevision(XElement, RevKind, RenderState)"/>, with the revision element's
     /// attributes given; returns the new revision element, or null when the marker is detached.</summary>
@@ -11572,6 +11612,9 @@ internal static partial class IrMarkupRenderer
         /// reviewer's script only, so a moved row is drawn as a delete + insert there rather than as a
         /// named move range.</summary>
         public bool IsComposite { get; init; }
+
+        public IrCommentAttachments? CommentAttachments { get; init; }
+        public string? AttachmentAuthor { get; init; }
 
         /// <summary>The document the CURRENTLY-emitting op draws inserted/modified ("right-side") block elements
         /// and token text from. In a two-way render this is always <see cref="Right"/> (set once in the ctor and

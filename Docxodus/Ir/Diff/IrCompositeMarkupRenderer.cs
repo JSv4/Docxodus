@@ -93,6 +93,8 @@ internal static class IrCompositeMarkupRenderer
         {
             IsComposite = true,
             CompositeBookmarks = script.Bookmarks,
+            CommentAttachments = script.CommentAttachments,
+            AttachmentAuthor = reviewers.Count == 1 ? reviewers[0].Author : null,
         };
 
         // Bookmarks and comment ranges between body blocks go back around the blocks they bracket: the base's
@@ -723,6 +725,12 @@ internal static class IrCompositeMarkupRenderer
                         .Select(b => (b.Reviewer, IrMarkupRenderer.SourceElement(b.Anchor, reviewerIrs[b.Reviewer])))
                         .Where(c => c.Item2 is not null).Select(c => (c.Reviewer, c.Item2!)).ToList(),
                     AuthorsByReviewer(reviewerMarkers, reviewerIrs.Count), state);
+        }
+
+        if (state.CommentAttachments?.For(op.LeftAnchor) is not null)
+        {
+            state.AuthorOverride = state.AttachmentAuthor;
+            IrMarkupRenderer.ApplyCommentAttachments(op, state, sink, emittedFrom);
         }
 
         // Restore the shared state so a CELL recursion does not leak its per-op source into the surrounding
