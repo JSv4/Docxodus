@@ -1991,8 +1991,8 @@ internal static class IrEditScriptBuilder
     /// cell's content hash covers its text and not its paragraphs' formatting, so without this the table, row
     /// and cell gates treat such a cell as unchanged and copy the revised one untracked. Paragraphs compare by the
     /// aligner's own format rule, so the comparison policy and tracking settings apply as they do in the body.
-    /// A table with a row or cell delivered by a content control is left alone: the modified-table renderer does
-    /// not rebuild those wrappers yet (issue #1804), so such a table keeps being copied whole.
+    /// A table with a row or cell delivered by a content control is never flagged: the modified-table renderer does
+    /// not rebuild those controls yet (issue #1804), so a formatting change there stays untracked, as before.
     /// </summary>
     internal static bool CellFormattingDiffers(IrBlock left, IrBlock right, IrDiffSettings settings)
     {
@@ -2020,8 +2020,9 @@ internal static class IrEditScriptBuilder
             // A nested table's stored fingerprint also holds what the policy ignores in its cells, so compare the
             // shells a table's format change tracks and the nested cells by the same rule.
             if (left.Blocks[i] is IrTable lt && right.Blocks[i] is IrTable rt
-                    ? !lt.TblPrDigest.Equals(rt.TblPrDigest) || !lt.TblGridDigest.Equals(rt.TblGridDigest) ||
-                      lt.Rows.Zip(rt.Rows).Any(rows => !rows.First.TrPrDigest.Equals(rows.Second.TrPrDigest)) ||
+                    ? settings.TrackTableFormatChanges && (!lt.TblPrDigest.Equals(rt.TblPrDigest) ||
+                      !lt.TblGridDigest.Equals(rt.TblGridDigest) ||
+                      lt.Rows.Zip(rt.Rows).Any(rows => !rows.First.TrPrDigest.Equals(rows.Second.TrPrDigest))) ||
                       CellFormattingDiffers(lt, rt, settings)
                     : !IrBlockAligner.FormatEqual(left.Blocks[i], right.Blocks[i], settings))
                 return true;

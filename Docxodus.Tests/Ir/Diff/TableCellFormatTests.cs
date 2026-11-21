@@ -148,6 +148,51 @@ public class TableCellFormatTests
         Assert.DoesNotContain("\"tableDiff\"", DocxDiff.GetEditScriptJson(left, right));
     }
 
+    [Theory]
+    [InlineData("<w:jc w:val=\"center\"/>", "", "", "", "tblPrChange")]
+    [InlineData("", "2400", "", "", "tblGridChange")]
+    [InlineData("", "", "<w:trPr><w:cantSplit/></w:trPr>", "", "trPrChange")]
+    [InlineData("", "", "", "<w:tblPrEx><w:jc w:val=\"center\"/></w:tblPrEx>", "tblPrExChange")]
+    public void A_property_change_of_a_nested_table_is_tracked_inside_its_cell(
+        string tblPr, string gridWidth, string trPr, string tblPrEx, string marker)
+    {
+        static string Nested(string tblPr, string grid, string rowProperties) =>
+            $"<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/>{tblPr}</w:tblPr><w:tblGrid><w:gridCol w:w=\"{grid}\"/></w:tblGrid>" +
+            $"<w:tr>{rowProperties}{Cell(Paragraph("Inner text."))}</w:tr></w:tbl>";
+        static XElement Shell(WmlDocument doc)
+        {
+            var nested = new XElement(Body(doc).Descendants(W + "tc").Descendants(W + "tbl").Single());
+            nested.Elements(W + "tr").Elements(W + "tc").Remove();
+            // Empty property containers (a rejected change can leave one) read as absent.
+            foreach (var e in nested.Descendants().Reverse().ToList())
+                if (!e.HasElements && !e.HasAttributes && e.Name.LocalName is "tr" or "trPr" or "tblPrEx")
+                    e.Remove();
+            return nested;
+        }
+        var left = Document(Table("", Cell(Nested("", "3000", "") + Paragraph(""))));
+        var right = Document(Table("", Cell(Nested(tblPr, gridWidth.Length == 0 ? "3000" : gridWidth, tblPrEx + trPr) + Paragraph(""))));
+
+        var redline = DocxCompare.Compare(left, right);
+        Assert.Single(Body(redline).Descendants(W + "tc").Descendants(W + marker));
+        Assert.Equal(Shell(left).ToString(SaveOptions.DisableFormatting), Shell(RevisionProcessor.RejectRevisions(redline)).ToString(SaveOptions.DisableFormatting));
+    }
+
+    [Fact]
+    public void A_text_edit_beside_a_content_control_cell_stays_a_cell_level_edit()
+    {
+        // A cell a row-level content control holds is never compared for formatting, so the row keeps the cell-level
+        // edit main makes of a text change elsewhere in the table rather than a whole-table replacement (issue #1804).
+        static WmlDocument Revision(string text, string rPr) => Document(Table("",
+            Cell(Paragraph(text)) + Cell(Paragraph("B1")),
+            Cell(Paragraph("A2")) + ContentControl(Cell(Paragraph("B2", rPr: rPr)))));
+        var (left, right) = (Revision("A1", ""), Revision("A1 changed", "<w:b/>"));
+
+        var redline = DocxCompare.Compare(left, right);
+        Assert.Single(Body(redline).Elements(W + "tbl"));
+        Assert.Single(Body(redline).Descendants(W + "ins"));
+        Assert.Equal(CellParagraphs(right), CellParagraphs(RevisionProcessor.AcceptRevisions(redline)));
+    }
+
     [Fact]
     public void A_cell_paragraph_change_follows_the_body_when_block_format_tracking_is_off()
     {
