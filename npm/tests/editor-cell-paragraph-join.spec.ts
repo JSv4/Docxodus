@@ -1,9 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
+import { storedZip, xml, W_NS, R_NS } from './docx-zip.js';
 
 /**
  * Backspace at a paragraph's start and Delete at its end join two paragraphs, as in Word: in a
  * table cell only paragraphs of the same cell, so an empty paragraph in a cell can be removed while
- * the cell boundary stays.
+ * the cell boundary stays. A tab or a line break is content: beside one, the keys delete it.
  */
 
 const HOST = '#cj-host';
@@ -96,4 +97,74 @@ test('outside a table, Delete at a paragraph\'s end joins the next paragraph to 
   await expect.poll(texts).toEqual(['One Two']); // (the engine's join, as Backspace's)
   await page.keyboard.press('Control+z');
   await expect.poll(texts).toEqual(['One', 'Two']);
+});
+
+/** A document of four paragraphs: "Above", a lone tab, "Tail" and a tab, "Next". */
+function tabDocument(): Uint8Array {
+  const body = '<w:p><w:r><w:t>Above</w:t></w:r></w:p>'
+    + '<w:p><w:r><w:tab/></w:r></w:p>'
+    + '<w:p><w:r><w:t>Tail</w:t><w:tab/></w:r></w:p>'
+    + '<w:p><w:r><w:t>Next</w:t></w:r></w:p>';
+  const relationship = (id: string, kind: string, target: string) =>
+    `<Relationship Id="${id}" Type="${R_NS}/${kind}" Target="${target}"/>`;
+  return storedZip([
+    { name: '[Content_Types].xml', data: xml('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+      + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+      + '<Default Extension="xml" ContentType="application/xml"/>'
+      + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+      + '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>') },
+    { name: '_rels/.rels', data: xml('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + relationship('rId1', 'officeDocument', 'word/document.xml') + '</Relationships>') },
+    { name: 'word/_rels/document.xml.rels', data: xml('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + relationship('rId1', 'styles', 'styles.xml') + '</Relationships>') },
+    { name: 'word/styles.xml', data: xml(`<w:styles xmlns:w="${W_NS}"/>`) },
+    { name: 'word/document.xml', data: xml(`<w:document xmlns:w="${W_NS}"><w:body>${body}`
+      + '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>'
+      + '</w:body></w:document>') },
+  ]);
+}
+
+/** Opens `tabDocument` and puts the caret beside the tab of paragraph `index`: before it, or after it. */
+async function caretBesideTab(page: Page, index: number, side: 'before' | 'after') {
+  await page.goto('/test-harness.html');
+  await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 30000 });
+  await page.evaluate(({ bytes, index, side }) => {
+    const w = window as any;
+    const container = document.createElement('div');
+    container.id = 'cj-host';
+    document.body.appendChild(container);
+    w.editor = w.Docxodus.DocxEditor.open(container, new Uint8Array(bytes), w.Docxodus, {});
+    const block = Array.from(container.querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'))[index];
+    const tab = block.querySelector('[data-docx-tab]')!;
+    block.focus();
+    const at = Array.prototype.indexOf.call(tab.parentNode!.childNodes, tab) + (side === 'after' ? 1 : 0);
+    window.getSelection()!.collapse(tab.parentNode, at);
+  }, { bytes: Array.from(tabDocument()), index, side });
+}
+
+/** Each paragraph's run content in the saved package: text as itself, a tab as `|`. */
+const savedShapes = (page: Page) => page.evaluate((ns) => {
+  const w = window as any;
+  (document.activeElement as HTMLElement | null)?.blur();
+  const session = w.Docxodus.openTypedSession(w.editor.save());
+  try {
+    return Object.entries(session.project().anchorIndex as Record<string, { kind: string }>)
+      .filter(([, a]) => a.kind === 'p').map(([id]) => {
+        const doc = new DOMParser().parseFromString(session.raw.getXml(id), 'application/xml');
+        return Array.from(doc.getElementsByTagNameNS(ns, 'r')).flatMap((r) => Array.from(r.children))
+          .map((c) => c.localName === 't' ? c.textContent : c.localName === 'tab' ? '|' : '').join('');
+      });
+  } finally { session.close(); }
+}, W_NS);
+
+test('Backspace after the only tab of a paragraph deletes the tab, not the paragraph mark before it', async ({ page }) => {
+  await caretBesideTab(page, 1, 'after');
+  await page.keyboard.press('Backspace');
+  expect(await savedShapes(page)).toEqual(['Above', '', 'Tail|', 'Next']);
+});
+
+test('Delete before a tab that ends a paragraph deletes the tab, not the paragraph mark after it', async ({ page }) => {
+  await caretBesideTab(page, 2, 'before');
+  await page.keyboard.press('Delete');
+  expect(await savedShapes(page)).toEqual(['Above', '|', 'Tail', 'Next']);
 });

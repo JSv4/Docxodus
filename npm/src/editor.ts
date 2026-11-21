@@ -3330,7 +3330,8 @@ export class DocxEditor {
     } else if (ev.key === "Backspace") {
       const sel = typeof window !== "undefined" ? window.getSelection() : null;
       // An empty paragraph shows a placeholder space the caret can sit after: it is at its start.
-      const atStart = caretOffsetIn(el) === 0 || /^[\s\u00a0]*$/.test(blockContentText(el));
+      // A tab or a line break is content, not placeholder padding.
+      const atStart = caretOffsetIn(el) === 0 || trimSpaces(blockContentText(el)).length === 0;
       if (sel && sel.isCollapsed && atStart) {
         // A paginated note's first paragraph opens with its number, which is not run text, and
         // the note is its own story: there is nothing before the text to delete or merge into.
@@ -3363,7 +3364,7 @@ export class DocxEditor {
       // only the next paragraph of the same cell). Anywhere else the browser deletes as usual.
       const sel = typeof window !== "undefined" ? window.getSelection() : null;
       const at = sel?.isCollapsed ? caretOffsetIn(el) : null;
-      if (at === null || /[^\s\u00a0]/.test(blockContentText(el).slice(at))) return;
+      if (at === null || trimSpaces(blockContentText(el).slice(at)).length > 0) return;
       const next = this.joinableNeighbour(el, 1);
       if (!next || next.querySelector(NOTE_NUMBER_SELECTOR)) {
         if (inTableCell) ev.preventDefault();
