@@ -2143,15 +2143,19 @@ internal static partial class IrMarkupRenderer
         var leftRowsByAnchor = IndexRows(leftIrTable);
         var rightRowsByAnchor = IndexRows(rightIrTable);
 
-        // Rows and cells that content controls deliver go back into copies of their controls (issue #1804), as the
-        // comparison planned them (PlanTableControls, issue #1810). A table whose controls cannot be rebuilt exactly
-        // falls back to the whole-table pair before anything is rendered.
-        if (PlanTableControls(tableDiff.RowOps, leftTbl, rightTbl, leftRowsByAnchor, rightRowsByAnchor) is not { } plan)
+        if (leftIrTable is null || rightIrTable is null)
             return false;
-        var rowOps = plan.RowOps;
-        var rowSources = plan.Sources;
-        var rowControls = plan.Rows;
-        var cellControls = plan.Cells;
+        var plan = tableDiff.ControlPlan;
+        if (plan is null && (leftIrTable.ControlDigest != default || rightIrTable.ControlDigest != default))
+        {
+            // An edit script read from JSON carries the public row operations. Bind the same plan to
+            // its supplied input documents. A live comparison already planned its layout.
+            plan = IrTableControlPlanner.Plan(leftIrTable, rightIrTable, tableDiff.RowOps);
+            if (plan is null) return false;
+        }
+        IReadOnlyList<IrRowOp> rowOps = plan is null ? tableDiff.RowOps :
+            plan.Rows.Select(r => tableDiff.RowOps[r.OpIndex]).ToArray();
+        var rowControls = BindControlLayout(plan?.Controls, leftIrTable.ChildOrder, rightIrTable.ChildOrder);
 
         var newTbl = new XElement(W.tbl);
         // Carry the table's non-row prelude (tblPr, tblGrid, …) from the right shell; its controls are rebuilt below.
@@ -2164,17 +2168,10 @@ internal static partial class IrMarkupRenderer
         // (IrTableDiffer.ControlsInPlace, which the comparison checked; issue #1810). The controls around rows are
         // rebuilt below.
         var extras = new List<(XElement Element, int Before)>();
-        if (leftIrTable is { } leftIr && rightIrTable is { } rightIr &&
-            (leftIr.ControlDigest != default || rightIr.ControlDigest != default))
-        {
-            var places = IrTableDiffer.ControlsInPlace(leftIr, rightIr, rowOps);
-            if (places is null)
-                return false;
-            if (rightIr.ChildOrder is { } order)
-                foreach (var control in order.EmptyControls)
-                    if (control.Source.Element is { } source && places.TryGetValue(control.FirstMember, out var before))
-                        extras.Add((source, before));
-        }
+        if (plan is not null && rightIrTable.ChildOrder is { } order)
+            foreach (var control in order.EmptyControls)
+                if (control.Source.Element is { } source && plan.EmptyControlPositions.TryGetValue(control.FirstMember, out var before))
+                    extras.Add((source, before));
         int extrasPlaced = 0;
         void PlaceExtrasBefore(int rowIndex)
         {
@@ -2227,7 +2224,10 @@ internal static partial class IrMarkupRenderer
                 {
                     if (!rightRowsByAnchor.TryGetValue(rowOp.RightRowAnchor ?? "", out var rightSrc)) return false;
                     XElement? leftRowSrc = rowOp.LeftRowAnchor is { } mla && leftRowsByAnchor.TryGetValue(mla, out var ml) ? ml : null;
-                    if (!RenderModifyRow(rowOp, rightSrc, leftRowSrc, cellControls[rowIndex], state, newTbl))
+                    var cellControls = plan?.Rows[rowIndex] is { Cells: { } cells } rowPlan
+                        ? BindControlLayout(cells, leftIrTable.Rows[rowPlan.Left].ChildOrder, rightIrTable.Rows[rowPlan.Right].ChildOrder)
+                        : ControlLayout.None;
+                    if (!RenderModifyRow(rowOp, rightSrc, leftRowSrc, cellControls, state, newTbl))
                         return false;
                     break;
                 }
@@ -2266,125 +2266,23 @@ internal static partial class IrMarkupRenderer
         PlaceExtrasBefore(int.MaxValue);
 
         if (leftTbl.Elements().Any(IsBlockLevelMarker) || rightTbl.Elements().Any(IsBlockLevelMarker))
-            ReconcileTableStreamMarkers(newTbl, rowSources, state);
+        {
+            var sources = rowOps.Select(row => (
+                row.Kind == IrRowOpKind.MovedRow && row.IsMoveSource != true ? null : leftRowsByAnchor.GetValueOrDefault(row.LeftRowAnchor ?? ""),
+                row.Kind == IrRowOpKind.MovedRow && row.IsMoveSource == true ? null : rightRowsByAnchor.GetValueOrDefault(row.RightRowAnchor ?? ""))).ToList();
+            ReconcileTableStreamMarkers(newTbl, sources, state);
+        }
         RewrapInControls(newTbl, W.tr, rowControls, state);
         sink.Add(newTbl);
         return true;
     }
 
-    /// <summary>How a rebuilt table's rows and cells go back into their content controls (issue #1810): the row ops in
-    /// the order to draw them, each op's source rows, and the layouts of the rows and of each edited row's cells.</summary>
-    internal sealed class TableControlPlan
+    private static ControlLayout BindControlLayout(IrControlLayout? plan, IrTableOrder? left, IrTableOrder? right)
     {
-        public TableControlPlan(IReadOnlyList<IrRowOp> rowOps, List<(XElement? Left, XElement? Right)> sources,
-            ControlLayout rows, ControlLayout?[] cells)
-        {
-            RowOps = rowOps;
-            Sources = sources;
-            Rows = rows;
-            Cells = cells;
-        }
-
-        public IReadOnlyList<IrRowOp> RowOps { get; }
-        public List<(XElement? Left, XElement? Right)> Sources { get; }
-        public ControlLayout Rows { get; }
-        public ControlLayout?[] Cells { get; }
-    }
-
-    /// <summary>
-    /// Plan the content controls of a table drawn from <paramref name="ops"/> (issues #1804, #1810), or null when they
-    /// cannot be rebuilt exactly: a control holding something besides rows or cells, a marker among controlled
-    /// children, paired children in controls that differ, or a control whose children cannot come out together. A
-    /// gap's deleted rows come before its inserted ones unless that splits a control; then the gap's rows are merged so
-    /// that each goes next to the rows that share its controls. The comparison asks the same question
-    /// (<see cref="IrTableDiffer"/>), so a table this refuses is reported, as well as drawn, whole.
-    /// </summary>
-    internal static TableControlPlan? PlanTableControls(IReadOnlyList<IrRowOp> ops, XElement leftTbl, XElement rightTbl,
-        Dictionary<string, XElement> leftRowsByAnchor, Dictionary<string, XElement> rightRowsByAnchor)
-    {
-        List<(XElement? Left, XElement? Right)> Sources(IReadOnlyList<IrRowOp> rows)
-        {
-            var sources = new List<(XElement? Left, XElement? Right)>(rows.Count);
-            foreach (var row in rows)
-                sources.Add((
-                    row.Kind == IrRowOpKind.MovedRow && row.IsMoveSource != true ? null : leftRowsByAnchor.GetValueOrDefault(row.LeftRowAnchor ?? ""),
-                    row.Kind == IrRowOpKind.MovedRow && row.IsMoveSource == true ? null : rightRowsByAnchor.GetValueOrDefault(row.RightRowAnchor ?? "")));
-            return sources;
-        }
-        var sources = Sources(ops);
-        var rowControls = PlanControlChains(sources, leftTbl, rightTbl, W.tr);
-        if (rowControls is null)
-            return null;
-        if (!ChildrenStayTogether(rowControls.Chains))
-        {
-            var order = KeepControlsTogether(ops, rowControls.Chains);
-            ops = order.Select(i => ops[i]).ToList();
-            sources = order.Select(i => sources[i]).ToList();
-            rowControls = new ControlLayout(order.Select(i => rowControls.Chains[i]).ToArray(), rowControls.OneSided);
-            if (!ChildrenStayTogether(rowControls.Chains))
-                return null;
-        }
-        var cellControls = new ControlLayout?[ops.Count];
-        for (int i = 0; i < ops.Count; i++)
-        {
-            if (ops[i] is not { Kind: IrRowOpKind.ModifyRow, CellOps: { } cellOps } || sources[i].Right is not { } rightRow)
-                continue;
-            if (!HasControlChild(sources[i].Left, rightRow, W.tc))
-                cellControls[i] = ControlLayout.None;
-            else if (CellSources(cellOps, sources[i].Left, rightRow) is not { } cellSources ||
-                     (cellControls[i] = PlanControls(cellSources, sources[i].Left, rightRow, W.tc)) is null)
-                return null;
-        }
-        return new TableControlPlan(ops, sources, rowControls, cellControls);
-    }
-
-    /// <summary>
-    /// An order for <paramref name="ops"/> that keeps each control's rows together: each gap (a run of deleted and
-    /// inserted rows between rows both tables keep) is merged, deleted rows in their order and inserted rows in theirs,
-    /// taking next the row whose controls go on from the row before it, then the one that shares less with the row after
-    /// the gap, then a deleted row.
-    /// </summary>
-    private static List<int> KeepControlsTogether(IReadOnlyList<IrRowOp> ops, XElement[][] chains)
-    {
-        static int Common(XElement[] a, XElement[] b)
-        {
-            int k = 0;
-            while (k < a.Length && k < b.Length && a[k] == b[k])
-                k++;
-            return k;
-        }
-        static bool InGap(IrRowOp op) => op.Kind is IrRowOpKind.DeleteRow or IrRowOpKind.InsertRow;
-        var order = new List<int>(ops.Count);
-        for (int i = 0; i < ops.Count;)
-        {
-            if (!InGap(ops[i]))
-            {
-                order.Add(i++);
-                continue;
-            }
-            int end = i;
-            while (end < ops.Count && InGap(ops[end]))
-                end++;
-            var deletes = new List<int>();
-            var inserts = new List<int>();
-            for (int k = i; k < end; k++)
-                (ops[k].Kind == IrRowOpKind.DeleteRow ? deletes : inserts).Add(k);
-            var open = order.Count > 0 ? chains[order[^1]] : Array.Empty<XElement>();
-            var next = end < ops.Count ? chains[end] : Array.Empty<XElement>();
-            int d = 0, n = 0;
-            while (d < deletes.Count || n < inserts.Count)
-            {
-                bool delete = n == inserts.Count || d < deletes.Count && (
-                    Common(open, chains[deletes[d]]) != Common(open, chains[inserts[n]])
-                        ? Common(open, chains[deletes[d]]) > Common(open, chains[inserts[n]])
-                        : Common(next, chains[deletes[d]]) <= Common(next, chains[inserts[n]]));
-                int pick = delete ? deletes[d++] : inserts[n++];
-                order.Add(pick);
-                open = chains[pick];
-            }
-            i = end;
-        }
-        return order;
+        if (plan is null) return ControlLayout.None;
+        XElement Source(IrTableControlId id) => (id.Left ? left : right)!.Children[id.Entry].Source.Element!;
+        return new ControlLayout(plan.Chains.Select(chain => chain.Select(Source).ToArray()).ToArray(),
+            plan.OneSided.ToDictionary(Source, id => id.Left));
     }
 
     /// <summary>
@@ -2799,34 +2697,6 @@ internal static partial class IrMarkupRenderer
         return children;
     }
 
-    /// <summary>Each cell op's source cells, in output order, or null when the ops do not tile the rows' cells.</summary>
-    private static List<(XElement? Left, XElement? Right)>? CellSources(
-        IReadOnlyList<IrCellOp> cellOps, XElement? leftRow, XElement rightRow)
-    {
-        var rightCells = RowCells(rightRow);
-        var leftCells = leftRow is null ? null : RowCells(leftRow);
-        int leftIndex = 0, rightIndex = 0;
-        var sources = new List<(XElement? Left, XElement? Right)>(cellOps.Count);
-        foreach (var cellOp in cellOps)
-        {
-            XElement? left = null, right = null;
-            if (cellOp.LeftCellAnchor is not null && leftCells is not null)
-            {
-                if (leftIndex >= leftCells.Count)
-                    return null;
-                left = leftCells[leftIndex++];
-            }
-            if (cellOp.RightCellAnchor is not null)
-            {
-                if (rightIndex >= rightCells.Count)
-                    return null;
-                right = rightCells[rightIndex++];
-            }
-            sources.Add((left, right));
-        }
-        return rightIndex == rightCells.Count && (leftCells is null || leftIndex == leftCells.Count) ? sources : null;
-    }
-
     /// <summary>Render a ModifyRow: build the new row from the RIGHT row shell, replacing each paired cell's
     /// content per its block ops, and whole-marking an unpaired (column-surplus) cell. When
     /// <paramref name="leftRowSrc"/> is supplied, the row's <c>w:trPr</c> and each paired cell's <c>w:tcPr</c>
@@ -2965,7 +2835,13 @@ internal static partial class IrMarkupRenderer
         }
         PlaceRightMarkersBefore(int.MaxValue);
         if (rightRowSrc.Elements().Any(IsBlockLevelMarker) || leftRowSrc?.Elements().Any(IsBlockLevelMarker) == true)
-            ReconcileTableStreamMarkers(newRow, CellSources(rowOp.CellOps, leftRowSrc, rightRowSrc)!, state);
+        {
+            int l = 0, r = 0;
+            var sources = rowOp.CellOps.Select(cell => (
+                cell.LeftCellAnchor is null || leftCells is null ? null : leftCells[l++],
+                cell.RightCellAnchor is null ? null : rightCells[r++])).ToList();
+            ReconcileTableStreamMarkers(newRow, sources, state);
+        }
         RewrapInControls(newRow, W.tc, cellControls, state);
         // The paired tcPr histories were applied per cell above; row shells remain one per row.
         if (leftRowSrc != null)
