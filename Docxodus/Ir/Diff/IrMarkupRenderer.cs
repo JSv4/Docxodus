@@ -3373,13 +3373,20 @@ internal static partial class IrMarkupRenderer
             _ => "default",
         };
         string relationshipId = main.GetIdOfPart(part);
-        var existing = sectPr.Elements(refName)
-            .Where(reference => IrReader.ReferenceKind(reference) == kind)
-            .ToList();
-        if (existing.Count > 0)
+        // A reference written without w:type, which the schema requires, is read as the default story. It is bound
+        // only when the section has no typed reference of the kind, and it is given its type, so a reader that
+        // skips an untyped reference still finds the redlined story (issue #1803). Besides the typed duplicates
+        // removed as before, only another reference to the same part is a duplicate.
+        var sameKind = sectPr.Elements(refName).Where(reference => IrReader.ReferenceKind(reference) == kind).ToList();
+        var typed = sameKind.Where(reference => (string?)reference.Attribute(W.type) == typeValue).ToList();
+        if (sameKind.Count > 0)
         {
-            existing[0].SetAttributeValue(R.id, relationshipId);
-            foreach (var duplicate in existing.Skip(1))
+            var bound = typed.Count > 0 ? typed[0] : sameKind[0];
+            var previousId = (string?)bound.Attribute(R.id);
+            bound.SetAttributeValue(W.type, typeValue);
+            bound.SetAttributeValue(R.id, relationshipId);
+            foreach (var duplicate in typed.Skip(1).Concat(sameKind.Where(reference => reference != bound &&
+                         (string?)reference.Attribute(R.id) is { } id && (id == previousId || id == relationshipId))).Distinct().ToList())
                 duplicate.Remove();
         }
         else

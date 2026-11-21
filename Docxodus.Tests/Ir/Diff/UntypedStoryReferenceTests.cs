@@ -67,14 +67,16 @@ public class UntypedStoryReferenceTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public void A_changed_story_keeps_its_single_untyped_reference(bool header)
+    public void A_changed_story_keeps_one_reference_and_gives_it_its_type(bool header)
     {
+        // The reference the comparison binds to the redlined part is written with its type, so a reader that skips
+        // an untyped reference, as LibreOffice does, still finds the redlined story.
         var left = Untyped(OneSection(header, "Old story"));
         var right = Untyped(OneSection(header, "New story"));
 
         var redline = DocxCompare.Compare(left, right);
         var reference = Assert.Single(References(redline, header));
-        Assert.Null(reference.Attribute(W + "type"));
+        Assert.Equal("default", (string?)reference.Attribute(W + "type"));
         foreach (var (resolved, text) in new[]
                  {
                      (RevisionProcessor.RejectRevisions(redline), "Old story"),
@@ -157,6 +159,22 @@ public class UntypedStoryReferenceTests
         var redline = Docxodus.Ir.Diff.IrMarkupRenderer.Render(script, left, right, new Docxodus.Ir.Diff.IrDiffSettings());
         Assert.Null(Assert.Single(References(redline, header)).Attribute(W + "type"));
         Assert.Equal("Old story", ReferencedStoryText(RevisionProcessor.RejectRevisions(redline), header, 0, "default"));
+    }
+
+    [Fact]
+    public void An_untyped_reference_to_another_part_beside_the_typed_one_is_kept()
+    {
+        // The section names two default headers, the untyped one first; the typed one's story changes. Binding it
+        // leaves the other part's reference alone, as before, rather than orphaning that part.
+        static WmlDocument Pair(string story) => EditBody(Build(
+            new[] { new Section(new[] { "Body" }, Headers: new[] { ("default", "rIdB") }) },
+            headerParts: new Dictionary<string, string[]> { ["rIdB"] = new[] { story }, ["rIdA"] = new[] { "Alpha story" } }),
+            body => body.Element(W + "sectPr")!.AddFirst(new XElement(W + "headerReference", new XAttribute(R + "id", "rIdA"))));
+        var redline = DocxCompare.Compare(Pair("Old story"), Pair("New story"));
+
+        var references = References(redline, true);
+        Assert.Equal(2, references.Count);
+        Assert.Contains(references, reference => (string?)reference.Attribute(R + "id") == "rIdA" && reference.Attribute(W + "type") is null);
     }
 
     [Fact]

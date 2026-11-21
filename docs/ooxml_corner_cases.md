@@ -9670,8 +9670,9 @@ and redlines it. Before the fix, binding that story to its section (`BindHeaderF
 re-attaching an orphaned story (`EnsureStoryReference`) looked for a literal `w:type="default"`, found
 none beside the untyped reference, and added one: the section then had two default references, to the
 same part, or after a new section break to two different parts. Both now compare
-`IrReader.ReferenceKind`, so the untyped reference is rebound and kept as written. The redline does not
-add the missing attribute, so it is exactly as valid as its input; a reference the comparison writes
-itself is typed.
+`IrReader.ReferenceKind`. Binding prefers a typed reference of the story's kind; when the section has
+none, it rebinds the untyped one and writes `w:type` on it, so LibreOffice and the HTML converter show
+the redlined story too. Only another reference of the kind to the same part is removed as a duplicate. A
+reference the comparison does not bind keeps its bytes, missing attribute included.
 
 Tests: `UntypedStoryReferenceTests`.
