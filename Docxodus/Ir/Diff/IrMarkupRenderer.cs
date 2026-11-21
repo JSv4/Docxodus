@@ -2016,9 +2016,7 @@ internal static partial class IrMarkupRenderer
         var preservedGroup = SourceElement(op.RightAnchor, state.RightSource) is { } preservedRight
             ? state.PreservedGroup(preservedRight)
             : null;
-        bool lowerToPreservedReplace = preservedGroup != null &&
-            preservedGroup.Any(member => !IsCarriedRemovedTable(member) &&
-                member.DescendantsAndSelf().Any(e => TrackedRevisionNames.Contains(e.Name)));
+        bool lowerToPreservedReplace = preservedGroup != null && LowersToPreservedReplace(preservedGroup);
         if (preservedGroup != null && !lowerToPreservedReplace)
             foreach (var carried in preservedGroup.Where(IsCarriedRemovedTable))
                 EmitCarriedRemovedTable(carried, state, sink);
@@ -11895,6 +11893,32 @@ internal static partial class IrMarkupRenderer
     /// preserved groups, so there it is still dropped.</summary>
     private static bool IsCarriedRemovedTable(XElement member) =>
         member.Name == W.tbl && RevisionProcessor.AcceptRemovesTable(member);
+
+    /// <summary>Whether a modified block whose revision's original is <paramref name="group"/> is drawn as the
+    /// conservative whole-block pair, to keep the revision's own tracked changes (<see cref="RenderModifyBlock"/>).</summary>
+    private static bool LowersToPreservedReplace(List<XElement> group) =>
+        group.Any(member => !IsCarriedRemovedTable(member) &&
+            member.DescendantsAndSelf().Any(e => TrackedRevisionNames.Contains(e.Name)));
+
+    /// <summary>
+    /// The anchors of the revision's body blocks that <see cref="RenderModifyBlock"/> replaces whole when it keeps the
+    /// inputs' own tracked changes (<see cref="IrDiffSettings.PreserveInputRevisions"/>): with an original free of
+    /// tracked changes, each block whose revision holds some. Such a block is drawn as its deleted and its inserted
+    /// copy, each with its own section break, which the header and footer section map counts (issue #1809). Null when
+    /// there is none; the caller decides whether the setting is on.
+    /// </summary>
+    internal static IReadOnlySet<string>? PreservedReplacementAnchors(IrDocument irRight, WmlDocument left, WmlDocument right)
+    {
+        if (HasTrackedRevisionMarkup(left) || !HasTrackedRevisionMarkup(right) ||
+            BuildPreservedOriginalIndex(irRight, right, carryRemovedTables: true) is not { } originals)
+            return null;
+        HashSet<string>? anchors = null;
+        foreach (var block in irRight.Body.Blocks)
+            if (block.Source.Element is { } element && originals.TryGetValue(element, out var group) &&
+                LowersToPreservedReplace(group))
+                (anchors ??= new HashSet<string>(StringComparer.Ordinal)).Add(block.Anchor.ToString());
+        return anchors;
+    }
 
     /// <summary>Emit a carried removed table verbatim, once: a Modify that falls back to whole-block
     /// replacement reaches its group a second time.</summary>
