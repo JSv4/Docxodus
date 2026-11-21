@@ -72,7 +72,7 @@ internal static class IrTableDiffer
     /// children and no control it cannot rebuild on either side.</summary>
     internal static bool ControlsDrawable(IrContainerControls left, IrContainerControls right) =>
         ((left | right) & IrContainerControls.Control) == 0 ||
-        ((left | right) & (IrContainerControls.Marker | IrContainerControls.Unrebuildable)) == 0;
+        ((left | right) & (IrContainerControls.Marker | IrContainerControls.MixedControlContent)) == 0;
 
     public static IrTableDiff Diff(IrTable left, IrTable right, IrDiffSettings settings)
     {

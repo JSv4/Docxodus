@@ -2859,21 +2859,21 @@ internal static class IrReader
         // row's content. Unwrap table-level SDTs to their w:tr children, flag the delivered rows
         // FromTableSdt, and let the emitter narrow back to the oracle's direct-row view for parity.
         // The table-level controls that deliver no row sit before the row that follows them (issue #1810).
-        var controlsBefore = TableControlsBefore(tbl, out var trailingControls);
-        // Which control instance each row sits in, by the positions of its controls among their siblings: rows that pair
-        // ignore it (a control's identity is its shell), but the table's digest must tell one control around two rows
-        // from two alike controls around one row each.
+        var order = ReadTableOrder(tbl, W + "tr", ctx, out var sourceRows);
+        var controlsBefore = EmptyControlDigests(order);
         List<string>? instances = null;
-        foreach (var (tr, fromSdt) in TableChildren(tbl, W + "tr"))
+        foreach (var tr in sourceRows)
         {
             var (row, cellFingerprintsForRow) = BuildRow(tr, ctx);
-            var rowControls = RowControlDigest(tr, tbl);
-            var before = controlsBefore?.GetValueOrDefault(tr) ?? default;
+            int index = rows.Count;
+            bool fromSdt = tr.Parent != tbl;
+            var rowControls = RowControlDigest(order, index, row.ChildOrder);
+            var before = controlsBefore?.GetValueOrDefault(index) ?? default;
             if (fromSdt || rowControls != default || before != default)
                 row = row with { FromTableSdt = fromSdt, ControlDigest = rowControls, ControlsBeforeDigest = before };
             if (fromSdt)
-                (instances ??= Enumerable.Repeat("", rows.Count).ToList()).Add(string.Join(",", tr.Ancestors().TakeWhile(a => a != tbl)
-                    .Where(a => a.Name == W + "sdt").Select(a => a.ElementsBeforeSelf().Count())));
+                (instances ??= Enumerable.Repeat("", index).ToList()).Add(string.Join(",",
+                    order!.EnclosingControls(index).Select(c => c.Sibling)));
             else
                 instances?.Add("");
             rows.Add(row);
@@ -2907,6 +2907,7 @@ internal static class IrReader
             fpBuilder.AppendHash(fp);
         var formatFingerprint = fpBuilder.Build();
 
+        var trailingControls = controlsBefore?.GetValueOrDefault(rows.Count) ?? default;
         IrHash controlDigest = default;
         if (tbl.Element(W + "sdt") is not null || rows.Any(r => r.ControlDigest != default))
         {
@@ -2934,7 +2935,8 @@ internal static class IrReader
             Source = ctx.Provenance(tbl),
             ControlDigest = controlDigest,
             TrailingControlsDigest = trailingControls,
-            Controls = ContainerControls(tbl, W + "tr"),
+            Controls = order?.Summary ?? default,
+            ChildOrder = order,
         };
     }
 
@@ -2968,93 +2970,133 @@ internal static class IrReader
         return true;
     }
 
-    /// <summary>What a table holds among its rows, or a row among its cells (<paramref name="childName"/>), that decides
-    /// whether the redline can rebuild its controls: a control that delivers such children, a bookmark or comment-range
-    /// marker, and a control that delivers children but cannot be rebuilt around them. A control that delivers none is
-    /// not rebuilt, and stays in place as it is.</summary>
-    private static IrContainerControls ContainerControls(XElement container, XName childName)
+    // Ordinary tables need only the existing flat rows and cells. For the other containers, one
+    // bounded walk records both their members and everything interleaved with those members.
+    private static IrTableOrder? ReadTableOrder(XElement container, XName memberName, ReadContext ctx,
+        out IEnumerable<XElement> members)
     {
-        var result = IrContainerControls.None;
+        bool seenMember = false;
+        bool table = memberName == W + "tr";
         foreach (var child in container.Elements())
         {
-            if (child.Name == W + "sdt" && DeliversAny(child, childName))
-            {
-                result |= IrContainerControls.Control;
-                if (!RebuildableControl(child, childName))
-                    result |= IrContainerControls.Unrebuildable;
-            }
-            else if (child.Name == W + "bookmarkStart" || child.Name == W + "bookmarkEnd" ||
-                     child.Name == W + "commentRangeStart" || child.Name == W + "commentRangeEnd")
-                result |= IrContainerControls.Marker;
+            if (child.Name == memberName)
+                seenMember = true;
+            else if (seenMember || !(table
+                ? child.Name == W + "tblPr" || child.Name == W + "tblGrid"
+                : child.Name == W + "trPr" || child.Name == W + "tblPrEx"))
+                return ReadInterleavedTableOrder(container, memberName, ctx, out members);
         }
-        return result;
+        members = container.Elements(memberName);
+        return null;
     }
 
-    /// <summary>The table-level controls that deliver no row, by the row that follows them (each run whole, in
-    /// order), and those after the last row in <paramref name="trailing"/>; null when the table has none.</summary>
-    private static Dictionary<XElement, IrHash>? TableControlsBefore(XElement tbl, out IrHash trailing)
+    private static IrTableOrder ReadInterleavedTableOrder(XElement container, XName memberName, ReadContext ctx,
+        out IEnumerable<XElement> members)
     {
-        Dictionary<XElement, IrHash>? result = null;
-        IrContentHashBuilder? pending = null;
-        foreach (var child in tbl.Elements())
+        var entries = new List<IrTableChild>();
+        var memberEntries = new List<int>();
+        var sourceMembers = new List<XElement>();
+        var summary = IrContainerControls.None;
+        bool ReadChildren(XElement parent, int parentIndex, int depth)
         {
-            XElement? first = child.Name == W + "tr" ? child
-                : child.Name == W + "sdt" ? UnwrapSdtChildren(child, W + "tr").FirstOrDefault() : null;
-            if (first is not null)
+            bool membersOnly = true;
+            int sibling = 0;
+            foreach (var child in parent.Elements())
             {
-                if (pending is not null)
-                    (result ??= new Dictionary<XElement, IrHash>())[first] = pending.Build();
-                pending = null;
+                int index = entries.Count;
+                int first = sourceMembers.Count;
+                entries.Add(default);
+                IrHash digest = default;
+                if (child.Name == memberName)
+                {
+                    sourceMembers.Add(child);
+                    memberEntries.Add(index);
+                }
+                else if (child.Name == W + "sdt")
+                {
+                    bool only = depth < MaxSdtDepth && child.Element(W + "sdtContent") is { } content &&
+                        ReadChildren(content, index, depth + 1);
+                    only &= child.Elements().All(e => e.Name == W + "sdtPr" || e.Name == W + "sdtEndPr" || e.Name == W + "sdtContent");
+                    membersOnly &= only;
+                    if (sourceMembers.Count == first)
+                        digest = IrHasher.CanonicalHash(child);
+                    else
+                    {
+                        digest = ControlShellDigest(child);
+                        if (parentIndex < 0)
+                            summary |= IrContainerControls.Control | (only ? default : IrContainerControls.MixedControlContent);
+                    }
+                }
+                else
+                {
+                    membersOnly = false;
+                    if (parentIndex < 0 && (child.Name == W + "bookmarkStart" || child.Name == W + "bookmarkEnd" ||
+                        child.Name == W + "commentRangeStart" || child.Name == W + "commentRangeEnd"))
+                        summary |= IrContainerControls.Marker;
+                }
+                entries[index] = new IrTableChild(child.Name, parentIndex, sibling++, first,
+                    sourceMembers.Count - first, entries.Count, digest, ctx.Provenance(child));
             }
-            else if (child.Name == W + "sdt")
-                (pending ??= new IrContentHashBuilder()).AppendHash(IrHasher.CanonicalHash(child));
+            return membersOnly && sibling > 0;
         }
-        trailing = pending?.Build() ?? default;
-        return result;
+        ReadChildren(container, -1, 0);
+        members = sourceMembers;
+        return new IrTableOrder(IrNodeList.From(entries), IrNodeList.From(memberEntries), summary);
     }
 
-    /// <summary>See <see cref="IrRow.ControlDigest"/>.</summary>
-    private static IrHash RowControlDigest(XElement tr, XElement tbl)
+    private static Dictionary<int, IrHash>? EmptyControlDigests(IrTableOrder? order)
     {
-        bool own = tr.Element(W + "sdt") is not null;
-        bool wrapped = tr.Parent != tbl;
-        if (!own && !wrapped)
+        if (order is null)
+            return null;
+        Dictionary<int, IrHash>? boundaries = null;
+        foreach (var group in order.EmptyControls.GroupBy(c => c.FirstMember))
+        {
+            var builder = new IrContentHashBuilder();
+            foreach (var control in group)
+                builder.AppendHash(control.Digest);
+            (boundaries ??= new())[group.Key] = builder.Build();
+        }
+        return boundaries;
+    }
+
+    private static IrHash RowControlDigest(IrTableOrder? table, int rowIndex, IrTableOrder? cells)
+    {
+        bool wrapped = table is not null && table.Children[table.Members[rowIndex]].Parent >= 0;
+        bool own = cells?.Children.Any(c => c.Name == W + "sdt") == true;
+        if (!wrapped && !own)
             return default;
         var builder = new IrContentHashBuilder();
         if (wrapped)
-        {
-            var chain = tr.Ancestors().TakeWhile(a => a != tbl).Where(a => a.Name == W + "sdt").Reverse();
-            foreach (var control in chain)
+            foreach (var control in table!.EnclosingControls(rowIndex).Reverse())
             {
                 builder.AppendStructure(IrContentHashBuilder.StructureSdt);
-                builder.AppendHash(ControlShellDigest(control));
+                builder.AppendHash(control.Digest);
             }
-        }
         builder.AppendStructure(IrContentHashBuilder.StructureRow);
         if (own)
-            AppendControlLayout(tr, W + "tc", builder, 0);
+            AppendControlLayout(cells!.Children, 0, cells.Children.Count, builder);
         return builder.Build();
     }
 
-    /// <summary>Append a row's controls to <paramref name="builder"/>: each control that delivers cells as its shell
-    /// around them, and one that delivers none whole.</summary>
-    private static void AppendControlLayout(XElement container, XName childName, IrContentHashBuilder builder, int depth)
+    private static void AppendControlLayout(IrNodeList<IrTableChild> entries, int first, int end, IrContentHashBuilder builder)
     {
-        foreach (var child in container.Elements())
+        for (int i = first; i < end; i = entries[i].End)
         {
-            if (child.Name == childName)
+            var child = entries[i];
+            if (child.Name == W + "tc")
                 builder.AppendStructure(IrContentHashBuilder.StructureCell);
-            else if (child.Name != W + "sdt")
-                continue;
-            else if (depth < MaxSdtDepth && DeliversAny(child, childName) && child.Element(W + "sdtContent") is { } content)
+            else if (child.Name == W + "sdt")
             {
-                builder.AppendStructure(IrContentHashBuilder.StructureSdt);
-                builder.AppendHash(ControlShellDigest(child));
-                AppendControlLayout(content, childName, builder, depth + 1);
-                builder.AppendStructure(IrContentHashBuilder.StructureSdtEnd);
+                if (child.MemberCount == 0)
+                    builder.AppendHash(child.Digest);
+                else
+                {
+                    builder.AppendStructure(IrContentHashBuilder.StructureSdt);
+                    builder.AppendHash(child.Digest);
+                    AppendControlLayout(entries, i + 1, child.End, builder);
+                    builder.AppendStructure(IrContentHashBuilder.StructureSdtEnd);
+                }
             }
-            else
-                builder.AppendHash(IrHasher.CanonicalHash(child));
         }
     }
 
@@ -3072,10 +3114,11 @@ internal static class IrReader
         // the ContentHash), so we unwrap row-level SDTs to their w:tc children here, reusing the
         // established SDT-unwrap discipline + depth cap. Each SDT-delivered cell is flagged
         // FromRowSdt so the markdown emitter can mirror the oracle's narrower view for byte parity.
-        foreach (var (tc, fromSdt) in TableChildren(tr, W + "tc"))
+        var order = ReadTableOrder(tr, W + "tc", ctx, out var sourceCells);
+        foreach (var tc in sourceCells)
         {
             var (cell, fingerprints) = BuildCell(tc, ctx);
-            if (fromSdt)
+            if (tc.Parent != tr)
                 cell = cell with { FromRowSdt = true };
             cells.Add(cell);
             cellFingerprints.AddRange(fingerprints);
@@ -3108,7 +3151,8 @@ internal static class IrReader
             TrPrDigest = trPrDigest,
             TrPrShellDigest = trPrShellDigest,
             TrPrExDigest = trPrExDigest,
-            Controls = ContainerControls(tr, W + "tc"),
+            Controls = order?.Summary ?? default,
+            ChildOrder = order,
         };
         return (row, cellFingerprints);
     }

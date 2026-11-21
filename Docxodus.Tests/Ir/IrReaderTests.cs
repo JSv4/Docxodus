@@ -149,6 +149,8 @@ public class IrReaderTests
 
         var table = Assert.IsType<IrTable>(ir.Body.Blocks.Single());
         Assert.Equal(IrAnchorKind.Tbl, table.Anchor.Kind);
+        Assert.Null(table.ChildOrder);
+        Assert.All(table.Rows, row => Assert.Null(row.ChildOrder));
         Assert.Equal(2, table.Rows.Count);
         foreach (var row in table.Rows)
         {
@@ -160,6 +162,46 @@ public class IrReaderTests
                 var para = Assert.IsType<IrParagraph>(cell.Blocks.Single());
                 Assert.NotNull(ir.FindByAnchor(para.Anchor));
             }
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Read_TableRecordsControlInstancesAndInterleavedChildren(bool retainSources)
+    {
+        static string Control(string content, string alias = "Repeated", string end = "<w:i/>") =>
+            $"<w:sdt><w:sdtPr><w:alias w:val='{alias}'/><w:id w:val='9'/></w:sdtPr>" +
+            $"<w:sdtEndPr><w:rPr>{end}</w:rPr></w:sdtEndPr><w:sdtContent>{content}</w:sdtContent></w:sdt>";
+        const string cell = "<w:tc><w:p/></w:tc>";
+        const string marker = "<w:bookmarkStart w:id='1' w:name='Dock'/><w:bookmarkEnd w:id='1'/>";
+        var row = "<w:tr>" + cell + Control(marker) + Control(Control(cell)) + "</w:tr>";
+        var doc = IrTestDocuments.FromBodyXml("<w:tbl><w:tblPr/><w:tblGrid/>" + Control("") +
+            Control(Control(row)) + Control(marker) + Control(row, alias: "Other") +
+            Control(row, end: "<w:b/>") + Control(row) + Control("") + "</w:tbl>");
+        var table = Assert.IsType<IrTable>(IrReader.Read(doc,
+            new IrReaderOptions { RetainSources = retainSources }).Body.Blocks.Single());
+        var order = Assert.IsType<IrTableOrder>(table.ChildOrder);
+        Assert.Equal(4, table.Rows.Count);
+        Assert.Equal(new[] { 0, 1, 4 }, order.EmptyControls.Select(c => c.FirstMember));
+        Assert.Equal(new[] { "sdt", "bookmarkStart", "bookmarkEnd" },
+            order.Children.SkipWhile(c => c != order.EmptyControls.ElementAt(1)).Take(3).Select(c => c.Name.LocalName));
+        var chains = Enumerable.Range(0, table.Rows.Count).Select(i => order.EnclosingControls(i).ToArray()).ToArray();
+        Assert.Equal(new[] { 0, 3 }, chains[0].Select(c => c.Sibling));
+        Assert.Equal(chains[0][0].Digest, chains[0][1].Digest);
+        Assert.Equal(chains[0][1].Digest, chains[3][0].Digest);
+        Assert.NotEqual(chains[0][1].Sibling, chains[3][0].Sibling);
+        Assert.NotEqual(chains[0][1].Digest, chains[1][0].Digest);
+        Assert.NotEqual(chains[0][1].Digest, chains[2][0].Digest);
+        Assert.All(order.Children, c => Assert.Equal(retainSources, c.Source.Element is not null));
+        foreach (var delivered in table.Rows)
+        {
+            var cells = Assert.IsType<IrTableOrder>(delivered.ChildOrder);
+            Assert.Equal(2, cells.Members.Count);
+            Assert.Empty(cells.EnclosingControls(0));
+            Assert.Equal(new[] { 0, 2 }, cells.EnclosingControls(1).Select(c => c.Sibling));
+            Assert.Equal(1, Assert.Single(cells.EmptyControls).FirstMember);
+            Assert.All(cells.Children, c => Assert.Equal(retainSources, c.Source.Element is not null));
         }
     }
 
