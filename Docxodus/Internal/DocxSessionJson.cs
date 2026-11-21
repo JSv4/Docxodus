@@ -3202,7 +3202,7 @@ internal static class DocxSessionJson
               .Append(",\"level\":").Append(e.Level)
               .Append(",\"text\":").Append(JsonString(e.Text));
             if (e.StyleId is not null) sb.Append(",\"styleId\":").Append(JsonString(e.StyleId));
-            sb.Append('}');
+            sb.Append(",\"lastAnchorId\":").Append(JsonString(e.LastAnchorId)).Append('}');
         }
         return sb.Append(']').ToString();
     }

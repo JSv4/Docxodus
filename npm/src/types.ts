@@ -2647,6 +2647,9 @@ export interface OutlineEntry {
   level: number;
   text: string;
   styleId?: string;
+  /** The last top-level block of the heading's part (up to the next heading at its level or
+   *  above): what `moveBlockRange` moves with it. */
+  lastAnchorId: string;
 }
 
 export interface BookmarkInfo {

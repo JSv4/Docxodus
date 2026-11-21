@@ -13,7 +13,10 @@ namespace Docxodus;
 /// <param name="Level">Its outline level, 1-9 (Word's Level 1 is <c>w:outlineLvl w:val="0"</c>).</param>
 /// <param name="Text">Its visible text.</param>
 /// <param name="StyleId">Its paragraph style, or null when it has none.</param>
-public sealed record OutlineEntry(string AnchorId, int Level, string Text, string? StyleId);
+/// <param name="LastAnchorId">The last top-level block (paragraph or table) of the heading's part
+/// of the document: everything up to the next heading of its level or a higher one (the end of
+/// the body for the last). What <see cref="DocxSession.MoveBlockRange"/> moves with the heading.</param>
+public sealed record OutlineEntry(string AnchorId, int Level, string Text, string? StyleId, string LastAnchorId);
 
 public sealed partial class DocxSession
 {
@@ -52,18 +55,38 @@ public sealed partial class DocxSession
             return levelOfStyle[styleId] = level;
         }
 
-        var result = new List<OutlineEntry>();
-        foreach (var p in body.Descendants(W.p))
+        // The top-level blocks in order (a block content control's are among them), each heading's
+        // position in them, then each heading's part: up to the next heading at its level or above.
+        var blocks = body.Descendants()
+            .Where(e => (e.Name == W.p || e.Name == W.tbl)
+                && !e.Ancestors().Any(a => a.Name == W.tbl || a.Name == W.txbxContent || a.Name == MC.Fallback))
+            .ToList();
+        var headings = new List<(int Index, Anchor Anchor, int Level, XElement P)>();
+        for (int i = 0; i < blocks.Count; i++)
         {
-            if (p.Ancestors().Any(a => a.Name == W.tbl || a.Name == W.txbxContent || a.Name == MC.Fallback)) continue;
+            var p = blocks[i];
+            if (p.Name != W.p) continue;
             var pPr = p.Element(W.pPr);
             var styleId = (string?)pPr?.Element(W.pStyle)?.Attribute(W.val)
                 ?? (string?)defaultStyle?.Attribute(W.styleId);
             var level = OutlineLevelOf(pPr) ?? (styleId is null ? null : StyleLevel(styleId));
             if (level is not (>= 0 and <= 8)) continue;
             if (AnchorForElement(p) is not { } anchor) continue;
-            result.Add(new OutlineEntry(anchor.Id, level.Value + 1, VisibleText(p),
-                (string?)pPr?.Element(W.pStyle)?.Attribute(W.val)));
+            headings.Add((i, anchor, level.Value + 1, p));
+        }
+        var result = new List<OutlineEntry>(headings.Count);
+        for (int h = 0; h < headings.Count; h++)
+        {
+            var (index, anchor, level, p) = headings[h];
+            int end = blocks.Count - 1;
+            for (int k = h + 1; k < headings.Count; k++)
+                if (headings[k].Level <= level) { end = headings[k].Index - 1; break; }
+            // (the last block with an anchor: a section-only paragraph has one too)
+            string last = anchor.Id;
+            for (int j = end; j > index; j--)
+                if (AnchorForElement(blocks[j]) is { } a) { last = a.Id; break; }
+            result.Add(new OutlineEntry(anchor.Id, level, VisibleText(p),
+                (string?)p.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val), last));
         }
         return result;
     }

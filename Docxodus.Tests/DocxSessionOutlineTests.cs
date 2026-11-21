@@ -72,6 +72,13 @@ public class DocxSessionOutlineTests
         var first = session.ListOutline()[0];
         Assert.Equal("Ttulo1", first.StyleId);
         Assert.Equal(AnchorOf(session, "Intro"), first.AnchorId);
+        // a heading's part runs to the next heading at its level or above: Intro takes body and
+        // Sub; Sub ends before Chap; Own (the last) runs to the end of the body, the table included
+        var outline = session.ListOutline();
+        Assert.Equal(AnchorOf(session, "Sub"), outline[0].LastAnchorId);
+        Assert.Equal(AnchorOf(session, "Sub"), outline[1].LastAnchorId);
+        Assert.Equal(outline[3].LastAnchorId, outline[2].LastAnchorId);
+        Assert.StartsWith("tbl:", outline[3].LastAnchorId);
     }
 
     [Fact]
