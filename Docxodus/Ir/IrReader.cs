@@ -3235,16 +3235,20 @@ internal static class IrReader
         {
             foreach (var reference in sectPr.Elements(referenceName))
                 if ((string?)reference.Attribute(R + "id") == relId)
-                    refs.Add(new IrHeaderFooterRef(sectionIndex, (string?)reference.Attribute(W + "type") switch
-                    {
-                        "first" => IrHeaderFooterKind.First,
-                        "even" => IrHeaderFooterKind.Even,
-                        _ => IrHeaderFooterKind.Default,
-                    }));
+                    refs.Add(new IrHeaderFooterRef(sectionIndex, ReferenceKind(reference)));
             sectionIndex++;
         }
         return IrNodeList.From(refs);
     }
+
+    /// <summary>The story a header or footer reference selects. The schema requires <c>w:type</c>; a reference
+    /// without one, or with an unrecognized value, is read as the default story.</summary>
+    internal static IrHeaderFooterKind ReferenceKind(XElement reference) => (string?)reference.Attribute(W + "type") switch
+    {
+        "first" => IrHeaderFooterKind.First,
+        "even" => IrHeaderFooterKind.Even,
+        _ => IrHeaderFooterKind.Default,
+    };
 
     /// <summary>
     /// Read a footnotes (or endnotes) part into an <see cref="IrNoteStore"/> keyed by note id
