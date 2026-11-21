@@ -504,7 +504,11 @@ internal static class IrEditScriptBuilder
         // This produces the crucial clone→primary rejoin record with empty Ops when needed. The plan is made against
         // the original's references, which a section break both documents share keeps in the review document (the
         // renderer restores them over the revision's); a changed story is bound where its timeline starts as well.
-        bool changedSectionOwnership = sections is not null && sections.Any(pair => pair.Left != pair.Right);
+        // A section of the redline that holds only one document's content, or one more section than either document has
+        // (a paragraph replaced whole writes its break twice, and the revision's copy names the revision's own
+        // relationship ids, which can name other stories in the output: #1809 review), binds every section.
+        bool changedSectionOwnership = sections is not null && (sections.Any(pair => pair.Left != pair.Right) ||
+            sections.Count != SectionCount(leftDocument) || sections.Count != SectionCount(rightDocument));
         foreach (var kind in HeaderFooterKinds)
         {
             object? previousOutput = null;

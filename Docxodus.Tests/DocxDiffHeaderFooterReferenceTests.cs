@@ -721,7 +721,8 @@ public class DocxDiffHeaderFooterReferenceTests
 
     /// <summary>
     /// The other places a break sits in a merge, a move or a split (issue #1809). <c>merge-keeps-break</c> and
-    /// <c>split-keeps-break</c>: the paragraph mark that holds the break stays in both documents.
+    /// <c>split-keeps-break</c> (controls, which main already handled): the paragraph mark that holds the break stays in
+    /// both documents.
     /// <c>merge-loses-break</c>: the second of the merged paragraphs held the break, which the revision drops;
     /// <c>merge-gains-break</c>: the merged paragraph takes a break. <c>split-gains-break</c>: the first part of a
     /// split paragraph takes a break that opens a section with a new story, and the two sections after it keep the
@@ -790,6 +791,65 @@ public class DocxDiffHeaderFooterReferenceTests
             "<w:r><w:t xml:space=\"preserve\"> Close them at dusk.</w:t></w:r></w:ins>")));
         var result = DocxDiff.Compare(original, revised, new DocxDiffSettings { PreserveInputRevisions = true });
         Assert.Contains(Body(result).Descendants(W + "ins"), ins => (string?)ins.Attribute(W + "author") == "Grower");
+        AssertStoryEndpoints(original, revised, result, header, "default");
+    }
+
+    /// <summary>
+    /// #1809 review: a paragraph that holds a break is replaced whole (an index-entry field beside an edit, an inline
+    /// content control removed, or, with <c>PreserveInputRevisions</c>, the revision's own tracked insertion), and the
+    /// revision gives the same three stories other relationship ids, so its id for the first section's story is the
+    /// original's id for the last one's. The paragraph is not the body's first, so the copy's extra section pairs a
+    /// section with itself: the revision's copy of the break must still be bound to the output's parts, not keep the
+    /// revision's ids, which name other stories there.
+    /// </summary>
+    [Theory]
+    [InlineData("field", true)]
+    [InlineData("field", false)]
+    [InlineData("control", true)]
+    [InlineData("preserve", true)]
+    [InlineData("preserve", false)]
+    public void AParagraphReplacedWholeKeepsEachSectionsStoryWhenTheRevisionNumbersTheStoriesDifferently(string shape, bool header)
+    {
+        string[] texts = { "The orchard ledger opens the season.", "Pickers log each crate at the gate.",
+            "Cider samples rest in the cellar.", "The press is cleaned every evening." };
+        string[] stories = { "Ledger notes", "Gate notes", "Cellar notes" };
+        WmlDocument Make(string[] ids, string second)
+        {
+            Section Own(string[] paras, string id) => new(paras, Headers: header ? new[] { ("default", id) } : null,
+                Footers: header ? null : new[] { ("default", id) });
+            var parts = new Dictionary<string, string[]> { [ids[0]] = new[] { stories[0] }, [ids[1]] = new[] { stories[1] }, [ids[2]] = new[] { stories[2] } };
+            return HeaderFooterFixtures.Build(new[] { Own(new[] { texts[0], second }, ids[0]), Own(new[] { texts[2] }, ids[1]), Own(new[] { texts[3] }, ids[2]) },
+                header ? parts : null, header ? null : parts);
+        }
+        string[] originalIds = { "h1", "h2", "h3" }, revisedIds = { "h3", "h1", "h2" };
+        static IEnumerable<XElement> XE() => XElement.Parse(
+            $"<x xmlns:w=\"{HeaderFooterFixtures.Wns}\"><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>" +
+            "<w:r><w:instrText xml:space=\"preserve\"> XE \"crate\" </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></x>").Elements();
+        static void Wrap(XElement paragraph) => paragraph.Elements(W + "r").Last().ReplaceWith(new XElement(W + "sdt",
+            new XElement(W + "sdtPr", new XElement(W + "id", new XAttribute(W + "val", "77"))),
+            new XElement(W + "sdtContent", new XElement(paragraph.Elements(W + "r").Last()))));
+        WmlDocument original, revised;
+        WmlDocument result;
+        switch (shape)
+        {
+            case "field":
+                original = WithBody(Make(originalIds, texts[1]), body => body.Elements(W + "p").ElementAt(1).Add(XE()));
+                revised = WithBody(Make(revisedIds, texts[1].Replace("crate", "basket")), body => body.Elements(W + "p").ElementAt(1).Add(XE()));
+                result = DocxCompare.Compare(original, revised);
+                break;
+            case "control":
+                original = WithBody(Make(originalIds, texts[1]), body => Wrap(body.Elements(W + "p").ElementAt(1)));
+                revised = Make(revisedIds, texts[1]);
+                result = DocxCompare.Compare(original, revised);
+                break;
+            default:
+                original = Make(originalIds, texts[1]);
+                revised = WithBody(Make(revisedIds, texts[1]), body => body.Elements(W + "p").ElementAt(1).Add(XElement.Parse(
+                    $"<w:ins xmlns:w=\"{HeaderFooterFixtures.Wns}\" w:id=\"41\" w:author=\"Grower\" w:date=\"2026-03-01T00:00:00Z\">" +
+                    "<w:r><w:t xml:space=\"preserve\"> Count twice.</w:t></w:r></w:ins>")));
+                result = DocxDiff.Compare(original, revised, new DocxDiffSettings { PreserveInputRevisions = true });
+                break;
+        }
         AssertStoryEndpoints(original, revised, result, header, "default");
     }
 
