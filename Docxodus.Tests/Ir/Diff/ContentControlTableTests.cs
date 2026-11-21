@@ -140,6 +140,53 @@ public class ContentControlTableTests
         AssertRedline(pair.Left, pair.Right, DocxCompare.Compare(pair.Left, pair.Right));
     }
 
+    [Theory]
+    [InlineData("body", false)]
+    [InlineData("body", true)]
+    [InlineData("nested", false)]
+    [InlineData("nested", true)]
+    [InlineData("control", false)]
+    [InlineData("control", true)]
+    public void Reported_row_text_matches_the_marked_row_in_its_table(string location, bool delete)
+    {
+        WmlDocument Make(bool extra)
+        {
+            string table = "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2400\"/><w:gridCol w:w=\"2400\"/></w:tblGrid>"
+                + Row("Inner", "one") + (extra ? Row("Added", "two") : "") + "</w:tbl>";
+            return location switch
+            {
+                "nested" => Table(Row("Outer", Cell(table + P("After the inner table.")))),
+                "control" => IrTestDocuments.FromBodyXml(Control(9, table) + P("End.")),
+                _ => IrTestDocuments.FromBodyXml(table + P("End.")),
+            };
+        }
+        var original = Make(delete);
+        var revised = Make(!delete);
+        var reviewers = new[] { new DocxDiffReviewer { Author = "Reviewer", Document = revised } };
+        var pairwise = Assert.Single(DocxDiff.GetRevisions(original, revised));
+        var single = Assert.Single(DocxDiff.GetConsolidatedRevisions(original, reviewers));
+        var kind = delete ? DocxDiffRevisionType.Deleted : DocxDiffRevisionType.Inserted;
+        Assert.Equal(kind, pairwise.Type);
+        Assert.Equal(kind, single.Type);
+        Assert.Equal("Reviewer", single.Author);
+
+        foreach (var marked in new[] { DocxCompare.Compare(original, revised), DocxCompare.Consolidate(original, reviewers) })
+        {
+            var body = Body(marked);
+            var marker = Assert.Single(body.Descendants(W + "trPr").Elements(W + (delete ? "del" : "ins")));
+            var row = marker.Ancestors(W + "tr").First();
+            string markedText = string.Concat(row.Descendants().Where(e => e.Name == W + "t" || e.Name == W + "delText").Select(e => e.Value));
+            Assert.Equal("Addedtwo", markedText);
+            var accepted = RevisionProcessor.AcceptRevisions(marked);
+            var rejected = RevisionProcessor.RejectRevisions(marked);
+            AssertValid(marked, accepted, rejected);
+            Assert.Equal(Layout(revised), Layout(accepted));
+            Assert.Equal(Layout(original), Layout(rejected));
+            Assert.Equal(markedText, pairwise.Text);
+            Assert.Equal(markedText, single.Text);
+        }
+    }
+
     [Fact]
     public void A_change_the_comparison_does_not_report_leaves_a_content_control_row_unmarked()
     {
