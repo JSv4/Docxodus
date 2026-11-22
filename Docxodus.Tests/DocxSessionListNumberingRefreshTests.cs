@@ -231,8 +231,6 @@ public class DocxSessionListNumberingRefreshTests
                 Item(doc, "Item 1").Descendants(W + "numId").First().SetAttributeValue(W + "val", "99")),
             ["last item's numbering style removed"] = (styled, doc =>
                 Item(doc, "Item 2").Descendants(W + "pStyle").Remove()),
-            ["declared continuation"] = (Nested(direct), doc =>
-                Item(doc, "Item 1").SetAttributeValue(PtOpenXml.ListContinuation, "true")),
         };
     }
 
@@ -246,27 +244,11 @@ public class DocxSessionListNumberingRefreshTests
         doc.MainDocumentPart!.StyleDefinitionsPart!.GetXDocument().Root!.Elements(W + "style")
             .First(s => (string?)s.Attribute(W + "styleId") == "NumberedPara");
 
-    /// <summary><paramref name="bytes"/> with "Item 1" moved to the list's second level.</summary>
-    private static byte[] Nested(byte[] bytes)
-    {
-        using var stream = Editable(bytes);
-        using (var doc = WordprocessingDocument.Open(stream, true))
-        {
-            var numPr = Item(doc, "Item 1").Descendants(W + "numPr").First();
-            numPr.Elements(W + "ilvl").Remove();
-            numPr.AddFirst(new XElement(W + "ilvl", new XAttribute(W + "val", "1")));
-            doc.MainDocumentPart!.PutXDocument();
-        }
-        return stream.ToArray();
-    }
-
-    /// <summary>Each body paragraph's list text, its text, and whether the retriever counts it as
-    /// continuing its parent level's sequence (which the HTML renderer reads).</summary>
+    /// <summary>Each body paragraph's list text and its text.</summary>
     private static string[] Count(WordprocessingDocument doc) =>
         doc.MainDocumentPart!.GetXDocument().Descendants(W + "p")
             .Select(p => (ListItemRetriever.RetrieveListItem(doc, p) ?? string.Empty) + "|" +
-                string.Concat(p.Descendants(W + "t").Select(t => t.Value)) +
-                (p.Annotation<ListItemRetriever.ContinuationInfo>()?.IsContinuation == true ? "|continues" : string.Empty))
+                string.Concat(p.Descendants(W + "t").Select(t => t.Value)))
             .ToArray();
 
     private static MemoryStream Editable(byte[] bytes)

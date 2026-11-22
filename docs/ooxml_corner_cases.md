@@ -43,7 +43,7 @@ This document tracks edge cases and quirks in Open XML document processing where
 ## Table of Contents
 
 1. [Numbering and Lists](#numbering-and-lists)
-   - [Legal Numbering with Multi-Level Format Strings](#legal-numbering-with-multi-level-format-strings)
+   - [A deeper list item keeps its parent prefix when its start continues the parent's count](#a-deeper-list-item-keeps-its-parent-prefix-when-its-start-continues-the-parents-count)
    - [List Numbering under Tracked Changes](#list-numbering-under-tracked-changes-deleted-paragraphs-dont-consume-numbers)
    - [Unresolvable Numbering vs. Removed Numbering (style indentation)](#unresolvable-numbering-vs-removed-numbering-style-indentation)
    - [`w:numberingChange/@w:original` holds at most 15 characters](#wnumberingchangeworiginal-holds-at-most-15-characters)
@@ -70,149 +70,79 @@ This document tracks edge cases and quirks in Open XML document processing where
 
 ## Numbering and Lists
 
-### Legal Numbering with Multi-Level Format Strings
+### A deeper list item keeps its parent prefix when its start continues the parent's count
 
-**Status:** Fixed (December 2024)
-**Discovered:** 2024-12-22
-**Test File:** `NVCA-Model-COI-10-1-2025.docx`
+**Status:** Fixed (#1845). This replaces an earlier entry, "Legal Numbering with Multi-Level
+Format Strings", whose rule this fix removes.
 
-#### The Problem
-
-When a paragraph uses a deeper indentation level (`ilvl`) with a format string that references parent levels (e.g., `%1.%2`), Word may not display the parent level numbers as expected.
-
-#### Example Document Structure
+#### Minimal XML reproducer
 
 ```xml
-<!-- abstractNum 3, level 0 -->
-<w:lvl w:ilvl="0">
-  <w:start w:val="1"/>
-  <w:numFmt w:val="decimal"/>
-  <w:lvlText w:val="%1."/>
-</w:lvl>
+<!-- numbering.xml -->
+<w:abstractNum w:abstractNumId="0">
+  <w:multiLevelType w:val="multilevel"/>
+  <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/></w:lvl>
+  <w:lvl w:ilvl="1"><w:start w:val="4"/><w:isLgl/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1.%2"/><w:lvlJc w:val="left"/></w:lvl>
+</w:abstractNum>
+<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
 
-<!-- abstractNum 3, level 1 -->
-<w:lvl w:ilvl="1">
-  <w:start w:val="4"/>
-  <w:isLgl/>
-  <w:numFmt w:val="decimal"/>
-  <w:lvlText w:val="%1.%2"/>
-</w:lvl>
+<!-- document.xml: three level-0 paragraphs, then two level-1 paragraphs, all numId 1 -->
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Item 1</w:t></w:r></w:p>
+<!-- Item 2 and Item 3 at ilvl 0, then Item 4 and Item 5 at ilvl 1 -->
 ```
 
-Document paragraphs:
-```
-Para 1: ilvl=0, numId=3  → Word displays: "1."
-Para 2: ilvl=0, numId=3  → Word displays: "2."
-Para 3: ilvl=0, numId=3  → Word displays: "3."
-Para 4: ilvl=1, numId=3  → Word displays: "4." (NOT "3.4")
-```
+#### Renderer comparison
 
-#### Expected vs Actual Behavior
+Levels are listed as the paragraphs' `w:ilvl` values in order. The child level's text is
+`%1.%2` in every row.
 
-| Renderer | Item 4 Output | Notes |
-|----------|---------------|-------|
-| Microsoft Word | `4.` | Period at end, not middle |
-| LibreOffice Writer | `4.` | Matches Word |
-| LibreOffice HTML export | `4` | Uses `<ol start="4">` |
-| Docxodus (current) | `3.4` | Incorrect - includes parent level |
+| Levels; level 0 start, level 1 start | Desktop word processor (build 16.0.20326) | Docxodus before #1845 | Docxodus now |
+| --- | --- | --- | --- |
+| 0 0 0 1 1; 1, 4 (with or without `w:isLgl`) | 1. 2. 3. 3.4 3.5 | 1. 2. 3. 4. 5. | 1. 2. 3. 3.4 3.5 |
+| 0 0 1 1; 7, 9 | 7. 8. 8.9 8.10 | 7. 8. 9. 10. | 7. 8. 8.9 8.10 |
+| 0 0 1; 1, 3 (with or without `w:isLgl`) | 1. 2. 2.3 | 1. 2. 3. | 1. 2. 2.3 |
+| 0 1 1 0 1; 7, 8 (with or without `w:isLgl`) | 7. 7.8 7.9 8. 8.8 | 7. 8. 9. 8. 8.8 | 7. 7.8 7.9 8. 8.8 |
+| 0 1 1 0 1; 4, 5 | 4. 4.5 4.6 5. 5.5 | 4. 5. 6. 5. 5.5 | 4. 4.5 4.6 5. 5.5 |
+| 1 1; 7, 8 (no level-0 paragraph) | 7.8 7.9 | 8. 9. | 7.8 7.9 |
+| 0 1 1 0 1; 7, 1 (control) | 7. 7.1 7.2 8. 8.1 | 7. 7.1 7.2 8. 8.1 | 7. 7.1 7.2 8. 8.1 |
 
-**Key observation**: Word outputs "4." (number then period) even though level 1's format string is `%1.%2` (which would produce "3.4" if evaluated literally).
-
-Note that level 0's format string is `%1.` (number then period). This suggests Word may be:
-1. Detecting that item 4 at `ilvl=1` is an "orphan" (no proper parent-child nesting)
-2. Falling back to level 0's format `%1.` but using the level 1 counter (4)
-3. Result: "4." - which matches the observed output!
-
-This "orphan detection" hypothesis would explain the behavior: Word recognizes when a deeper-level item doesn't have proper hierarchical nesting and reverts to simpler formatting.
+The reference labels were read from each paragraph's list string after opening freshly
+written fixtures. LibreOffice Writer 25.8.7.3 agrees on the 7/8, implicit-parent and 7/1
+rows (#1845).
 
 #### Analysis
 
-Our converter (`ListItemRetriever.cs`) builds `levelNumbers` for each paragraph by:
+The earlier rule treated a child level whose `w:start` was one past its parent's current
+counter as a continuation of a flat list. It then formatted the child with level 0's text,
+run properties and indentation, so `1. 2. 3.` followed by a child starting at 4 read `4.`.
+The reference application does not use that coincidence. In every case tested, `%1` in a
+child's level text showed the parent level's current counter, or the parent level's start
+value when no parent paragraph had appeared yet. The child also keeps its own level's
+formatting. In the `HC051` fixture, the reference application puts `3.4` at a 78pt left
+indent with a 24pt hanging indent and underlines the number, as level 1 declares. Level 0
+would give an 18pt indent and no underline.
 
-1. For `ilvl=1`, looping from level 0 to level 1
-2. For level 0: inheriting the counter from the previous paragraph (3)
-3. For level 1: using the `start` value (4)
-4. Result: `levelNumbers = [3, 4]`
-5. Format `%1.%2` produces: `"3" + "." + "4"` = `"3.4"`
+The earlier entry reported `4.` for a paragraph in `NVCA-Model-COI-10-1-2025.docx`.
+That document is not in the repository, and the structure recorded for it does not
+reproduce the label. Built exactly as described, the paragraph reads `3.4`, as do the
+`HC050`/`HC051` test fixtures written for the rule. Something the recorded structure
+omits must have produced `4.` there. The rule did not fire in any of the 129 numbered
+documents under `TestFiles/`.
 
-Word appears to use different logic where:
-- The `%1` token in the format string is either:
-  - Omitted when there's no "active" parent paragraph at that level
-  - Or interpreted differently when transitioning level depths
+#### Relevant code
 
-#### Potential Causes
+- `Docxodus/ListItemRetriever.cs`: `RetrieveListItem` formats every paragraph with its own
+  level's `w:lvlText` and counters (`GetParagraphLevel`). The per-level continuation
+  tracking and its annotation are gone.
+- `Docxodus/FormattingAssembler.cs` and `Docxodus/Internal/AutomaticParagraphSpacing.cs`
+  read a list paragraph's run and paragraph properties from its declared level.
+- `Docxodus/Internal/HtmlConversionOps.cs`: a block render still carries the live counters
+  (`pt:LevelNumbers`) and no longer writes `pt:ListContinuation`. `GetEffectiveLevel` and
+  `PtOpenXml.ListContinuation` remain as obsolete public members.
 
-1. **Orphan nesting detection**: Word may detect that para 4 at `ilvl=1` doesn't have a proper parent-child relationship with para 3 at `ilvl=0` (they're effectively siblings in a flat list that happens to use different levels).
-
-2. **Level entry tracking**: Word may only include `%N` tokens in the output when level N has been "entered" as part of the current nesting chain, not just referenced from previous items.
-
-3. **Start value heuristics**: When a level's `start` value (4) suggests continuation of an overall sequence, Word may apply special formatting rules.
-
-#### Relevant Code
-
-- `Docxodus/ListItemRetriever.cs`:
-  - `FormatListItem()` (lines 1100-1144): Processes `lvlText` format tokens
-  - Level number calculation (lines 980-1079): Builds `levelNumbers` array
-
-```csharp
-// Current logic in FormatListItem:
-int levelNumber = levelNumbers[indentationLevel];
-// This always uses the levelNumbers array, even if the level wasn't "entered"
-```
-
-#### The Fix
-
-**Implementation**: Added "continuation pattern" detection in `ListItemRetriever.cs`.
-
-**Detection criteria**:
-A paragraph at `ilvl > 0` is in a "continuation pattern" when:
-1. It's the first paragraph at this level in the current sequence, AND
-2. The level's `start` value equals the parent level's counter + 1 (continues the sequence)
-
-OR it inherits continuation status from a previous paragraph at the same level.
-
-**What the fix does**:
-When a continuation pattern is detected, the converter uses level 0's properties instead of the declared level's:
-- Format string (e.g., `%1.` instead of `%1.%2`)
-- Run properties (e.g., no underline instead of underline)
-- Paragraph properties (e.g., tab stops and indentation)
-
-**Code changes**:
-
-1. **`Docxodus/ListItemRetriever.cs`**:
-   - Added `ContinuationInfo` annotation class to track continuation state per paragraph
-   - Added `GetEffectiveLevel()` helper method that returns 0 for continuation patterns
-   - In `InitializeListItemRetriever`, after calculating `levelNumbers`:
-     ```csharp
-     // Detection logic
-     if (levelNumbers[ilvl] == startValue && startValue == levelNumbers[ilvl - 1] + 1)
-     {
-         isContinuation = true;
-     }
-     ```
-   - In `RetrieveListItem`, uses level 0's format string with current level's counter
-
-2. **`Docxodus/FormattingAssembler.cs`**:
-   - `NormalizeListItemsTransform`: Uses `GetEffectiveLevel()` to get list item level's rPr
-   - `ParaStyleParaPropsStack`: Uses `GetEffectiveLevel()` to yield correct level's pPr and rPr
-   - `AnnotateParagraph`: Uses `GetEffectiveLevel()` for numbering paragraph properties
-
-**Result**:
-- Items that continue a flat list sequence now render correctly (e.g., "4." instead of "3.4")
-- Formatting (underline, bold, etc.) from the effective level is applied consistently
-- Tab stops and indentation match the effective level's paragraph properties
-
-#### Test Cases Needed
-
-1. Standard multi-level list with proper nesting (1., 1.1, 1.2, 2., 2.1)
-2. "Orphan" nesting like the NVCA example (1., 2., 3., then jump to level 1)
-3. Legal numbering (`isLgl`) vs non-legal numbering behavior
-4. Various `start` values and how they affect parent level display
-
-#### References
-
-- [ECMA-376 Part 1, Section 17.9.10 - lvlText](https://www.ecma-international.org/publications-and-standards/standards/ecma-376/)
-- [ECMA-376 Part 1, Section 17.9.9 - isLgl](https://www.ecma-international.org/publications-and-standards/standards/ecma-376/)
+Tests: `DocxSessionListLevelsTests.NestedStartsKeepTheirParentPrefix`,
+`HC050_DeeperItemKeepsItsParentPrefix`, `HC051_DeeperItemUsesItsOwnLevelFormatting` and
+`HCO087_BlockRenderKeepsADeeperItemsParentPrefix`.
 
 ### List Numbering under Tracked Changes (deleted paragraphs don't consume numbers)
 

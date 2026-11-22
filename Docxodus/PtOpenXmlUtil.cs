@@ -6259,12 +6259,12 @@ listSeparator
         /// that cloned it out of a live document whose numbering was already resolved. The
         /// retriever takes it over recounting (see <c>ListItemRetriever</c>).</summary>
         public static XName LevelNumbers = pt + "LevelNumbers";
-        /// <summary>Companion to <see cref="LevelNumbers"/>: "true" when the paragraph continues
-        /// a flat sequence at a deeper level (rendered with level 0's format).</summary>
+        /// <summary>No longer written or read: a deeper list item always renders with its own
+        /// level's format, so a render needs only <see cref="LevelNumbers"/>.</summary>
+        [Obsolete("No longer written or read; a list paragraph always formats at its declared level.")]
         public static XName ListContinuation = pt + "ListContinuation";
         /// <summary>On an assembled list paragraph, when the HTML converter asked for semantic lists
-        /// (issue #895): the paragraph's <c>w:num</c> id, the level it nests at (the effective level:
-        /// a continuation item counts as level 0), the counter value its marker shows, and the
+        /// (issue #895): the paragraph's <c>w:num</c> id, the level it nests at, the counter value its marker shows, and the
         /// level's <c>w:numFmt</c>.</summary>
         public static XName ListNumId = pt + "ListNumId";
         /// <summary>See <see cref="ListNumId"/>.</summary>

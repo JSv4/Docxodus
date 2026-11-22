@@ -1017,8 +1017,8 @@ internal static class HtmlConversionOps
 
     /// <summary>
     /// Clone a block element and declare the LIVE document's resolved list counters on the
-    /// clone's paragraphs (<see cref="PtOpenXml.LevelNumbers"/> and
-    /// <see cref="PtOpenXml.ListContinuation"/>, read by <see cref="ListItemRetriever"/>). The
+    /// clone's paragraphs (<see cref="PtOpenXml.LevelNumbers"/>, read by
+    /// <see cref="ListItemRetriever"/>). The
     /// converter rewrites the shell's markup before it numbers anything (markup simplification,
     /// formatting assembly), so an annotation transplanted onto the clone never reaches the
     /// retriever; an attribute rides through every rewrite the way the Unid does. Without it the
@@ -1038,8 +1038,6 @@ internal static class HtmlConversionOps
                 c.Current.SetAttributeValue(PtOpenXml.LevelNumbers, string.Join(",",
                     numbers.LevelNumbersArray.Select(n => n.ToString(CultureInfo.InvariantCulture))));
             }
-            if (s.Current.Annotation<ListItemRetriever.ContinuationInfo>() is { IsContinuation: true })
-                c.Current.SetAttributeValue(PtOpenXml.ListContinuation, true);
         }
         return clone;
     }

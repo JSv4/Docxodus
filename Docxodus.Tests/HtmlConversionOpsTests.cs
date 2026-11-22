@@ -2319,22 +2319,22 @@ public class HtmlConversionOpsTests
         Assert.Equal("5.", MarkerOf(XElement.Parse(HtmlConversionOps.RenderBlockHtml(session, fifth, opts))));
     }
 
-    // Continuation is inherited from the previous item at the same level, which a block render's
-    // shell does not hold: a deeper item that continues a flat sequence (1., 2., 3., then a
-    // level-1 item starting at 4) renders "4." on every path, never "1.4".
+    // A block render's shell holds only the block, so the parent's count must ride along with it:
+    // a deeper item whose level starts at 4 after 1., 2., 3. renders "3.4" on every path, the
+    // label the desktop word processor shows, never the shell's own recount "1.4".
     [Fact]
-    public void HCO087_BlockRenderKeepsContinuationNumbering()
+    public void HCO087_BlockRenderKeepsADeeperItemsParentPrefix()
     {
-        byte[] bytes = BuildContinuationList();
+        byte[] bytes = BuildDeeperItemAfterThreeList();
         var opts = new HtmlConversionOptions { FabricateCssClasses = false, CssClassPrefix = "pt-", StampAnchors = true };
         var full = XElement.Parse(HtmlConversionOps.ConvertToHtml(bytes, opts));
-        Assert.Equal(new[] { "1.", "2.", "3.", "4." }, full.Descendants()
+        Assert.Equal(new[] { "1.", "2.", "3.", "3.4" }, full.Descendants()
             .Where(e => e.Attribute("data-anchor") is not null).Select(MarkerOf));
 
         using var session = new DocxSession(bytes);
         var fourth = session.Project().AnchorIndex.Single(kv => kv.Value.TextPreview.Contains("Fourth")).Key;
-        Assert.Equal("4.", MarkerOf(XElement.Parse(HtmlConversionOps.RenderBlockHtml(session, fourth, opts))));
-        Assert.Equal("4.", MarkerOf(XElement.Parse(HtmlConversionOps.RenderBlockHtml(bytes, fourth, opts))));
+        Assert.Equal("3.4", MarkerOf(XElement.Parse(HtmlConversionOps.RenderBlockHtml(session, fourth, opts))));
+        Assert.Equal("3.4", MarkerOf(XElement.Parse(HtmlConversionOps.RenderBlockHtml(bytes, fourth, opts))));
     }
 
     // A block's hyperlink refers to a relationship of the story part that owns it; the shell
@@ -2376,8 +2376,8 @@ public class HtmlConversionOpsTests
         .Select(e => e.Value)).Trim();
 
     /// <summary>Three level-0 items then a level-1 item whose level starts at 4 with legal
-    /// numbering: Word renders the fourth as "4.", continuing the sequence.</summary>
-    private static byte[] BuildContinuationList()
+    /// numbering: the desktop word processor labels the fourth "3.4".</summary>
+    private static byte[] BuildDeeperItemAfterThreeList()
     {
         Wp.Paragraph Item(int level, string text) => new(
             new Wp.ParagraphProperties(new Wp.NumberingProperties(
