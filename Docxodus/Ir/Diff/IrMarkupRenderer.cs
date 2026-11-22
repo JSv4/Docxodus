@@ -4505,7 +4505,7 @@ internal static partial class IrMarkupRenderer
                 continue; // right-added / left-deleted: keep its revision context
             var all = MarkersWithId(id);
             bool keepBlockCopies = false;
-            if (SplitAcrossReplacedWrapperCopies(all, state) ||
+            if (SplitAcrossCommentCopies(all, state) ||
                 SplitAroundBlockLevelCopies(all, state, ref changed, out keepBlockCopies))
             {
                 changed = true; // every marker is one-sided now → (B) gives each copy its own comment
@@ -4855,16 +4855,20 @@ internal static partial class IrMarkupRenderer
         sameKind[0].Name == W.commentRangeEnd ? sameKind[sameKind.Count - 1] : sameKind[0];
 
     /// <summary>
-    /// A common comment crosses a block wrapper that is replaced, added or removed. Each view needs its
+    /// A common comment crosses a replaced block wrapper or a moved run. Each view needs its
     /// own complete marker set: the wrapper's markers pair with counterparts in another wrapper or an ordinary
     /// paragraph. Confine bare counterparts to the uncovered view and give shared outside markers one twin
     /// per copy. Phase B then assigns each copy its own comment definition.
     /// </summary>
-    private static bool SplitAcrossReplacedWrapperCopies(List<XElement> markers, RenderState state)
+    private static bool SplitAcrossCommentCopies(List<XElement> markers, RenderState state)
     {
         var shared = new List<List<XElement>>();
         var inside = new List<XElement>();
-        static bool InCopy(XElement marker) => ReplacedWrapperCopy(marker) is not null;
+        static XElement? CopyOwner(XElement marker) => marker.Ancestors().FirstOrDefault(a =>
+            a.Name == W.moveFrom || a.Name == W.moveTo || WholeWrapperCopyView(a) is not null);
+        static bool InCopy(XElement marker) => CopyOwner(marker) is not null;
+        static XElement? Envelope(XElement copy) => copy.Name == W.moveFrom || copy.Name == W.moveTo
+            ? copy : WrapperCopyEnvelope(copy);
         foreach (var sameKind in markers.GroupBy(m => m.Name).Select(g => g.ToList()))
         {
             if (sameKind.All(m => !InCopy(m)))
@@ -4883,11 +4887,11 @@ internal static partial class IrMarkupRenderer
         }
         if (inside.Count == 0)
             return false;
-        var authority = WrapperCopyEnvelope(ReplacedWrapperCopy(inside.First(InCopy))!);
+        var authority = Envelope(CopyOwner(inside.First(InCopy))!);
         ConfineSharedCommentMarkers(inside, InCopy, authority, state);
         var copies = CommentViewCopies(inside)
-            .Select(c => (c.View, Envelope: c.Markers.Select(m => ReplacedWrapperCopy(m) is { } copy
-                ? WrapperCopyEnvelope(copy) : m.Ancestors().FirstOrDefault(a => a.Name == W.ins || a.Name == W.del))
+            .Select(c => (c.View, Envelope: c.Markers.Select(m => CopyOwner(m) is { } copy
+                ? Envelope(copy) : m.Ancestors().FirstOrDefault(a => a.Name == W.ins || a.Name == W.del))
                 .FirstOrDefault(e => e is not null)))
             .ToList();
         TwinSharedMarkersPerCopy(shared, copies, state);
@@ -4902,7 +4906,7 @@ internal static partial class IrMarkupRenderer
     /// such copies are never collapsed. A marker of the same kind shown in both views (an inline one the fine path
     /// kept bare) is confined to the views no block-level copy covers. When both views then hold a copy of their
     /// own, the markers both views still share (typically the reference, in an equal paragraph) are given a twin
-    /// per view, as for a comment straddling a replaced wrapper (<see cref="SplitAcrossReplacedWrapperCopies"/>),
+    /// per view, as for a comment straddling a replaced wrapper (<see cref="SplitAcrossCommentCopies"/>),
     /// and true is returned: phase B gives each view a comment of its own. Otherwise the caller collapses the rest,
     /// leaving the per-view copies alone (<paramref name="keepBlockCopies"/>) unless a view would be left with half
     /// a range, when they collapse too. Every revision minted here takes the author and date of the copies between
@@ -5129,15 +5133,19 @@ internal static partial class IrMarkupRenderer
     {
         foreach (var a in marker.Ancestors())
         {
-            if (a.Name == W.del)
-                return RevKind.Del;
-            if (a.Name == W.ins)
-                return RevKind.Ins;
+            if (CommentRevisionView(a.Name) is { } revision)
+                return revision;
             if (WholeWrapperCopyView(a) is { } view)
                 return view;
         }
         return null;
     }
+
+    // A move source survives rejection and a destination survives acceptance. Each copy goes
+    // through the same definition and marker reconciliation as a deleted or inserted copy.
+    private static RevKind? CommentRevisionView(XName name) =>
+        name == W.del || name == W.moveFrom ? RevKind.Del :
+        name == W.ins || name == W.moveTo ? RevKind.Ins : null;
 
     /// <summary>The view of the nearest block wrapper around <paramref name="marker"/> that is emitted as a whole
     /// deleted or inserted copy, or null when no such wrapper encloses it (run-level <c>w:ins</c>/<c>w:del</c>
@@ -5169,7 +5177,7 @@ internal static partial class IrMarkupRenderer
         {
             if (a.Name == W.p || a.Name == W.body || a.Name == W.tc || a.Name == W.hdr || a.Name == W.ftr)
                 return true;
-            if (a.Name != W.r && a.Name != W.ins && a.Name != W.del && a.Name != W.hyperlink &&
+            if (a.Name != W.r && CommentRevisionView(a.Name) is null && a.Name != W.hyperlink &&
                 a.Name != W.sdt && a.Name != W.sdtContent && !IsBlockCustomXml(a) && a.Name != W.smartTag &&
                 a.Name != W.fldSimple)
                 return false;

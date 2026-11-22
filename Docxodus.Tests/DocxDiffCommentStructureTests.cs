@@ -362,6 +362,92 @@ public class DocxDiffCommentStructureTests
         Assert.Equal(RangeCoverage(original, true), RangeCoverage(rejected, true));
     }
 
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public void Moving_a_paragraph_keeps_a_valid_comment_in_each_view(bool consolidate, bool commentMoves)
+    {
+        string Paragraph(string prefix, string term, string suffix, bool commented) =>
+            "<w:p><w:r><w:t xml:space=\"preserve\">" + prefix + "</w:t></w:r>" + CommentRun(term, commented ? "0" : null)
+            + "<w:r><w:t xml:space=\"preserve\">" + suffix + "</w:t></w:r></w:p>";
+        var notice = Paragraph("Each tenant must give ", "sixty days", " of written notice before moving out of the building.", commentMoves);
+        var inspection = Paragraph("The landlord inspects every unit within ", "two weeks", " of the tenant leaving it.", !commentMoves);
+        var deposits = "<w:p><w:r><w:t>Deposits are returned by bank transfer once the inspection report is signed.</w:t></w:r></w:p>";
+        WmlDocument Document(string body) => IrTestDocuments.WithComment(
+            "Cedar", "C", "2026-01-01T00:00:00Z", "Check the deadline.", body);
+        var original = Document(notice + inspection + deposits);
+        var revised = Document(inspection + deposits + notice);
+        var reviewers = new[] { new DocxDiffReviewer { Document = revised, Author = "Reviewer" } };
+        var marked = consolidate ? DocxCompare.Consolidate(original, reviewers) : DocxCompare.Compare(original, revised);
+        var revisions = consolidate ? DocxDiff.GetConsolidatedRevisions(original, reviewers).Select(r => r.Type)
+            : DocxDiff.GetRevisions(original, revised).Select(r => r.Type);
+        Assert.Contains(DocxDiffRevisionType.Moved, revisions);
+        Assert.Empty(SchemaErrors(marked));
+
+        using var stream = new MemoryStream(marked.DocumentByteArray);
+        using var package = WordprocessingDocument.Open(stream, false);
+        var main = package.MainDocumentPart!;
+        var paragraphs = main.GetXDocument().Descendants(W.p).Where(p => p.Descendants(W.commentReference).Any()).ToList();
+        Assert.Equal(commentMoves ? 2 : 1, paragraphs.Count);
+        if (commentMoves)
+        {
+            Assert.Single(paragraphs, p => p.Descendants(W.moveFrom).Any());
+            Assert.Single(paragraphs, p => p.Descendants(W.moveTo).Any());
+        }
+        var ids = paragraphs.Select(p => (string)Assert.Single(p.Descendants(W.commentReference)).Attribute(W.id)!).ToArray();
+        Assert.Equal(ids.Length, ids.Distinct().Count());
+        Assert.Equal(ids.OrderBy(id => id), main.WordprocessingCommentsPart!.GetXDocument()
+            .Descendants(W.comment).Select(c => (string)c.Attribute(W.id)!).OrderBy(id => id));
+        foreach (var p in paragraphs)
+        {
+            var markers = p.Descendants().Where(e => e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference).ToArray();
+            Assert.Equal(new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference }, markers.Select(m => m.Name));
+            Assert.Single(markers.Select(m => (string)m.Attribute(W.id)!).Distinct());
+            var covered = p.Descendants().SkipWhile(e => e != markers[0]).TakeWhile(e => e != markers[1]);
+            Assert.Equal(commentMoves ? "sixty days" : "two weeks", string.Concat(covered.Where(e => e.Name == W.t || e.Name == W.delText).Select(e => e.Value)));
+        }
+        foreach (var (resolved, expected) in new[] {
+            (RevisionProcessor.AcceptRevisions(marked), revised), (RevisionProcessor.RejectRevisions(marked), original) })
+        {
+            Assert.Empty(SchemaErrors(resolved));
+            Assert.Single(CommentStructure(resolved).RangeStartIds);
+            Assert.Equal(AnchorProjection(expected), AnchorProjection(resolved));
+            Assert.Equal(RangeCoverage(expected, true), RangeCoverage(resolved, true));
+            Assert.Equal(BodyText(expected), BodyText(resolved));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_move_that_carries_only_the_start_of_a_comment_keeps_the_other_end(bool consolidate)
+    {
+        const string moving = "<w:p><w:commentRangeStart w:id=\"0\"/>"
+            + "<w:r><w:t>Each tenant must give sixty days of written notice before leaving the building.</w:t></w:r></w:p>";
+        const string spine = "<w:p><w:r><w:t>The landlord inspects every unit within two weeks of the tenant leaving it.</w:t></w:r></w:p>"
+            + "<w:p><w:r><w:t>Deposits are returned by bank transfer after the inspection report is signed.</w:t></w:r></w:p>";
+        const string end = "<w:p><w:r><w:t>End of the tenancy.</w:t></w:r><w:commentRangeEnd w:id=\"0\"/>"
+            + "<w:r><w:commentReference w:id=\"0\"/></w:r></w:p>";
+        WmlDocument Document(string body) => IrTestDocuments.WithComment(
+            "Cedar", "C", "2026-01-01T00:00:00Z", "Check the deadline.", body);
+        var original = Document(moving + spine + end);
+        var revised = Document(spine + moving + end);
+        var marked = consolidate
+            ? DocxCompare.Consolidate(original, new[] { new DocxDiffReviewer { Author = "Reviewer", Document = revised } })
+            : DocxCompare.Compare(original, revised);
+        Assert.Empty(SchemaErrors(marked));
+        foreach (var (resolved, expected) in new[] {
+            (RevisionProcessor.AcceptRevisions(marked), revised), (RevisionProcessor.RejectRevisions(marked), original) })
+        {
+            Assert.Empty(SchemaErrors(resolved));
+            Assert.Equal(RangeCoverage(expected, true), RangeCoverage(resolved, true));
+            Assert.Equal(AnchorProjection(expected), AnchorProjection(resolved));
+            Assert.Equal(BodyText(expected), BodyText(resolved));
+        }
+    }
+
     private static string CommentRun(string text, string? id) => id is null ? $"<w:r><w:t>{text}</w:t></w:r>"
         : $"<w:commentRangeStart w:id=\"{id}\"/><w:r><w:t>{text}</w:t></w:r>"
             + $"<w:commentRangeEnd w:id=\"{id}\"/><w:r><w:commentReference w:id=\"{id}\"/></w:r>";
