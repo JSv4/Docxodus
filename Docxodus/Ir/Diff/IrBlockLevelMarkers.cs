@@ -509,17 +509,17 @@ internal static partial class IrMarkupRenderer
         var reviews = new List<MarkerStreamReview>();
         foreach (var t in tables)
         {
-            var pairs = t.Diff.RowOps.Select(r => (
+            var plan = controls is { Count: > 0 } ? t.Diff.ControlPlan : null;
+            IReadOnlyList<IrRowOp> operations = plan is null ? t.Diff.RowOps
+                : plan.Rows.Select(row => t.Diff.RowOps[row.OpIndex]).ToList();
+            var pairs = operations.Select(r => (
                 r.Kind == IrRowOpKind.MovedRow && r.IsMoveSource != true ? null : baseRows.GetValueOrDefault(r.LeftRowAnchor ?? ""),
                 r.Kind == IrRowOpKind.MovedRow && r.IsMoveSource == true ? null : RightRow(t.Reviewer, r.RightRowAnchor)))
                 .ToList();
-            if (controls is { Count: > 0 } && t.RevisedTable is { } revised &&
-                PlanTableControls(t.Diff.RowOps, original.Source.Element!, revised.Source.Element!, baseRows,
-                    IndexRows(revised)) is { } drawn && IrTableDiffer.ControlsInPlace(original, revised, drawn.RowOps) is { } positions)
+            if (plan is not null && t.RevisedTable is { } revised)
             {
-                pairs = drawn.Sources;
-                foreach (var (left, right) in controls.Zip(TopLevelRowlessControls(revised)).Reverse())
-                    pairs.Insert(positions[right.Before], (left.Element, right.Element));
+                foreach (var (left, right) in controls!.Zip(TopLevelRowlessControls(revised)).Reverse())
+                    pairs.Insert(plan.EmptyControlPositions[right.Before], (left.Element, right.Element));
             }
             reviews.Add(new(t.Reviewer, t.Author, pairs));
         }

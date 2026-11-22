@@ -366,7 +366,14 @@ internal sealed record IrCellOp(
 /// every surface reports and draws the table as deleted and inserted whole (issue #1810,
 /// <see cref="IrTableDiffer.NeedsWholeTableFallback"/>).</para>
 /// </summary>
-internal sealed record IrTableDiff(IrNodeList<IrRowOp> RowOps, bool ReplaceWhole = false);
+internal sealed record IrTableDiff(IrNodeList<IrRowOp> RowOps, bool ReplaceWhole = false)
+{
+    // Derived from the row ops and source structure. Older serialized scripts bind it on use.
+    internal IrTableControlPlan? ControlPlan { get; init; }
+
+    public bool Equals(IrTableDiff? other) => other is not null && ReplaceWhole == other.ReplaceWhole && RowOps.Equals(other.RowOps);
+    public override int GetHashCode() => System.HashCode.Combine(RowOps, ReplaceWhole);
+}
 
 /// <summary>
 /// The diff-as-data product: an ordered, anchor-addressed, JSON-round-trippable, apply-verifiable

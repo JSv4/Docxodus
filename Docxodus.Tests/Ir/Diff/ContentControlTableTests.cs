@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using Docxodus.Ir;
+using Docxodus.Ir.Diff;
 using Docxodus.Verification;
 using Xunit;
 
@@ -778,6 +780,26 @@ public class ContentControlTableTests
         Assert.Equal(string.Concat(revisions.Where(r => r.Type == DocxDiffRevisionType.Inserted).Select(r => r.Text)), Marked(redline, true));
         Assert.Equal(string.Concat(revisions.Where(r => r.Type == DocxDiffRevisionType.Deleted).Select(r => r.Text)), Marked(redline, false));
         AssertValid(redline, accepted, rejected);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Table_control_plans_bind_to_fresh_sources_and_serialized_scripts(bool retain)
+    {
+        string MakeRow(string value) => Row("Crane", Control(12, Cell(P(value))));
+        var left = Table(Row("Dock", "Berth one"), EmptyControl, Control(9, Control(10, MakeRow("Hook two"))));
+        var right = Table(Row("Dock", "Berth one"), EmptyControl, Control(9, Control(10, MakeRow("Hook two, spare"))));
+        var options = new IrReaderOptions { RetainSources = retain, RevisionView = RevisionView.Accept };
+        var settings = new IrDiffSettings();
+        var script = IrEditScriptBuilder.Build(IrReader.Read(left, options), IrReader.Read(right, options), settings);
+        var diff = Assert.Single(script.Operations, op => op.TableDiff is not null).TableDiff!;
+        Assert.False(diff.ReplaceWhole);
+        Assert.NotNull(diff.ControlPlan);
+        var restored = IrEditScriptJson.Read(IrEditScriptJson.Write(script));
+        Assert.Equal(script, restored);
+        foreach (var plan in new[] { script, restored })
+            AssertRedline(left, right, IrMarkupRenderer.Render(plan, left, right, settings));
     }
 
     [Theory]
