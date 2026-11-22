@@ -1158,12 +1158,9 @@ internal static class DocxSessionOps
     public static string SetContentControlDate(int handle, string anchorId, string value,
         string? displayText, string optionsJson)
     {
-        // A calendar date has no time zone. Preserve the existing timestamp parsing rules
-        // for inputs that specify a time, including their explicit or local offset.
-        if (!DateTimeOffset.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal | DateTimeStyles.AllowLeadingWhite | DateTimeStyles.AllowTrailingWhite,
-                out var parsed) &&
-            !DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out parsed))
+        // The session stores the date as written, so an input without an offset needs none
+        // from the host.
+        if (!DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed))
             return DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidContentControlValue,
                 "date value must be an ISO-8601 timestamp", anchorId));
         return ContentControlOptions(anchorId, optionsJson, options =>

@@ -192,9 +192,12 @@ is `docxodus_content_controls`; it advertises the same optional optimistic
 `preconditions` guard as the other mutating tools, and its mutating actions participate in
 `docxodus_mutations` apply/preview rollback, while `list` is read-only and rejected as
 a batch step. Picture bytes cross JSON transports only as base64.
-A date-only ISO string (`yyyy-MM-dd`) is stored at midnight UTC. A timestamp with an
-explicit offset is converted to its UTC instant. An omitted date `displayText` selects
-the invariant calendar date of the input; an explicitly empty
+A date fill stores the calendar day at midnight UTC; the time of day is not kept, as the
+desktop word processor stores it. The day is the one written in the input: `2032-03-04`,
+`2032-03-04T01:00:00+05:00` and `2032-03-04T23:30:00-12:00` all store
+`2032-03-04T00:00:00Z`, on every host, and a `DateTimeOffset` passed to the session keeps
+its own day rather than the day its UTC instant falls on. An omitted date `displayText`
+shows that day as `yyyy-MM-dd`; an explicitly empty
 string remains empty through the JSON, WASM, and TypeScript layers.
 
 Failures are structured `EditErrorCode` values, including not found, malformed,

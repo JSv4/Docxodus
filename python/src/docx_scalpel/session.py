@@ -1405,6 +1405,12 @@ class DocxSession:
         self, anchor_id: str, value: str, display_text: str | None = None,
         options: ContentControlFillOptions | None = None,
     ) -> EditResult:
+        """Fill a date control with an ISO-8601 date or timestamp.
+
+        The control stores the calendar day the value is written with at midnight UTC and
+        keeps no time of day, so ``"2032-03-04T01:00:00+05:00"`` stores ``2032-03-04``.
+        ``display_text`` defaults to that day as ``yyyy-MM-dd``.
+        """
         return EditResult._from_wire(self._call("set_content_control_date", {
             "anchorId": anchor_id, "value": value, "displayText": display_text,
             "options": (options or ContentControlFillOptions()).to_wire(),

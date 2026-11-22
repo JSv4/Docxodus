@@ -6502,6 +6502,57 @@ The page-background fix therefore tests the wrap element, rather than using z-or
 substitute. [Microsoft's clarification](https://learn.microsoft.com/en-us/answers/questions/195851/behinddoc-%28wp-wraptopandbottom%29-%28w10-wrap%29-style-m)
 also distinguishes DrawingML choice content from its legacy VML fallback; the two are alternative
 representations, not competing instructions to combine.
+## Date controls hold a calendar day, re-read from their text on save (#1842)
+
+A `w:date` content control records its value twice: the visible runs in `w:sdtContent`, and
+`w:date/@w:fullDate`. The schema types `w:fullDate` as an `xsd:dateTime`, so a writer can store any
+instant, but the desktop word processor (build 16.0.20326) treats the control as holding a calendar
+day: it writes the day at midnight UTC, keeps no time of day, and when it saves a document it
+re-derives `w:fullDate` from the visible text.
+
+```xml
+<w:sdt><w:sdtPr><w:id w:val="101"/>
+    <w:date w:fullDate="2026-12-14T23:00:00Z"><w:dateFormat w:val="d MMMM yyyy"/><w:lid w:val="en-GB"/>
+      <w:storeMappedDataAs w:val="dateTime"/><w:calendar w:val="gregorian"/></w:date></w:sdtPr>
+  <w:sdtContent><w:r><w:t>2026-12-15</w:t></w:r></w:sdtContent></w:sdt>
+```
+
+Filling a control (`SetContentControlDate`, default display text):
+
+| Input | Docxodus before | Docxodus after | Desktop word processor (build 16.0.20326) |
+| --- | --- | --- | --- |
+| `2026-12-15` on a host at UTC+1 | `2026-12-14T23:00:00Z`, text `2026-12-15` | `2026-12-15T00:00:00Z`, text `2026-12-15` | a date typed or chosen as 15 December is stored as `2026-12-15T00:00:00Z` |
+| `2032-03-04T01:00:00+05:00` | `2032-03-03T20:00:00Z`, text `2032-03-04` | `2032-03-04T00:00:00Z`, text `2032-03-04` | re-saving the "before" output stores `2032-03-04T00:00:00Z` |
+| `DateTimeOffset` 4 March 2032 00:00 at +01:00 | `2032-03-03T23:00:00Z` | `2032-03-04T00:00:00Z` | — |
+
+Re-saving stored values with the desktop word processor (fresh one-control documents, host at UTC-6):
+
+| Stored `w:fullDate` | Visible text | Saved `w:fullDate` |
+| --- | --- | --- |
+| `2026-12-14T23:00:00Z` | `2026-12-15` | `2026-12-15T00:00:00Z` |
+| `2026-12-20T00:00:00Z` | `15 December 2026` | `2026-12-15T00:00:00Z` |
+| `2026-12-15T16:30:00Z` | `2026-12-15` | `2026-12-15T00:00:00Z` |
+| `2026-12-15T00:00:00` (no offset) | `2026-12-15` | `2026-12-15T00:00:00Z` |
+| `2034-06-16T16:30:00Z` | `Garden inspection` | none: the attribute is dropped |
+
+LibreOffice Writer 25.8.7.3 showed the same date for the previous-day and midnight values
+(docx-fidelity-bench PR #262), as it shows the cached text. On open the desktop word processor does
+not reformat existing text either: an ISO `2026-12-15` stays as written. A date typed into the control
+is shown in the control's own format and language (`d MMMM yyyy` gives `15 December 2026` for `en-GB`
+and `15 Dezember 2026` for `de-DE`) and stored at midnight UTC.
+
+Analysis: in the desktop word processor the visible text is the value. A stored instant whose UTC day
+differs from the displayed day is corrected the next time it saves the document, but any reader that
+trusts `w:fullDate` in the meantime (a data binding or another application) gets the wrong day, and a display text that is not a date loses the stored value altogether. Docxodus converted
+every value to its UTC instant, so any non-zero offset could move the stored day: a date-only input
+parsed at the host's offset, an explicit offset, or a `DateTimeOffset` from a C# caller.
+
+Fix: `DocxSession.SetContentControlDate` writes the value's own calendar day, the one its default
+display text shows, as `yyyy-MM-ddT00:00:00Z`, and `DocxSessionOps.SetContentControlDate` parses an
+input without an offset as UTC so the host's time zone no longer matters. The default display text is
+still `yyyy-MM-dd` rather than the control's own format; that is tracked in a follow-up issue, because
+the browser build has no localized month names. Tests: `ContentControlDateTests`.
+
 ## Raised inline text boxes can paint above the body margin
 
 An inline DrawingML text box inside a run with `<w:position w:val="48"/>`

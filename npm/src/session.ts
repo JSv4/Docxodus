@@ -1530,6 +1530,12 @@ export class DocxSession {
       this.handle, anchorId, isChecked, JSON.stringify(options))) as EditResult;
   }
 
+  /**
+   * Fill a date control. The control stores a calendar day at midnight UTC and keeps no time
+   * of day: a string keeps the day it is written with (`"2032-03-04"`,
+   * `"2032-03-04T01:00:00+05:00"`), and a `Date` is sent as its UTC instant, so it stores its
+   * UTC day. `displayText` defaults to that day as `yyyy-MM-dd`.
+   */
   setContentControlDate(anchorId: string, value: string | Date, displayText?: string,
     options: ContentControlFillOptions = {}): EditResult {
     const timestamp = value instanceof Date ? value.toISOString() : value;
