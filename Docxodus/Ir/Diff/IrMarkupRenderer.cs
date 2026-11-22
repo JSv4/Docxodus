@@ -2566,6 +2566,7 @@ internal static partial class IrMarkupRenderer
             }
 
         var chains = new XElement[rows.Count][];
+        int[]? precedingControls = null;
         var oneSided = new Dictionary<XElement, bool>();
         var authors = new Dictionary<XElement, string>();
         var surviving = new HashSet<XElement>();
@@ -2576,9 +2577,12 @@ internal static partial class IrMarkupRenderer
             if (row.Kind == IrRowOpKind.InsertRow)
             {
                 if (row.SourceReviewer < 0 || row.SourceReviewer >= reviewerIrs.Count || row.RightRowAnchor is not { } ra ||
-                    FindRowSource(reviewerIrs[row.SourceReviewer], ra) is not { } inserted || TableOf(inserted) is not { } reviewerTbl)
+                    !IrCompositeMerger.RowIndex(reviewerIrs[row.SourceReviewer]).TryGetValue(ra, out var reviewRow) ||
+                    reviewRow.Source.Element is not { } inserted || TableOf(inserted) is not { } reviewerTbl)
                     return null;
                 controlled |= reviewerTbl.Element(W.sdt) is not null;
+                if (reviewRow.PrecedingEmptyControls > 0)
+                    (precedingControls ??= new int[rows.Count])[i] = reviewRow.PrecedingEmptyControls;
                 var chain = ControlChain(inserted, reviewerTbl);
                 for (int level = 0; level < chain.Length; level++)
                 {
@@ -2613,11 +2617,41 @@ internal static partial class IrMarkupRenderer
                 oneSided[control] = true;
                 authors[control] = author;
             }
-        if (ChildrenStayTogether(chains))
-            return new ControlLayout(chains, oneSided, authors);
-        order = KeepInsertsTogether(rows, chains);
-        var reordered = order.Select(i => chains[i]).ToArray();
-        return ChildrenStayTogether(reordered) ? new ControlLayout(reordered, oneSided, authors) : null;
+        if (!ChildrenStayTogether(chains))
+            order = KeepInsertsTogether(rows, chains);
+        if (precedingControls is not null)
+            OrderInsertsAtEmptyControls(rows, precedingControls, ref order);
+        if (order is not null)
+        {
+            chains = order.Select(i => chains[i]).ToArray();
+            if (!ChildrenStayTogether(chains)) return null;
+        }
+        return new ControlLayout(chains, oneSided, authors);
+    }
+
+    // Within a base gap, each retained rowless control divides insertions on its two sides.
+    // A stable sort preserves the control-chain and reviewer order within each such interval.
+    private static void OrderInsertsAtEmptyControls(IReadOnlyList<IrAuthoredRowOp> rows, int[] preceding,
+        ref List<int>? order)
+    {
+        for (int i = 0; i < rows.Count;)
+        {
+            if (rows[i].Kind != IrRowOpKind.InsertRow) { i++; continue; }
+            int end = i + 1;
+            bool inverted = false;
+            while (end < rows.Count && rows[end].Kind == IrRowOpKind.InsertRow)
+            {
+                if (preceding[order?[end - 1] ?? end - 1] > preceding[order?[end] ?? end]) inverted = true;
+                end++;
+            }
+            if (inverted)
+            {
+                order ??= Enumerable.Range(0, rows.Count).ToList();
+                var sorted = order.GetRange(i, end - i).OrderBy(index => preceding[index]).ToArray();
+                for (int j = i; j < end; j++) order[j] = sorted[j - i];
+            }
+            i = end;
+        }
     }
 
     /// <summary>
@@ -3149,11 +3183,17 @@ internal static partial class IrMarkupRenderer
         else
             foreach (var property in baseTbl.Elements().TakeWhile(child => child.Name != W.tr))
                 newTbl.Add(StripUnids(new XElement(property)));
-        int extrasPlaced = 0;
+        int extrasPlaced = 0, emptyControlsPlaced = 0;
+        void PlaceNextExtra()
+        {
+            var element = extras[extrasPlaced++].Element;
+            newTbl.Add(StripUnids(new XElement(element)));
+            if (element.Name == W.sdt) emptyControlsPlaced++;
+        }
         void PlaceExtrasBefore(int baseRow)
         {
-            for (; extrasPlaced < extras.Count && extras[extrasPlaced].RowsBefore <= baseRow; extrasPlaced++)
-                newTbl.Add(StripUnids(new XElement(extras[extrasPlaced].Element)));
+            while (extrasPlaced < extras.Count && extras[extrasPlaced].RowsBefore <= baseRow)
+                PlaceNextExtra();
         }
 
         // B2: the table-level shells (tblPr/tblGrid) were base-cloned above; swap in the composed winner's and
@@ -3171,30 +3211,11 @@ internal static partial class IrMarkupRenderer
             }
             else if (rowOp.Kind == IrRowOpKind.InsertRow && extrasPlaced < extras.Count && extras[extrasPlaced].RowsBefore == boundary &&
                      rowOp.SourceReviewer >= 0 && rowOp.SourceReviewer < reviewerIrs.Count && rowOp.RightRowAnchor is { } insertedAnchor &&
-                     FindRowSource(reviewerIrs[rowOp.SourceReviewer], insertedAnchor) is { } inserted)
+                     IrCompositeMerger.RowIndex(reviewerIrs[rowOp.SourceReviewer]).TryGetValue(insertedAnchor, out var inserted))
             {
-                // A control the inserting reviewer keeps before the row it adds goes before it, as in that reviewer's table.
-                var kept = new HashSet<IrHash>();
-                // Only table-level controls are extras here. A first row inside a nested
-                // control can still have an empty control before its enclosing table child.
-                for (var child = inserted; child is not null; child = child.Parent?.Parent)
-                {
-                    bool crossedRow = false;
-                    foreach (var sibling in child.ElementsBeforeSelf().Reverse())
-                    {
-                        if (sibling.Name == W.tr || sibling.Name == W.sdt && IrReader.UnwrapSdtChildren(sibling, W.tr).Any())
-                        {
-                            crossedRow = true;
-                            break;
-                        }
-                        if (child.Parent?.Name == W.tbl && sibling.Name == W.sdt)
-                            kept.Add(IrHasher.CanonicalHash(sibling));
-                    }
-                    if (crossedRow || child.Parent?.Name != W.sdtContent) break;
-                }
-                for (; extrasPlaced < extras.Count && extras[extrasPlaced].RowsBefore == boundary &&
-                       kept.Contains(IrHasher.CanonicalHash(extras[extrasPlaced].Element)); extrasPlaced++)
-                    newTbl.Add(StripUnids(new XElement(extras[extrasPlaced].Element)));
+                while (extrasPlaced < extras.Count && extras[extrasPlaced].RowsBefore == boundary &&
+                       extras[extrasPlaced].Element.Name == W.sdt && emptyControlsPlaced < inserted.PrecedingEmptyControls)
+                    PlaceNextExtra();
             }
             switch (rowOp.Kind)
             {
