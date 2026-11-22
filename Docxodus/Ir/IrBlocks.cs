@@ -349,6 +349,9 @@ internal sealed record IrRow(IrAnchor Anchor, IrNodeList<IrCell> Cells, IrHash C
     /// <c>default</c> when there are none.</summary>
     public IrHash ControlsBeforeDigest { get; init; }
 
+    /// <summary>Number of rowless top-level controls preceding this row in its source table.</summary>
+    public int PrecedingEmptyControls { get; init; }
+
     /// <summary>What the row holds among its cells that decides whether an edit of it can rebuild their content controls
     /// (issue #1810); see <see cref="IrContainerControls"/>.</summary>
     public IrContainerControls Controls { get; init; }

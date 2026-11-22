@@ -2877,13 +2877,16 @@ internal static class IrReader
             return ordinals[control];
         }
         List<string>? instances = null;
+        int precedingEmptyControls = 0;
         foreach (var (tr, fromSdt) in TableChildren(tbl, W + "tr"))
         {
             var (row, cellFingerprintsForRow) = BuildRow(tr, ctx);
             var rowControls = RowControlDigest(tr, tbl);
             var before = controlsBefore?.GetValueOrDefault(tr) ?? default;
-            if (fromSdt || rowControls != default || before != default)
-                row = row with { FromTableSdt = fromSdt, ControlDigest = rowControls, ControlsBeforeDigest = before };
+            precedingEmptyControls += before.TopLevelCount;
+            if (fromSdt || rowControls != default || before.Digest != default || precedingEmptyControls != 0)
+                row = row with { FromTableSdt = fromSdt, ControlDigest = rowControls, ControlsBeforeDigest = before.Digest,
+                    PrecedingEmptyControls = precedingEmptyControls };
             if (fromSdt)
                 (instances ??= Enumerable.Repeat("", rows.Count).ToList()).Add(string.Join(",", tr.Ancestors().TakeWhile(a => a != tbl)
                     .Where(a => a.Name == W + "sdt").Select(ControlOrdinal)));
@@ -3005,9 +3008,10 @@ internal static class IrReader
 
     /// <summary>The table-level controls that deliver no row, by the row that follows them (each run whole, in
     /// order), and those after the last row in <paramref name="trailing"/>; null when the table has none.</summary>
-    private static Dictionary<XElement, IrHash>? TableControlsBefore(XElement tbl, out IrHash trailing)
+    private static Dictionary<XElement, (IrHash Digest, int TopLevelCount)>? TableControlsBefore(XElement tbl, out IrHash trailing)
     {
-        Dictionary<XElement, IrHash>? result = null;
+        Dictionary<XElement, (IrHash, int)>? result = null;
+        int topLevelCount = 0;
         IrContentHashBuilder? pending = null;
         void Read(XElement container, int depth)
         {
@@ -3015,7 +3019,8 @@ internal static class IrReader
             {
                 if (child.Name == W + "tr")
                 {
-                    if (pending is not null) (result ??= new())[child] = pending.Build();
+                    if (pending is not null) (result ??= new())[child] = (pending.Build(), topLevelCount);
+                    topLevelCount = 0;
                     pending = null;
                 }
                 else if (child.Name == W + "sdt")
@@ -3024,6 +3029,7 @@ internal static class IrReader
                         Read(child.Element(W + "sdtContent")!, depth + 1);
                     else
                     {
+                        if (depth == 0) topLevelCount++;
                         pending ??= new IrContentHashBuilder();
                         foreach (var parent in child.Ancestors().TakeWhile(a => a != tbl).Where(a => a.Name == W + "sdt").Reverse())
                         {
