@@ -890,9 +890,6 @@ internal static partial class IrMarkupRenderer
     {
         var opList = ops as IReadOnlyList<IrEditOp> ?? ops.ToList();
         state.IndexEditedMoves(opList);
-        var pendingInserts = new List<IrEditOp>();
-        var pendingDeletes = new List<IrEditOp>();
-
         // Bookmarks and comment ranges written between this stream's blocks (rule N3 keeps them out of the
         // ops; issue #1149) go back around the blocks they bracket: see PlanBlockLevelMarkers.
         var markers = PlanBlockLevelMarkers(opList, state);
@@ -906,20 +903,6 @@ internal static partial class IrMarkupRenderer
         while (lastRenderableIndex >= 0 && IsSectionBreakOp(opList[lastRenderableIndex], state))
             lastRenderableIndex--;
 
-        void FlushGap(bool storyEnd)
-        {
-            if (pendingInserts.Count == 0 && pendingDeletes.Count == 0)
-                return;
-
-            // Render each op into its own element group, marks stamped as usual (¶INS / ¶DEL).
-            // Insert order = next order, delete order = base order.
-            var insGroups = RenderGapGroups(pendingInserts, state, markers);
-            var delGroups = RenderGapGroups(pendingDeletes, state, markers);
-            pendingInserts.Clear();
-            pendingDeletes.Clear();
-
-            EmitGapArranged(insGroups, delGroups, storyEnd, state, sink);
-        }
         // A gap's start markers go out when its first op is reached, before anything of the gap renders; its end
         // markers after the gap has flushed (with the start ones, if the gap had no op).
         void CloseGap()
@@ -932,34 +915,28 @@ internal static partial class IrMarkupRenderer
             gap++;
             gapHasOps = false;
         }
-        for (int i = 0; i < opList.Count; i++)
+        foreach (var step in IrBodyPlacement.Steps(opList, state.Settings.RenderMoves && !state.IsComposite))
         {
-            var op = opList[i];
-            bool twoSided = markers is not null && OpIsTwoSided(op);
+            var op = opList[step.Start];
+            bool twoSided = !step.IsGap && markers is not null && OpIsTwoSided(op);
             if (markers is not null && !twoSided && !gapHasOps)
             {
                 sink.AddRange(BlockMarkerPlan.Of(markers.GapStart, gap));
                 gapHasOps = true;
             }
-            // A relocated half (issue #887) is drawn as a whole-paragraph move, outside the gap arrangement,
-            // exactly as an aligner move is: the pilcrow pairing must not fuse it into a neighbouring change.
-            if ((op.Kind == IrEditOpKind.DeleteBlock || op.Kind == IrEditOpKind.InsertBlock) &&
-                DrawsRelocation(op, state) is null)
+            if (step.IsGap)
             {
-                if (op.Kind == IrEditOpKind.DeleteBlock)
-                    pendingDeletes.Add(op);
-                else
-                    pendingInserts.Add(op);
+                var inserted = RenderGapGroups(step.Side(opList, IrEditOpKind.InsertBlock), state, markers);
+                var deleted = RenderGapGroups(step.Side(opList, IrEditOpKind.DeleteBlock), state, markers);
+                EmitGapArranged(inserted, deleted, step.End > lastRenderableIndex, state, sink);
                 continue;
             }
-            FlushGap(storyEnd: i > lastRenderableIndex);
             if (twoSided)
                 CloseGap();
             if (markers is not null)
                 sink.AddRange(markers.PrefixOf(op));
             RenderBlockOp(op, state, sink);
         }
-        FlushGap(storyEnd: true);
         CloseGap();
 
         // Whether an op consumes blocks of both documents (a gap boundary for the marker placement).
@@ -995,9 +972,9 @@ internal static partial class IrMarkupRenderer
     /// <summary>The shared empty marker list of a gap group with none; never added to.</summary>
     private static readonly List<XElement> NoMarkers = new();
 
-    private static List<GapGroup> RenderGapGroups(List<IrEditOp> ops, RenderState state, BlockMarkerPlan? markers)
+    private static List<GapGroup> RenderGapGroups(IEnumerable<IrEditOp> ops, RenderState state, BlockMarkerPlan? markers)
     {
-        var groups = new List<GapGroup>(ops.Count);
+        var groups = new List<GapGroup>();
         foreach (var op in ops)
         {
             var els = new List<XElement>();
@@ -1767,12 +1744,13 @@ internal static partial class IrMarkupRenderer
         int offset = 0;
         for (int s = 0; s < anchors.Count; s++)
         {
+            var member = IrBodyPlacement.Member(op, s);
             var diff = diffs[s];
             int sliceLen = SegmentSliceLength(diff, leftSide: true);
             var slice = SubTokens(leftTokens, offset, sliceLen);
             offset += sliceLen;
 
-            var memberPara = SourceElement(anchors[s], state.RightSource);
+            var memberPara = SourceElement(member.Right, state.RightSource);
             if (memberPara == null)
             {
                 EmitWholeBlock(anchors[s], state.RightSource, state, sink, RevKind.Ins, fromRight: true);
@@ -1789,10 +1767,10 @@ internal static partial class IrMarkupRenderer
             // The LAST member owns the ORIGINAL left pilcrow (its mark stays unmarked), so it is the
             // paired-paragraph analogue: stamp pPrChange/mark-rPr history against the left paragraph
             // (reference compare output does — the ¶INS members are new paragraphs and carry none).
-            if (s == anchors.Count - 1)
+            if (member.LeftMark)
                 ApplyBlockFormatChanges(newPara, leftPara, memberPara, state);
             newPara.Add(BuildTokenOpContent(diff, slice, memberTokens, leftRuns, rightRuns, state));
-            if (s < anchors.Count - 1)
+            if (!member.LeftMark)
                 MarkParagraphMark(newPara, RevKind.Ins, state); // the new pilcrow (RevKind.Ins — spec §3.3 nit)
             sink.Add(newPara);
         }
@@ -1842,7 +1820,7 @@ internal static partial class IrMarkupRenderer
             var leftRuns = new SourceRunModel(memberPara);
 
             var newPara = new XElement(W.p);
-            bool last = m == anchors.Count - 1;
+            bool last = IrBodyPlacement.Member(op, m).RightMark;
             var pPrSource = last ? rightPPr : memberPara.Element(W.pPr);
             if (pPrSource != null)
                 newPara.Add(StripUnids(new XElement(pPrSource)));
