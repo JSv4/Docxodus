@@ -428,6 +428,20 @@ public class IrReaderTests
     }
 
     [Fact]
+    public void Physical_textbox_boundaries_are_available_with_and_without_source_elements()
+    {
+        var doc = IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
+            """<w:p><w:r><w:pict><v:shape r:id="link"><v:textbox><w:txbxContent><w:bookmarkStart w:id="1" w:name="Slot"/><w:p><w:r><w:t>Inside</w:t></w:r></w:p><w:bookmarkEnd w:id="1"/></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>""");
+        foreach (bool retain in new[] { false, true })
+        {
+            var ir = IrReader.Read(doc, new IrReaderOptions { RetainSources = retain });
+            var host = Assert.Single(ir.Body.Blocks.OfType<IrParagraph>());
+            Assert.Equal(new IrParagraphTextboxes(1, true, false, true), host.PhysicalTextboxes);
+            Assert.Equal(default, Assert.IsType<IrParagraph>(SingleTextbox(host).Blocks.Single()).PhysicalTextboxes);
+        }
+    }
+
+    [Fact]
     public void Read_AlternateContent_BothChoiceAndFallbackTextboxesModeled()
     {
         // Word emits the same logical textbox twice: a DrawingML mc:Choice (wps:txbx) and a VML
@@ -448,6 +462,7 @@ public class IrReaderTests
         var outer = ir.Body.Blocks.OfType<IrParagraph>().Single();
         var textboxes = outer.Inlines.OfType<IrTextbox>().ToList();
         Assert.Equal(2, textboxes.Count);
+        Assert.Equal(new IrParagraphTextboxes(2, false, false, false), outer.PhysicalTextboxes);
         foreach (var tb in textboxes)
         {
             var inner = Assert.IsType<IrParagraph>(tb.Blocks.Single());

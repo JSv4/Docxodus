@@ -182,6 +182,8 @@ internal static class IrReader
         // Each paragraph finishes itself (BuildParagraph), so any range still open at end-of-body has
         // its provisional spans buffered but never committed — an orphan start, discarded (totality).
 
+        if (retain) bodyCtx.RelResolver.RetainReferencedTokens(mainXDoc);
+
         // 5. Anchor index over ALL scopes' blocks (rows/cells are positional, not blocks). Collision
         // checking spans scopes, and IndexBlock throws on any duplicate kind:scope:unid string.
         // INVARIANT: collision-safety depends on every scope emitting a unique scope-name prefix.
@@ -701,6 +703,22 @@ internal static class IrReader
             yield return main.WordprocessingCommentsPart;
     }
 
+    /// <summary>Resolve an end marker through its start in the same source part.</summary>
+    internal static string BookmarkEndName(XElement marker)
+    {
+        var id = (string?)marker.Attribute(W + "id") ?? string.Empty;
+        var names = marker.Document is { } document
+            ? BookmarkNamesById.GetValue(document, d => d.Descendants(W + "bookmarkStart")
+                .Where(s => s.Attribute(W + "id") is not null && s.Attribute(W + "name") is not null)
+                .GroupBy(s => (string)s.Attribute(W + "id")!)
+                .ToDictionary(g => g.Key, g => (string)g.First().Attribute(W + "name")!, StringComparer.Ordinal))
+            : null;
+        return names?.GetValueOrDefault(id) ?? "#" + id;
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<XDocument, Dictionary<string, string>>
+        BookmarkNamesById = new();
+
     // --- block dispatch ---------------------------------------------------
 
     /// <summary>
@@ -912,7 +930,7 @@ internal static class IrReader
         // Inline SDT/smartTag carriers are intentionally transparent to the modeled inline stream, but their
         // wrapper topology cannot be reconstructed safely by a token-level redline. Keep a separate canonical
         // envelope digest so the edit builder can lower a carrier change to a reversible whole paragraph pair.
-        var inlineEnvelopeDigest = InlineEnvelopeDigestFor(p, processed, ctx);
+        var inlineEnvelopeDigest = InlineEnvelopeDigestFor(p, processed, ctx, out var physicalTextboxes);
 
         // A non-hyperlink field's code and begin-state are deliberately transparent to content/token alignment:
         // the cached result is what is visible. Keep their independent structural carrier digest so a same-result
@@ -935,6 +953,7 @@ internal static class IrReader
             Format = paraFormat,
             List = listInfo,
             Inlines = IrNodeList.From(processed),
+            PhysicalTextboxes = physicalTextboxes,
             ProjectedInlines = !ctx.ProjectCustomXml && p.Descendants(W + "customXml").Any()
                 ? IrNodeList.From(WalkInlines(p.Elements().Where(c => c.Name != W + "pPr"),
                     ctx.WithoutComments(projectCustomXml: true))) : null,
@@ -965,19 +984,22 @@ internal static class IrReader
     /// but a wrapper-only change there must still prevent the outer source drawing from aligning Equal.
     /// </summary>
     private static IrHash InlineEnvelopeDigestFor(
-        XElement paragraph, IReadOnlyList<IrInline> inlines, ReadContext ctx)
+        XElement paragraph, IReadOnlyList<IrInline> inlines, ReadContext ctx, out IrParagraphTextboxes textboxes)
     {
-        var envelopes = paragraph.Descendants()
-            .Where(element => IsInlineEnvelope(element) &&
-                IsOutermostInlineEnvelope(paragraph, element))
-            .ToList();
-
         var stream = new XElement("inlineEnvelopes");
-        foreach (var envelope in envelopes)
+        textboxes = default;
+        foreach (var element in paragraph.Descendants())
         {
-            stream.Add(new XElement("carrier",
-                new XAttribute("path", InlineElementPath(paragraph, envelope)),
-                new XElement(envelope)));
+            if (IsInlineEnvelope(element) && IsOutermostInlineEnvelope(paragraph, element))
+                stream.Add(new XElement("carrier",
+                    new XAttribute("path", InlineElementPath(paragraph, element)), new XElement(element)));
+            if (element.Name != WTxbxContent) continue;
+            var ancestors = element.Ancestors().TakeWhile(a => a != paragraph);
+            if (ancestors.Any(a => a.Name == WTxbxContent)) continue;
+            var (markers, field) = ScanWrapperContent(element.Elements());
+            textboxes = new(textboxes.Count + 1, textboxes.HasBlockMarkers || markers,
+                textboxes.HasSpanningField || field,
+                textboxes.HasCarrierRelationships || ancestors.Attributes().Any(a => a.Name.Namespace == R));
         }
         AppendTextboxGraphCarrierEntries(paragraph, ctx, stream);
         AppendTextboxInlineEnvelopeEntries(inlines, "", stream);
@@ -3526,7 +3548,11 @@ internal static class IrReader
             }
 
             if (retain)
-                sources[part.Uri] = part.GetXDocument();
+            {
+                var source = part.GetXDocument();
+                sources[part.Uri] = source;
+                ctx.RelResolver.RetainReferencedTokens(source);
+            }
             return new IrNoteStore(notes, noteUnids);
         }
         catch (Exception e) when (IsTolerableRegistryException(e))
