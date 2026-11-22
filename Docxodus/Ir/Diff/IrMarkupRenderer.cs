@@ -242,7 +242,10 @@ internal static partial class IrMarkupRenderer
             irRight = IrReader.Read(right, readOpts);
         }
 
-        var state = new RenderState(irLeft, irRight, settings);
+        var state = new RenderState(irLeft, irRight, settings)
+        {
+            CommentAttachments = script.CommentAttachments ?? IrCommentAttachments.Plan(irLeft, irRight, script.Operations),
+        };
         state.RightSource = ProjectConsumerDocDefaults(left, right, state);
         state.RightSource = ProjectTableStyleMargins(left, right, state);
         state.LeftStyleIds = ReadStyleIds(left);
@@ -957,7 +960,9 @@ internal static partial class IrMarkupRenderer
                 CloseGap();
             if (markers is not null)
                 sink.AddRange(markers.PrefixOf(op));
+            int start = sink.Count;
             RenderBlockOp(op, state, sink);
+            ApplyCommentAttachments(op, state, sink, start);
         }
         FlushGap(storyEnd: true);
         CloseGap();
@@ -1578,6 +1583,49 @@ internal static partial class IrMarkupRenderer
                 RenderCrossParagraphRun(op, state, sink);
                 break;
         }
+    }
+
+    internal static void ApplyCommentAttachments(IrEditOp op, RenderState state, List<XElement> sink, int start)
+    {
+        if (sink.Count == start + 1 && sink[start].Name == W.p)
+            ApplyParagraphCommentAttachments(sink[start], op.LeftAnchor, state);
+    }
+
+    // An unchanged container is copied as a unit. Its paragraphs correspond in source
+    // order, just as they do when carrying markers into the copy.
+    private static void ApplyCopiedCommentAttachments(XElement output, XElement? original, RenderState state)
+    {
+        if (state.CommentAttachments?.HasPlacements != true || original is null || !original.Ancestors(W.body).Any()) return;
+        var source = original.Descendants(W.p).ToList();
+        var copies = output.Descendants(W.p).ToList();
+        if (copies.Count != source.Count) return;
+        for (int i = 0; i < copies.Count; i++)
+            ApplyParagraphCommentAttachments(copies[i],
+                state.CommentAttachments.AnchorForCopy((string?)source[i].Attribute(PtOpenXml.Unid)), state);
+    }
+
+    private static void ApplyParagraphCommentAttachments(XElement paragraph, string? anchor, RenderState state)
+    {
+        if (state.CommentAttachments?.For(anchor) is not { } placements) return;
+        var savedAuthor = state.AuthorOverride;
+        var fromBase = placements.Where(p => p.View != IrCommentAttachments.View.Revised)
+            .Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
+        if (fromBase.Count != 0)
+            CarryMissingComments(new[] { paragraph }, SourceElement(anchor, state.Left), originalView: true,
+                textBoxes: false, nextId: state.NextId, notCarried: id => !fromBase.Contains(id));
+        foreach (var (id, view, author) in placements)
+        {
+            state.AuthorOverride = author ?? state.AttachmentAuthor ?? savedAuthor;
+            var kind = view == IrCommentAttachments.View.Revised ? RevKind.Ins : RevKind.Del;
+            var markers = paragraph.Descendants().Where(e => IsCommentMarker(e) && e.Ancestors(W.p).FirstOrDefault() == paragraph &&
+                (string?)e.Attribute(W.id) == id && IsRunLevelCommentMarker(e)).ToList();
+            foreach (var marker in markers)
+                if (view == IrCommentAttachments.View.Both)
+                    LiftCommentMarkerBare(marker);
+                else if (CommentMarkerView(marker) is null)
+                    WrapMarkerInRevision(marker, kind, state);
+        }
+        state.AuthorOverride = savedAuthor;
     }
 
     /// <summary>An equal or format-only block is emitted as the revised document's copy. Restore missing
@@ -4514,12 +4562,27 @@ internal static partial class IrMarkupRenderer
             if (!all.Any(InBothViews))
                 continue; // every marker toggles with a revision (rewritten anchor, replaced wrapper) → (B)
             collapsed.Add(id);
+            XElement? rangeEnd = null, reference = null;
             foreach (var kind in new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference })
             {
                 // A view's own whole copy between blocks stays that view's (issues #1174, #1175).
                 var kinds = all.Where(m => m.Name == kind && !(keepBlockCopies && IsBlockLevelRevisionMarker(m))).ToList();
-                if (kinds.Count > 0 && CollapseToSurvivor(kinds) is { Changed: true })
-                    changed = true;
+                if (kinds.Count == 0) continue;
+                var survivor = CollapseToSurvivor(kinds);
+                changed |= survivor.Changed;
+                if (kind == W.commentRangeEnd) rangeEnd = survivor.Survivor;
+                if (kind == W.commentReference) reference = survivor.Survivor;
+            }
+            if (rangeEnd is not null && reference?.Parent is { } run && run.Name == W.r &&
+                rangeEnd.Ancestors(W.p).FirstOrDefault() is { } paragraph && reference.Ancestors(W.p).FirstOrDefault() == paragraph &&
+                XNode.CompareDocumentOrder(reference, rangeEnd) < 0 && InBothViews(reference) && InBothViews(rangeEnd))
+            {
+                // A shared range surrounds the inserted and deleted copies of the edited word.
+                // Its reference follows both copies. A reference run may contain other run content.
+                var referenceRun = IsolateReferenceRun(reference, state);
+                referenceRun.Remove();
+                rangeEnd.AddAfterSelf(referenceRun);
+                changed = true;
             }
         }
 
@@ -5288,8 +5351,12 @@ internal static partial class IrMarkupRenderer
     /// revision side (a right-added or left-deleted comment or bookmark whose marker landed in equal content). The <c>commentReference</c>'s
     /// host <c>w:r</c> is wrapped (a marker element is wrapped directly); both are valid children of
     /// <c>w:ins</c>/<c>w:del</c>.</summary>
-    private static void WrapMarkerInRevision(XElement marker, RevKind kind, RenderState state) =>
+    private static void WrapMarkerInRevision(XElement marker, RevKind kind, RenderState state)
+    {
+        if (marker.Name == W.commentReference && marker.Parent?.Name == W.r)
+            IsolateReferenceRun(marker, state);
         WrapMarkerInRevision(marker, kind, state.RevisionAttributes());
+    }
 
     /// <summary>As <see cref="WrapMarkerInRevision(XElement, RevKind, RenderState)"/>, with the revision element's
     /// attributes given; returns the new revision element, or null when the marker is detached.</summary>
@@ -5488,7 +5555,7 @@ internal static partial class IrMarkupRenderer
         IReadOnlyList<(int Reviewer, XElement Source, string Author)> reviewers, IrDocument baseIr, XElement? baseBlock,
         RenderState state, bool baseCopy = true)
     {
-        CarryReviewerComments(new[] { emitted }, reviewers.Select(r => r.Source), baseIr, baseBlock, state, originalView: true,
+        CarryReviewerComments(new[] { emitted }, reviewers.Select(r => (r.Reviewer, r.Source)), baseBlock, state, originalView: true,
             baseCopy);
         CarryReviewerOnlyBookmarks(emitted, reviewers, baseIr, state);
     }
@@ -5497,56 +5564,16 @@ internal static partial class IrMarkupRenderer
     /// base's copy of the block, <paramref name="baseBlock"/>, does not have them (issue #1812): a reviewer's own comment,
     /// or a reviewer's move of a base comment's marker. Only the body's: the merge brings in comment definitions for the
     /// body's references.</summary>
-    /// <remarks>
-    /// A comment of the base is never carried into another reviewer's edit (<paramref name="baseCopy"/> false): that
-    /// reviewer's copy already holds the base's comment where it keeps it, so a second reviewer's copy of the comment
-    /// elsewhere could only move it, or re-anchor it on text the second reviewer removed, and either would leave one
-    /// comment with two ranges. Into the base's own copy, a base comment is carried unless the reviewer only moved it
-    /// (<see cref="MovesABaseComment"/>).
-    /// </remarks>
-    internal static void CarryReviewerComments(IReadOnlyList<XElement> emitted, IEnumerable<XElement> sources,
-        IrDocument baseIr, XElement? baseBlock, RenderState state, bool originalView, bool baseCopy = false)
+    internal static void CarryReviewerComments(IReadOnlyList<XElement> emitted, IEnumerable<(int Reviewer, XElement Source)> sources,
+        XElement? baseBlock, RenderState state, bool originalView, bool baseCopy = false)
     {
-        var anchors = BaseCommentAnchors(baseIr, state);
-        foreach (var source in sources)
-            if (source.Ancestors(W.body).FirstOrDefault() is { } body)
+        foreach (var (reviewer, source) in sources)
+            if (source.Ancestors(W.body).Any())
+            {
+                var anchors = state.ReviewerComparisons?[reviewer].BaseCommentAnchors;
                 CarryMissingComments(emitted, source, baseBlock, originalView, textBoxes: false, state.NextId,
-                    baseCopy ? id => MovesABaseComment(id, body, anchors, state) : anchors.ContainsKey);
-    }
-
-    /// <summary>The texts of the base paragraphs that hold each base body comment's markers, read once (issue #1812).</summary>
-    private static Dictionary<string, HashSet<string>> BaseCommentAnchors(IrDocument baseIr, RenderState state)
-    {
-        if (state.BaseCommentAnchors is { } known)
-            return known;
-        static string Text(XElement paragraph) => string.Concat(paragraph.Descendants(W.t).Select(t => t.Value));
-        var anchors = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        if (baseIr.Body.Blocks.Select(b => b.Source.Element).FirstOrDefault(e => e is not null)?.Ancestors(W.body).FirstOrDefault() is { } baseBody)
-            foreach (var marker in baseBody.Descendants().Where(IsCommentMarker))
-                if ((string?)marker.Attribute(W.id) is { } id && marker.Ancestors(W.p).FirstOrDefault() is { } paragraph)
-                    (anchors.TryGetValue(id, out var texts) ? texts : anchors[id] = new HashSet<string>(StringComparer.Ordinal))
-                        .Add(Text(paragraph));
-        return state.BaseCommentAnchors = anchors;
-    }
-
-    /// <summary>
-    /// True when <paramref name="id"/> is a comment of the base whose anchor the reviewer whose body is
-    /// <paramref name="reviewerBody"/> kept: the reviewer still has, with its text unchanged, every base paragraph that
-    /// holds one of the comment's markers, a paragraph holding no text among them (issue #1812). Such a reviewer's copy
-    /// of the comment elsewhere only moves it,
-    /// and a reviewer's change to where a base comment sits is not carried. A reviewer who removed or rewrote some of
-    /// the comment's paragraphs, and anchored the comment on what remains, has it carried.
-    /// </summary>
-    private static bool MovesABaseComment(string id, XElement reviewerBody, Dictionary<string, HashSet<string>> baseAnchors,
-        RenderState state)
-    {
-        static string Text(XElement paragraph) => string.Concat(paragraph.Descendants(W.t).Select(t => t.Value));
-        if (!baseAnchors.TryGetValue(id, out var anchors))
-            return false;
-        state.ReviewerParagraphTexts ??= new Dictionary<XElement, HashSet<string>>();
-        if (!state.ReviewerParagraphTexts.TryGetValue(reviewerBody, out var kept))
-            state.ReviewerParagraphTexts[reviewerBody] = kept = reviewerBody.Descendants(W.p).Select(Text).ToHashSet(StringComparer.Ordinal);
-        return anchors.IsSubsetOf(kept);
+                    id => anchors is not null && anchors.TryGetValue(id, out bool kept) && (!baseCopy || kept));
+            }
     }
 
     internal static void CarryReviewerOnlyBookmarks(XElement emitted,
@@ -11832,6 +11859,9 @@ internal static partial class IrMarkupRenderer
         /// named move range.</summary>
         public bool IsComposite { get; init; }
 
+        public IrCommentAttachments? CommentAttachments { get; init; }
+        public string? AttachmentAuthor { get; init; }
+
         /// <summary>The document the CURRENTLY-emitting op draws inserted/modified ("right-side") block elements
         /// and token text from. In a two-way render this is always <see cref="Right"/> (set once in the ctor and
         /// never reassigned), so behavior is byte-identical to before this field existed. The composite renderer
@@ -11884,11 +11914,8 @@ internal static partial class IrMarkupRenderer
         /// <summary>The base document's bookmark names, for <see cref="CarryReviewerOnlyBookmarks"/>.</summary>
         public HashSet<string>? BaseBookmarkNames { get; set; }
 
-        /// <summary>The texts of the base paragraphs that hold each base comment's markers (issue #1812).</summary>
-        public Dictionary<string, HashSet<string>>? BaseCommentAnchors { get; set; }
-
-        /// <summary>Each reviewer body's paragraph texts, read once per body (issue #1812).</summary>
-        public Dictionary<XElement, HashSet<string>>? ReviewerParagraphTexts { get; set; }
+        /// <summary>Per-reviewer paragraph alignment and base comment ownership, supplied by the merger.</summary>
+        internal IrNodeList<IrReviewerComparison>? ReviewerComparisons { get; init; }
 
         public CompositeBookmarkPlan? CompositeBookmarks { get; set; }
 
