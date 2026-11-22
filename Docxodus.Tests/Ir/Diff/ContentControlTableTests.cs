@@ -511,6 +511,56 @@ public class ContentControlTableTests
     private const string BookmarkControl = "<w:sdt><w:sdtPr><w:id w:val=\"5\"/></w:sdtPr><w:sdtContent>" +
         "<w:bookmarkStart w:id=\"3\" w:name=\"Ledger\"/><w:bookmarkEnd w:id=\"3\"/></w:sdtContent></w:sdt>";
 
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public void An_edit_and_a_prepended_row_keep_their_own_cells(bool controlled, bool reverse)
+    {
+        WmlDocument Form(params string[] rows) => controlled ? Table(Control(9, rows)) : Table(rows);
+        var original = Form(Row("Crane", "Hook"));
+        var inserts = Form(Row("Crane", "New equipment"), Row("Crane", "Hook spare"));
+        var edits = Form(Row("Crane arm", "Hook"));
+        var expected = Form(Row("Crane", "New equipment"), Row("Crane arm", "Hook spare"));
+        AssertRedline(original, inserts, DocxCompare.Compare(original, inserts));
+        AssertComposed(original, inserts, edits, expected, reverse);
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public void New_row_controls_keep_their_sides_of_a_shared_empty_control(bool bothInsert, bool reverse)
+    {
+        string first = Row("Dock", "West"), last = Row("Crane", "East"), separator = Control(5);
+        string before = Control(9, Row("Barge", "Rope")), after = Control(10, Row("Mast", "Sail"));
+        var original = Table(first, separator, last);
+        var left = Table(first, before, separator, last);
+        var right = bothInsert ? Table(first, separator, after, last) : Table(first, separator, Row("Crane arm", "East"));
+        var expected = bothInsert ? Table(first, before, separator, after, last)
+            : Table(first, before, separator, Row("Crane arm", "East"));
+        AssertComposed(original, left, right, expected, reverse);
+    }
+
+    private static void AssertComposed(WmlDocument original, WmlDocument a, WmlDocument b, WmlDocument expected, bool reverse)
+    {
+        var reviewers = reverse ? Reviewers(b, a) : Reviewers(a, b);
+        foreach (var policy in Policies)
+        {
+            var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+            var merged = DocxCompare.Consolidate(original, reviewers, settings);
+            var accepted = RevisionProcessor.AcceptRevisions(merged);
+            var rejected = RevisionProcessor.RejectRevisions(merged);
+            Assert.Empty(DocxDiff.GetConflicts(original, reviewers, settings));
+            Assert.NotEmpty(DocxDiff.GetConsolidatedRevisions(original, reviewers, settings));
+            Assert.Equal(EmptyControlLayout(expected), EmptyControlLayout(accepted));
+            Assert.Equal(EmptyControlLayout(original), EmptyControlLayout(rejected));
+            AssertValid(merged, accepted, rejected);
+        }
+    }
+
     private static string CellLessRow(string label, string text) =>
         "<w:tr>" + Cell(P(label)) + "<w:sdt><w:sdtPr><w:id w:val=\"8\"/></w:sdtPr><w:sdtContent/></w:sdt>" + Cell(P(text)) + "</w:tr>";
 

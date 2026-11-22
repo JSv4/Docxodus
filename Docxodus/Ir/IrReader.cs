@@ -2862,6 +2862,7 @@ internal static class IrReader
         var order = ReadTableOrder(tbl, W + "tr", ctx, out var sourceRows);
         var controlsBefore = EmptyControlDigests(order);
         List<string>? instances = null;
+        int precedingEmptyControls = 0;
         foreach (var tr in sourceRows)
         {
             var (row, cellFingerprintsForRow) = BuildRow(tr, ctx);
@@ -2869,8 +2870,10 @@ internal static class IrReader
             bool fromSdt = tr.Parent != tbl;
             var rowControls = RowControlDigest(order, index, row.ChildOrder);
             var before = controlsBefore?.GetValueOrDefault(index) ?? default;
-            if (fromSdt || rowControls != default || before != default)
-                row = row with { FromTableSdt = fromSdt, ControlDigest = rowControls, ControlsBeforeDigest = before };
+            precedingEmptyControls += before.TopLevelCount;
+            if (fromSdt || rowControls != default || before.Digest != default || precedingEmptyControls != 0)
+                row = row with { FromTableSdt = fromSdt, ControlDigest = rowControls, ControlsBeforeDigest = before.Digest,
+                    PrecedingEmptyControls = precedingEmptyControls };
             if (fromSdt)
                 (instances ??= Enumerable.Repeat("", index).ToList()).Add(string.Join(",",
                     order!.EnclosingControls(index).Select(c => c.Sibling)));
@@ -2907,7 +2910,7 @@ internal static class IrReader
             fpBuilder.AppendHash(fp);
         var formatFingerprint = fpBuilder.Build();
 
-        var trailingControls = controlsBefore?.GetValueOrDefault(rows.Count) ?? default;
+        var trailingControls = controlsBefore?.GetValueOrDefault(rows.Count).Digest ?? default;
         IrHash controlDigest = default;
         if (tbl.Element(W + "sdt") is not null || rows.Any(r => r.ControlDigest != default))
         {
@@ -3044,16 +3047,18 @@ internal static class IrReader
         return new IrTableOrder(IrNodeList.From(entries), IrNodeList.From(memberEntries), summary);
     }
 
-    private static Dictionary<int, IrHash>? EmptyControlDigests(IrTableOrder? order)
+    private static Dictionary<int, (IrHash Digest, int TopLevelCount)>? EmptyControlDigests(IrTableOrder? order)
     {
         if (order is null)
             return null;
-        Dictionary<int, IrHash>? boundaries = null;
+        Dictionary<int, (IrHash, int)>? boundaries = null;
         foreach (var group in order.EmptyControls.GroupBy(c => c.FirstMember))
         {
             var builder = new IrContentHashBuilder();
+            int topLevelCount = 0;
             foreach (var control in group)
             {
+                if (control.Parent < 0) topLevelCount++;
                 foreach (var parent in order.EnclosingControls(control).Reverse())
                 {
                     builder.AppendStructure(IrContentHashBuilder.StructureSdt);
@@ -3061,7 +3066,7 @@ internal static class IrReader
                 }
                 builder.AppendHash(control.Digest);
             }
-            (boundaries ??= new())[group.Key] = builder.Build();
+            (boundaries ??= new())[group.Key] = (builder.Build(), topLevelCount);
         }
         return boundaries;
     }
