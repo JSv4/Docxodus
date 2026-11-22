@@ -116,40 +116,11 @@ internal static class IrTableDiffer
 
         // --- Emit row ops in right order with left-anchored deletion interleave (+ a move group id pass).
         var rowOps = EmitRowOps(leftRows, rightRows, leftKind, rightKind, leftMatch, rightMatch, settings);
-        return new IrTableDiff(IrNodeList.From(rowOps), ReplaceWhole: !ControlsStayInPlace(left, right, rowOps));
-    }
-
-    /// <summary>
-    /// Whether the redline can draw <paramref name="rowOps"/> with each table's content controls rebuilt around its
-    /// rows and cells (issue #1810); otherwise the table is replaced whole, on every surface. The controls among the
-    /// rows, and among the cells of each edited row, must be rebuildable (<see cref="ControlsDrawable"/>), and each
-    /// control that delivers no row must have a place that is right in both views (<see cref="ControlsInPlace"/>).
-    /// </summary>
-    private static bool ControlsStayInPlace(IrTable left, IrTable right, List<IrRowOp> rowOps)
-    {
+        var diff = new IrTableDiff(IrNodeList.From(rowOps));
         if (left.ControlDigest == default && right.ControlDigest == default)
-            return true;
-        if (!ControlsDrawable(left.Controls, right.Controls))
-            return false;
-        // Every product of a comparison reads the documents with their XML: ask the redline's own planner, which also
-        // picks the order the rows are drawn in. A read without it keeps the checks below.
-        IReadOnlyList<IrRowOp> drawn = rowOps;
-        if (left.Source.Element is { } leftTbl && right.Source.Element is { } rightTbl)
-        {
-            if (IrMarkupRenderer.PlanTableControls(rowOps, leftTbl, rightTbl,
-                    IrMarkupRenderer.IndexRows(left), IrMarkupRenderer.IndexRows(right)) is not { } plan)
-                return false;
-            drawn = plan.RowOps;
-        }
-        if (ControlsInPlace(left, right, drawn) is null)
-            return false;
-        Dictionary<string, IrRow>? leftByAnchor = null, rightByAnchor = null;
-        foreach (var op in rowOps)
-            if (op.Kind == IrRowOpKind.ModifyRow && op.LeftRowAnchor is { } la && op.RightRowAnchor is { } ra &&
-                Row(left, la, ref leftByAnchor) is { } l && Row(right, ra, ref rightByAnchor) is { } r &&
-                !ControlsDrawable(l.Controls, r.Controls))
-                return false;
-        return true;
+            return diff;
+        var plan = IrTableControlPlanner.Plan(left, right, rowOps);
+        return diff with { ControlPlan = plan, ReplaceWhole = plan is null };
     }
 
     /// <summary>
@@ -215,16 +186,6 @@ internal static class IrTableDiffer
         return result;
     }
 
-    private static IrRow? Row(IrTable table, string anchor, ref Dictionary<string, IrRow>? index)
-    {
-        if (index is null)
-        {
-            index = new Dictionary<string, IrRow>(StringComparer.Ordinal);
-            foreach (var row in table.Rows)
-                index.TryAdd(row.Anchor.ToString(), row);
-        }
-        return index.GetValueOrDefault(anchor);
-    }
 
     // ------------------------------------------------------------------ row anchoring / spine
 
