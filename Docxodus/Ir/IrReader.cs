@@ -3053,7 +3053,14 @@ internal static class IrReader
         {
             var builder = new IrContentHashBuilder();
             foreach (var control in group)
+            {
+                foreach (var parent in order.EnclosingControls(control).Reverse())
+                {
+                    builder.AppendStructure(IrContentHashBuilder.StructureSdt);
+                    builder.AppendHash(parent.Digest);
+                }
                 builder.AppendHash(control.Digest);
+            }
             (boundaries ??= new())[group.Key] = builder.Build();
         }
         return boundaries;
