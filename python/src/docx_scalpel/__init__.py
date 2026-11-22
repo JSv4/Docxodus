@@ -289,6 +289,10 @@ from .types import (
     TableMetadataResult,
     TableRowMetadata,
     TableRowOptions,
+    TableCellMargins,
+    TablePropertiesOp,
+    CellPropertiesOp,
+    TablePropertiesInfo,
 )
 
 try:
@@ -496,6 +500,10 @@ __all__ = [
     "TableMetadataResult",
     "TableRowMetadata",
     "TableRowOptions",
+    "TableCellMargins",
+    "TablePropertiesOp",
+    "CellPropertiesOp",
+    "TablePropertiesInfo",
     "DocxDiffSettings",
     "DocxDiffBatchResult",
     "DocxDiffProducts",

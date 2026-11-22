@@ -517,6 +517,22 @@ public static partial class DocxSessionBridge
     public static string SetRepeatHeaderRow(int h, string cellAnchor, bool? repeat) =>
         DocxSessionOps.SetRepeatHeaderRow(h, cellAnchor, repeat);
 
+    /// <summary>Table Properties (width, alignment, indent, default cell margins, alt text);
+    /// <paramref name="opJson"/> is a TablePropertiesOp object.</summary>
+    [JSExport]
+    public static string SetTableProperties(int h, string cellAnchor, string opJson) =>
+        DocxSessionOps.SetTableProperties(h, cellAnchor, opJson);
+
+    /// <summary>Cell properties (vertical alignment) on a cell, its row, column or table.</summary>
+    [JSExport]
+    public static string SetCellProperties(int h, string cellAnchor, string opJson, string scope) =>
+        DocxSessionOps.SetCellProperties(h, cellAnchor, opJson, scope);
+
+    /// <summary>The Table Properties dialog's values for a cell's table, row and cell, or "null".</summary>
+    [JSExport]
+    public static string GetTableProperties(int h, string cellAnchor) =>
+        DocxSessionOps.GetTableProperties(h, cellAnchor);
+
     [JSExport]
     public static string SetTableRowOptions(int h, string cellAnchor, bool? repeatHeader,
         bool? allowBreakAcrossPages, int? heightTwips, string heightRule) =>
