@@ -207,6 +207,21 @@ public class DocxSessionUpdateFieldsTests
     }
 
     [Fact]
+    public void UF008_ARangeInAContentsEntry_RebuildsTheTable()
+    {
+        var (session, headings) = WithContents();
+        using var _s = session;
+        Assert.True(session.UpdateFields().Success);
+        var entry = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p" && session.Raw.GetXml(t.Anchor.Id).Contains("TOC1")).Anchor.Id;
+        Assert.True(session.ReplaceTextAtSpan(headings[0], 0, 1, "Z").Success);
+        var result = session.UpdateFields(new UpdateFieldsOptions { Range = DocumentRange.In(entry, new CharSpan(1, 0)) });
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Contains(Body(session).Descendants(W + "p"),
+            p => (string?)p.Element(W + "pPr")?.Element(W + "pStyle")?.Attribute(W + "val") == "TOC1" && Text(p).StartsWith("Z", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void UF006_RefusedWhileChangesAreTracked()
     {
         using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(),

@@ -60,10 +60,17 @@ public sealed partial class DocxSession
         HashSet<XElement>? inRange = null;
         if (o.Range is { } range)
         {
-            var ends = ValidateDocumentRange(range);
-            if (ends.Error is not null) return ends.Error;
+            // (only the range's paragraphs matter, so not ValidateDocumentRange: a bookmark's rules
+            // refuse a paragraph holding a field's fldChar, which is every contents entry)
+            // (a block holding paragraphs, a content control or a table, stands for its first and last)
+            var startBlock = FindAnchor(range.StartAnchorId)?.Resolve(_doc!);
+            var endBlock = FindAnchor(range.EndAnchorId)?.Resolve(_doc!);
+            var startParagraph = startBlock?.Name == W.p ? startBlock : startBlock?.Descendants(W.p).FirstOrDefault();
+            var endParagraph = endBlock?.Name == W.p ? endBlock : endBlock?.Descendants(W.p).LastOrDefault();
+            if (startParagraph is null || endParagraph is null)
+                return EditResult.Fail(EditErrorCode.AnchorNotFound, "range endpoint not found", range.StartAnchorId);
             var all = body.Descendants(W.p).ToList();
-            int first = all.IndexOf(ends.StartParagraph), last = all.IndexOf(ends.EndParagraph);
+            int first = all.IndexOf(startParagraph), last = all.IndexOf(endParagraph);
             if (first < 0 || last < first)
                 return EditResult.Fail(EditErrorCode.AnchorWrongKind, "UpdateFields takes a range in the body");
             inRange = new HashSet<XElement>(all.Skip(first).Take(last - first + 1));
