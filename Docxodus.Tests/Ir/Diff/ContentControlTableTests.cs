@@ -934,26 +934,37 @@ public class ContentControlTableTests
             }
     }
 
-    [Fact]
-    public void A_bookmark_reviewer_beside_a_row_whose_cell_controls_cannot_be_rebuilt_leaves_the_controls_whole()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void An_annotation_only_row_keeps_its_cell_structure_and_bookmark(bool controlled)
     {
-        // The row's cell sits in a control and the row also holds a bookmark among its cells, so a composed row could
-        // not rebuild the control. The merge does not compose the table: the editor's change is drawn on its own, with
-        // every control kept in both views (issue #1810 review); the bookmark-only reviewer's bookmark is not carried.
-        string MarkedRow(string cell) => "<w:tr><w:bookmarkStart w:id=\"1\" w:name=\"Row\"/>" + Cell(P("Crane")) +
-            Control(12, Cell(cell)) + "<w:bookmarkEnd w:id=\"1\"/></w:tr>";
+        string MarkedRow(string cell) => "<w:tr><w:bookmarkStart w:id='1' w:name='Row'/>" + Cell(P("Crane")) +
+            (controlled ? Control(12, Cell(cell)) : Cell(cell)) + "<w:bookmarkEnd w:id='1'/></w:tr>";
+        string marked = "<w:p><w:bookmarkStart w:id='4' w:name='Hook'/><w:r><w:t>Hook two</w:t></w:r><w:bookmarkEnd w:id='4'/></w:p>";
         var original = Table(Row("Dock", "Berth one"), MarkedRow(P("Hook two")));
         var editor = Table(Row("Dock", "Berth one, north"), MarkedRow(P("Hook two")));
-        var marker = Table(Row("Dock", "Berth one"),
-            MarkedRow("<w:p><w:bookmarkStart w:id=\"4\" w:name=\"Hook\"/><w:r><w:t>Hook two</w:t></w:r><w:bookmarkEnd w:id=\"4\"/></w:p>"));
+        var marker = Table(Row("Dock", "Berth one"), MarkedRow(marked));
+        var expected = Table(Row("Dock", "Berth one, north"), MarkedRow(marked));
         foreach (var policy in Policies)
             foreach (var reviewers in new[] { Reviewers(editor, marker), Reviewers(marker, editor) })
             {
                 var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
                 var merged = DocxCompare.Consolidate(original, reviewers, settings);
                 var (accepted, rejected) = (RevisionProcessor.AcceptRevisions(merged), RevisionProcessor.RejectRevisions(merged));
-                Assert.Equal(Layout(editor), Layout(accepted));
+                Assert.Equal(Layout(expected), Layout(accepted));
                 Assert.Equal(Layout(original), Layout(rejected));
+                foreach (var doc in new[] { merged, accepted })
+                {
+                    var row = Body(doc).Descendants(W + "tr").Last();
+                    var start = Assert.Single(row.Descendants(W + "bookmarkStart"), e => (string?)e.Attribute(W + "name") == "Hook");
+                    Assert.Equal("Hook two", start.Ancestors(W + "p").First().Value);
+                    Assert.Equal(controlled, start.Ancestors(W + "sdt").Any());
+                    Assert.Single(row.Elements(W + "bookmarkStart"), e => (string?)e.Attribute(W + "name") == "Row");
+                }
+                Assert.DoesNotContain(Body(rejected).Descendants(W + "bookmarkStart"), e => (string?)e.Attribute(W + "name") == "Hook");
+                Assert.Empty(DocxDiff.GetConflicts(original, reviewers, settings));
+                Assert.DoesNotContain(DocxDiff.GetConsolidatedRevisions(original, reviewers, settings), r => r.Text.Contains("Hook"));
                 AssertValid(merged, accepted, rejected);
             }
     }

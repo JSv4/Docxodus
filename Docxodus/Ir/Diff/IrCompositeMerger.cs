@@ -2378,19 +2378,19 @@ internal static class IrCompositeMerger
         var touched = byBaseRow.TryGetValue(rowAnchor, out var entries)
             ? entries.Where(e => e.Op.Kind != IrRowOpKind.EqualRow).ToList()
             : new List<(int Reviewer, string Author, IrRowOp Op)>();
-        // The reviewers who left the row equal pair its cells by position; one whose markers between a cell's
-        // blocks differ from the base's has them placed in that cell (issue #1175).
-        var equalRowCells = EqualRowCellPairs(baseRow, entries, reviewers);
-
         if (touched.Count == 0)
         {
-            // Untouched (every reviewer Equal / absent) → base row verbatim, its cells reconciled against the
-            // copies whose markers differ when there are any.
+            // Preserve the entire row, including controls and opaque children between cells. Its paired
+            // copies supply marker changes without requiring a structural cell edit.
             mergedRowOps.Add(new IrRowOp(IrRowOpKind.EqualRow, rowAnchor, rowAnchor, null));
-            var passthrough = baseRow.Cells.Select(c => new IrAuthoredCellOp(c.Anchor.ToString(), null)).ToList();
-            authoredRows.Add(WithEqualRowReviewerCells(passthrough, equalRowCells, reviewers, baseIr) is { } marked
-                ? new IrAuthoredRowOp(IrRowOpKind.ModifyRow, rowAnchor, -1, "", IrNodeList.From(marked))
-                : new IrAuthoredRowOp(IrRowOpKind.EqualRow, rowAnchor, -1, "", null));
+            List<IrEqualReviewerMarkers>? markers = null;
+            if (entries is not null)
+                foreach (var (reviewer, author, pair) in entries)
+                    if (pair.RightRowAnchor is { } right && RowIndex(reviewers[reviewer].Ir).TryGetValue(right, out var row) &&
+                        IrMarkupRenderer.CompositeMarkersDiffer(baseRow.Source.Element, row.Source.Element))
+                        (markers ??= new()).Add(new IrEqualReviewerMarkers(reviewer, right, author));
+            authoredRows.Add(new IrAuthoredRowOp(IrRowOpKind.EqualRow, rowAnchor, -1, "", null,
+                EqualReviewerMarkers: markers is null ? null : IrNodeList.From(markers)));
             return;
         }
 
@@ -2441,6 +2441,7 @@ internal static class IrCompositeMerger
             return;
         }
 
+        var equalRowCells = EqualRowCellPairs(baseRow, entries, reviewers);
         // 1 ModifyRow → that reviewer's cells, authored (single-source row).
         if (modifiers.Count == 1)
         {

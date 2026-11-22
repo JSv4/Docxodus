@@ -2791,6 +2791,15 @@ internal static partial class IrMarkupRenderer
                         // and stamp the row-level marker; otherwise it is the base row verbatim.
                         var newRow = StripUnids(new XElement(src));
                         ApplyComposedRowShell(newRow, src, rowOp, reviewerIrs, state);
+                        if (rowOp.EqualReviewerMarkers is { } markers)
+                        {
+                            var counterparts = new List<(int Reviewer, XElement Counterpart)>();
+                            foreach (var marker in markers)
+                                if (FindRowSource(reviewerIrs[marker.Reviewer], marker.Anchor) is { } counterpart)
+                                    counterparts.Add((marker.Reviewer, counterpart));
+                            ReconcileCompositeEqualContainerMarkers(newRow, src, counterparts,
+                                IrCompositeMarkupRenderer.AuthorsByReviewer(markers, reviewerIrs.Count), state);
+                        }
                         newTbl.Add(newRow);
                     }
                     break;
