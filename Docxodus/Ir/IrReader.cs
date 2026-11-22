@@ -689,6 +689,22 @@ internal static class IrReader
             yield return main.WordprocessingCommentsPart;
     }
 
+    /// <summary>Resolve an end marker through its start in the same source part.</summary>
+    internal static string BookmarkEndName(XElement marker)
+    {
+        var id = (string?)marker.Attribute(W + "id") ?? string.Empty;
+        var names = marker.Document is { } document
+            ? BookmarkNamesById.GetValue(document, d => d.Descendants(W + "bookmarkStart")
+                .Where(s => s.Attribute(W + "id") is not null && s.Attribute(W + "name") is not null)
+                .GroupBy(s => (string)s.Attribute(W + "id")!)
+                .ToDictionary(g => g.Key, g => (string)g.First().Attribute(W + "name")!, StringComparer.Ordinal))
+            : null;
+        return names?.GetValueOrDefault(id) ?? "#" + id;
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<XDocument, Dictionary<string, string>>
+        BookmarkNamesById = new();
+
     // --- block dispatch ---------------------------------------------------
 
     /// <summary>

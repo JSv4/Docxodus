@@ -89,6 +89,9 @@ internal enum RevisionGranularity
 /// </remarks>
 internal sealed record IrDiffSettings
 {
+    /// <summary>Keep the membership of a whole-replacement split until reviewer contributions have been resolved.</summary>
+    internal bool KeepSplitContributions { get; init; }
+
     /// <summary>
     /// DIFF-TIME setting. How formatting is compared at both the token level (the differ's
     /// FormatChanged post-pass) and the block level (the aligner's FormatOnly classification). Default

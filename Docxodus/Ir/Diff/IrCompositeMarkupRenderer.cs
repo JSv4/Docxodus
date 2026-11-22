@@ -104,11 +104,13 @@ internal static class IrCompositeMarkupRenderer
         state.IndexEditedMoves(script.Operations.Select(o => o.Op));
         for (int i = 0; i < script.Operations.Count; i++)
         {
-            if (bodyMarkers?.GetValueOrDefault(i) is { } before)
+            if (bodyMarkers?.Before(i) is { } before)
                 bodyBlocks.AddRange(before);
+            int firstOutput = bodyBlocks.Count;
             EmitCompositeOp(script.Operations[i], baseIr, reviewerIrs, state, bodyBlocks);
+            bodyMarkers?.PlaceInside(i, firstOutput, bodyBlocks);
         }
-        if (bodyMarkers?.GetValueOrDefault(script.Operations.Count) is { } trailing)
+        if (bodyMarkers?.Before(script.Operations.Count) is { } trailing)
             bodyBlocks.AddRange(trailing);
 
         // SimplifyMoveMarkup post-pass (mirrors the two-way renderer): rewrite native move markup to del/ins.
@@ -553,11 +555,13 @@ internal static class IrCompositeMarkupRenderer
             var noteBlocks = new List<XElement>();
             for (int i = 0; i < diff.Ops.Count; i++)
             {
-                if (noteMarkers?.GetValueOrDefault(i) is { } before)
+                if (noteMarkers?.Before(i) is { } before)
                     noteBlocks.AddRange(before);
+                int firstOutput = noteBlocks.Count;
                 RenderOneCompositeBlock(diff.Ops[i], baseIr, reviewerIrs, state, noteBlocks);
+                noteMarkers?.PlaceInside(i, firstOutput, noteBlocks);
             }
-            if (noteMarkers?.GetValueOrDefault(diff.Ops.Count) is { } trailing)
+            if (noteMarkers?.Before(diff.Ops.Count) is { } trailing)
                 noteBlocks.AddRange(trailing);
             if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
                 foreach (var b in noteBlocks)

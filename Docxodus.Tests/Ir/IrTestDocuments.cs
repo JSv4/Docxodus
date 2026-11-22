@@ -430,7 +430,7 @@ internal static class IrTestDocuments
     /// by the diff fuzzer's footnote-edit mutation: the body XML is supplied verbatim, the footnote ref is
     /// appended in its own trailing paragraph so it does not perturb the body paragraphs the fuzzer mutates.
     /// </summary>
-    internal static WmlDocument FromBodyXmlWithFootnote(string bodyInnerXml, string footnoteText)
+    internal static WmlDocument FromBodyXmlWithFootnote(string bodyInnerXml, string footnoteText, bool appendReference = true)
     {
         using var ms = new MemoryStream();
         using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
@@ -449,7 +449,7 @@ internal static class IrTestDocuments
 
             var documentXml =
                 $"<w:document xmlns:w=\"{W}\"><w:body>{bodyInnerXml}" +
-                "<w:p><w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p>" +
+                (appendReference ? "<w:p><w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p>" : "") +
                 "</w:body></w:document>";
             WritePartXml(main, documentXml);
         }

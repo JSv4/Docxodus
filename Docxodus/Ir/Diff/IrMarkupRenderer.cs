@@ -3106,15 +3106,17 @@ internal static partial class IrMarkupRenderer
                 state.IndexEditedMoves(blockOps.Select(block => block.Op));
                 for (int b = 0; b < blockOps.Count; b++)
                 {
-                    if (cellMarkers?.GetValueOrDefault(b) is { } before)
+                    if (cellMarkers?.Before(b) is { } before)
                         cellSink.AddRange(before);
                     var block = blockOps[b];
                     if (equalMarkers?[block.Op.LeftAnchor].ToList() is { Count: > 0 } markers)
                         block = block with { EqualReviewerMarkers = IrNodeList.From(
                             (block.EqualReviewerMarkers ?? IrNodeList.Empty<IrEqualReviewerMarkers>()).Concat(markers)) };
+                    int firstOutput = cellSink.Count;
                     renderOneCompositeBlock(block, baseIr, reviewerIrs, state, cellSink);
+                    cellMarkers?.PlaceInside(b, firstOutput, cellSink);
                 }
-                if (cellMarkers?.GetValueOrDefault(blockOps.Count) is { } trailing)
+                if (cellMarkers?.Before(blockOps.Count) is { } trailing)
                     cellSink.AddRange(trailing);
                 if (!cellSink.Any(IsBlockContent))
                 {

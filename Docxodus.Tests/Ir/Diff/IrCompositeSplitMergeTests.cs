@@ -193,21 +193,28 @@ public class IrCompositeSplitMergeTests
         var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
 
         Assert.Contains("\"kind\": \"SplitBlock\"", DocxDiff.GetEditScriptJson(baseDoc, splitter.Document));
+        var results = editorFirst ? new[] { edited, split } : new[] { split, edited };
+        AssertSplitConflict(baseDoc, reviewers, settings, original, results, "End.");
+    }
+
+    private static void AssertSplitConflict(WmlDocument baseDoc, DocxDiffReviewer[] reviewers,
+        DocxDiffConsolidateSettings settings, string original, string[] results, string tail)
+    {
+        var policy = settings.ConflictResolution;
         var marked = DocxCompare.Consolidate(baseDoc, reviewers, settings);
         var accepted = RevisionProcessor.AcceptRevisions(marked);
         var rejected = RevisionProcessor.RejectRevisions(marked);
         foreach (var doc in new[] { marked, accepted, rejected })
             PackageValidation.AssertValid(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
 
-        var results = editorFirst ? new[] { edited, split } : new[] { split, edited };
         string expected = policy switch
         {
             ConflictResolution.BaseWins => original,
             ConflictResolution.FirstReviewerWins => results[0],
             _ => string.Join("\n", results),
         };
-        Assert.Equal(original + "\nEnd.", Docs.PlainText(rejected));
-        Assert.Equal(expected + "\nEnd.", Docs.PlainText(accepted));
+        Assert.Equal(original + "\n" + tail, Docs.PlainText(rejected));
+        Assert.Equal(expected + "\n" + tail, Docs.PlainText(accepted));
         var conflict = Assert.Single(DocxDiff.GetConflicts(baseDoc, reviewers, settings));
         Assert.Equal(policy, conflict.AppliedPolicy);
         Assert.Equal(reviewers.Select(r => r.Author), conflict.Competitors.Select(c => c.Author));
@@ -279,6 +286,101 @@ public class IrCompositeSplitMergeTests
         Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
         Assert.Equal(Docs.PlainText(result), Docs.PlainText(RevisionProcessor.AcceptRevisions(marked)));
         Assert.Equal(Docs.PlainText(original), Docs.PlainText(RevisionProcessor.RejectRevisions(marked)));
+    }
+
+    private static string TextRun(string text) => $"<w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r>";
+    private static string Paragraph(string content, string attributes = "") => $"<w:p {attributes}>{content}</w:p>";
+
+    [Theory]
+    [InlineData(ConflictResolution.BaseWins, false)]
+    [InlineData(ConflictResolution.BaseWins, true)]
+    [InlineData(ConflictResolution.FirstReviewerWins, false)]
+    [InlineData(ConflictResolution.FirstReviewerWins, true)]
+    [InlineData(ConflictResolution.StackAll, false)]
+    [InlineData(ConflictResolution.StackAll, true)]
+    public void A_whole_block_split_with_an_inline_control_competes_as_one_result(ConflictResolution policy, bool editorFirst)
+    {
+        static string Control(string text) =>
+            "<w:sdt><w:sdtPr><w:tag w:val=\"A\"/></w:sdtPr><w:sdtContent>" + TextRun(text) + "</w:sdtContent></w:sdt>";
+        string tail = Paragraph(TextRun(Anchor));
+        var original = IrTestDocuments.FromBodyXml(Paragraph(Control(SplitA) + TextRun(SplitB)) + tail);
+        var split = IrTestDocuments.FromBodyXml(Paragraph(Control(SplitA)) + Paragraph(TextRun(SplitB)) + tail);
+        var edit = IrTestDocuments.FromBodyXml(Paragraph(Control(SplitA) + TextRun("eee fff altered hhh.")) + tail);
+        var splitter = new DocxDiffReviewer { Author = "Splitter", Document = split };
+        var editor = new DocxDiffReviewer { Author = "Editor", Document = edit };
+        var reviewers = editorFirst ? new[] { editor, splitter } : new[] { splitter, editor };
+        var results = reviewers.Select(r => string.Join("\n", Docs.PlainText(r.Document).Split('\n').SkipLast(1))).ToArray();
+        AssertSplitConflict(original, reviewers, new DocxDiffConsolidateSettings { ConflictResolution = policy },
+            SplitSrc, results, Anchor);
+    }
+
+    [Fact]
+    public void A_split_consensus_ignores_Word_save_identifiers()
+    {
+        WmlDocument Saved(string id) => IrTestDocuments.FromBodyXml(Paragraph(TextRun(SplitA),
+            $"xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"{id}\" w14:textId=\"{id}\"")
+            + Paragraph(TextRun(SplitB)) + Paragraph(TextRun(Anchor)));
+        var original = Docs.Para(SplitSrc, Anchor);
+        var reviewers = new[] { new DocxDiffReviewer { Author = "A", Document = Saved("12345678") },
+            new DocxDiffReviewer { Author = "B", Document = Saved("23456789") } };
+        Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
+        Assert.Equal(Docs.PlainText(reviewers[0].Document),
+            Docs.PlainText(RevisionProcessor.AcceptRevisions(DocxCompare.Consolidate(original, reviewers))));
+    }
+
+    [Fact]
+    public void A_winning_split_keeps_a_block_bookmark_between_its_members()
+    {
+        var original = Docs.Para(SplitSrc, Anchor);
+        var split = IrTestDocuments.FromBodyXml(Paragraph(TextRun(SplitA)) + "<w:bookmarkStart w:id=\"1\" w:name=\"Range\"/>"
+            + Paragraph(TextRun(SplitB)) + "<w:bookmarkEnd w:id=\"1\"/>" + Paragraph(TextRun(Anchor)));
+        var reviewers = new[] { new DocxDiffReviewer { Author = "A", Document = split },
+            new DocxDiffReviewer { Author = "B", Document = Docs.Para(SplitSrc.Replace("bbb", "BBB"), Anchor) } };
+        var marked = DocxCompare.Consolidate(original, reviewers, new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.FirstReviewerWins });
+        var accepted = XDocument.Parse(Docs.MainPartXml(RevisionProcessor.AcceptRevisions(marked)));
+        XNamespace w = IrTestDocuments.W;
+        Assert.Equal(new[] { "p", "bookmarkStart", "p", "bookmarkEnd", "p" },
+            accepted.Descendants(w + "body").Single().Elements().Where(e => e.Name != w + "sectPr").Select(e => e.Name.LocalName));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_split_consensus_accounts_for_the_referenced_note(bool sameNote)
+    {
+        var original = Docs.Para(SplitSrc, Anchor);
+        string body = Paragraph(TextRun(SplitA)) + Paragraph(TextRun(SplitB) + "<w:r><w:footnoteReference w:id=\"1\"/></w:r>") + Paragraph(TextRun(Anchor));
+        var reviewers = new[] { new DocxDiffReviewer { Author = "A", Document = IrTestDocuments.FromBodyXmlWithFootnote(body, "First note.", false) },
+            new DocxDiffReviewer { Author = "B", Document = IrTestDocuments.FromBodyXmlWithFootnote(body, sameNote ? "First note." : "Second note.", false) } };
+        Assert.Equal(!sameNote, DocxDiff.GetConflicts(original, reviewers).Any(c => c.Competitors.Any(v => v.ResultText.Contains("eee"))));
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.StackAll };
+        var marked = DocxCompare.Consolidate(original, reviewers, settings);
+        string[] ReferencedNotes(WmlDocument doc)
+        {
+            using var stream = new System.IO.MemoryStream(doc.DocumentByteArray);
+            using var package = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, false);
+            var main = package.MainDocumentPart!;
+            var definitions = main.FootnotesPart?.GetXDocument().Root?.Elements(W.footnote)
+                .ToDictionary(n => (string)n.Attribute(W.id)!, n => string.Concat(n.Descendants(W.t).Select(t => t.Value)));
+            return main.GetXDocument().Descendants(W.footnoteReference).Select(r => definitions![(string)r.Attribute(W.id)!]).ToArray();
+        }
+        Assert.Empty(ReferencedNotes(RevisionProcessor.RejectRevisions(marked)));
+        Assert.Equal(sameNote ? new[] { "First note." } : new[] { "First note.", "Second note." },
+            ReferencedNotes(RevisionProcessor.AcceptRevisions(marked)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_split_consensus_accounts_for_each_bookmarks_paired_end(bool sameEnds)
+    {
+        const string starts = "<w:bookmarkStart w:id=\"1\" w:name=\"First\"/><w:bookmarkStart w:id=\"2\" w:name=\"Second\"/>";
+        static string Ends(string id) => $"<w:bookmarkEnd w:id=\"{id}\"/>";
+        string Part(bool swap) => starts + TextRun("eee ") + Ends(swap ? "2" : "1") + TextRun("fff ") + Ends(swap ? "1" : "2") + TextRun("ggg hhh.");
+        var original = IrTestDocuments.FromBodyXml(Paragraph(TextRun(SplitA) + Part(false)) + Paragraph(TextRun(Anchor)));
+        WmlDocument Split(bool swap) => IrTestDocuments.FromBodyXml(Paragraph(TextRun(SplitA)) + Paragraph(Part(swap)) + Paragraph(TextRun(Anchor)));
+        var reviewers = new[] { new DocxDiffReviewer { Author = "A", Document = Split(false) }, new DocxDiffReviewer { Author = "B", Document = Split(!sameEnds) } };
+        Assert.Equal(!sameEnds, DocxDiff.GetConflicts(original, reviewers).Any());
     }
 
     [Theory]

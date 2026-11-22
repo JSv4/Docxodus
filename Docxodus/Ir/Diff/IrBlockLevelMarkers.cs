@@ -234,10 +234,12 @@ internal static partial class IrMarkupRenderer
     /// reviewer ops (a stream the merger composed without them) the base markers are kept as they are. Returns
     /// null when there is nothing to place.
     /// </summary>
-    internal static Dictionary<int, List<XElement>>? PlanCompositeBlockLevelMarkers(
+    internal static CompositeBlockMarkers? PlanCompositeBlockLevelMarkers(
         IReadOnlyList<IrCompositeOp> ops, IrDocument baseIr, IReadOnlyList<IrDocument> reviewerIrs,
         IReadOnlyList<IReadOnlyList<IrEditOp>>? reviewerOps, IReadOnlyList<string> authors, RenderState state)
     {
+        if (reviewerOps is not null && reviewerOps.Any(list => list.Any(o => o.Kind == IrEditOpKind.SplitBlock)))
+            reviewerOps = reviewerOps.Select(list => (IReadOnlyList<IrEditOp>)list.SelectMany(MarkerMembers).ToList()).ToList();
         // Nothing to place when the base has no marker between these blocks and no reviewer has one between
         // theirs: decide that before resolving every op.
         bool baseHasMarkers =
@@ -248,6 +250,22 @@ internal static partial class IrMarkupRenderer
             layouts[r] = ComputeMarkerLayout(reviewerOps![r], baseIr, reviewerIrs[r]);
         if (!baseHasMarkers && layouts.All(l => l is null))
             return null;
+        // A native split renders several paragraphs. Give each member an address in the marker
+        // alignment while leaving the actual split operation and its text revisions intact.
+        int[]? starts = null;
+        if (ops.Any(o => o.Op.Kind == IrEditOpKind.SplitBlock))
+        {
+            starts = new int[ops.Count + 1];
+            var boundaries = new List<IrCompositeOp>();
+            for (int i = 0; i < ops.Count; i++)
+            {
+                starts[i] = boundaries.Count;
+                var source = ops[i];
+                foreach (var member in MarkerMembers(source.Op)) boundaries.Add(source with { Op = member });
+            }
+            starts[^1] = boundaries.Count;
+            ops = boundaries;
+        }
         var baseBlocks = ops.Select(o => SourceElement(o.Op.LeftAnchor, baseIr) is { } el
             ? new List<XElement> { el } : new List<XElement>()).ToArray();
         var baseSide = ReadSideMarkers(baseBlocks);
@@ -258,12 +276,43 @@ internal static partial class IrMarkupRenderer
                 byBaseAnchor.TryAdd(a, i);
         int? BaseIndex(string? anchor) => anchor is not null && byBaseAnchor.TryGetValue(anchor, out var i) ? i : null;
 
-        return PlanCompositeMarkers(ops.Count, baseSide, layouts,
+        var positions = PlanCompositeMarkers(ops.Count, baseSide, layouts,
             (r, j) => BaseIndex(reviewerOps![r][j].LeftAnchor),
             (r, j) => reviewerOps![r][j].RightAnchor is { } right
                 ? Enumerable.Range(0, ops.Count).Cast<int?>().FirstOrDefault(i =>
                     ops[i!.Value].SourceReviewer == r && ops[i.Value].Op.RightAnchor == right)
                 : null, authors, state);
+        return positions is null ? null : new CompositeBlockMarkers(positions, starts);
+    }
+
+    private static IEnumerable<IrEditOp> MarkerMembers(IrEditOp op)
+    {
+        if (op.Kind != IrEditOpKind.SplitBlock || op.SplitMergeAnchors is not { Count: > 0 } members)
+        {
+            yield return op;
+            yield break;
+        }
+        for (int i = 0; i < members.Count; i++)
+            yield return new IrEditOp(i == 0 ? IrEditOpKind.ModifyBlock : IrEditOpKind.InsertBlock,
+                i == 0 ? op.LeftAnchor : null, members[i], null, null, null);
+    }
+
+    internal sealed record CompositeBlockMarkers(Dictionary<int, List<XElement>> Positions, int[]? Starts)
+    {
+        public List<XElement>? Before(int op) => Positions.GetValueOrDefault(Starts?[op] ?? op);
+
+        public void PlaceInside(int op, int from, List<XElement> output)
+        {
+            if (Starts is null) return;
+            int count = Starts[op + 1] - Starts[op];
+            if (count <= 1) return;
+            // A whole-source fallback can also emit a deleted original before the result members.
+            int firstMember = output.Count - count;
+            if (firstMember < from) return;
+            for (int i = count - 1; i > 0; i--)
+                if (Positions.TryGetValue(Starts[op] + i, out var markers))
+                    output.InsertRange(firstMember + i, markers);
+        }
     }
 
     private static Dictionary<int, List<XElement>>? PlanCompositeMarkers(int count, SideMarkers? baseSide,
@@ -1007,20 +1056,7 @@ internal static partial class IrMarkupRenderer
         if (marker.Name == W.bookmarkStart)
             return "b\u0000" + ((string?)marker.Attribute(W.name) ?? "#" + id);
         if (marker.Name == W.bookmarkEnd)
-        {
-            var names = marker.Document is { } document
-                ? BookmarkNamesById.GetValue(document, d => d.Descendants(W.bookmarkStart)
-                    .Where(s => s.Attribute(W.id) is not null && s.Attribute(W.name) is not null)
-                    .GroupBy(s => (string)s.Attribute(W.id)!)
-                    .ToDictionary(g => g.Key, g => (string)g.First().Attribute(W.name)!, StringComparer.Ordinal))
-                : null;
-            return "b\u0000" + (names?.GetValueOrDefault(id) ?? "#" + id);
-        }
+            return "b\u0000" + IrReader.BookmarkEndName(marker);
         return "c\u0000" + id;
     }
-
-    /// <summary>Each source document's bookmark names by id, built once per document: an end names its bookmark
-    /// only through its start. The renderer only reads its source documents.</summary>
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<XDocument, Dictionary<string, string>>
-        BookmarkNamesById = new();
 }

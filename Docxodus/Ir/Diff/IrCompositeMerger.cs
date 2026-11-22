@@ -2,6 +2,7 @@
 
 using System.Collections.Generic;
 using System.Linq;
+using System.Xml.Linq;
 using Docxodus.Ir;
 
 namespace Docxodus.Ir.Diff;
@@ -52,8 +53,9 @@ internal static class IrCompositeMerger
 
         // 1. Raw pairwise scripts, NOT yet lowered — so PlanMoves can inspect every reviewer's move groups
         //    against the shared base anchor space before any move is collapsed to del/ins.
+        var pairSettings = settings with { KeepSplitContributions = true };
         var rawScripts = reviewers
-            .Select(r => IrEditScriptBuilder.Build(baseIr, r.Ir, settings))
+            .Select(r => IrEditScriptBuilder.Build(baseIr, r.Ir, pairSettings))
             .ToList();
 
         // 2. Decide, per reviewer move group, NATIVE (non-colliding single-reviewer move → keep
@@ -99,7 +101,9 @@ internal static class IrCompositeMerger
         // bookmarks and comment ranges a reviewer has between blocks (rule N3), and placing them needs that
         // reviewer's alignment with the base, in the body and in each note (issues #1149, #1175).
         return new IrCompositeScript(IrNodeList.From(ops), IrNodeList.From(conflicts), noteOps, noteIdMaps, trailingSectPr,
-            IrNodeList.From(scripts.Select(script => new IrReviewerComparison(script.Operations, script.NoteOps))), bookmarks);
+            IrNodeList.From(scripts.Select(script => new IrReviewerComparison(PhysicalSplitOps(script.Operations),
+                script.NoteOps is { } notes && notes.Any(n => n.Ops.Any(IsWholeSplit))
+                    ? IrNodeList.From(notes.Select(n => n with { Ops = PhysicalSplitOps(n.Ops) })) : script.NoteOps))), bookmarks);
     }
 
     // ---- N-way note-scope merge ----
@@ -335,10 +339,31 @@ internal static class IrCompositeMerger
                         EqualReviewerMarkers = EqualOp(anchor,
                             entries.Where(e => e.Op.Kind == IrEditOpKind.EqualBlock).ToList(), reviewers, baseIr).EqualReviewerMarkers,
                     };
+                if (ops.Count > first && IsWholeSplit(ops[first].Op))
+                {
+                    // Materialize only a selected split. Its losing paragraphs never enter the next gap.
+                    var selected = ops[first];
+                    var parts = new List<IrEditOp>();
+                    LowerOneStructuralOp(selected.Op, parts);
+                    ops.RemoveAt(first);
+                    ops.InsertRange(first, parts.Select(part => selected with { Op = part }));
+                }
             }
             // A merge-consumed anchor emits no block op, but its pending inserts still slot here.
             EmitInsertsAt(insertsAfter, anchor, reviewers, ops, suppressedRelocations);
         }
+    }
+
+    private static bool IsWholeSplit(IrEditOp op) => op.Kind == IrEditOpKind.SplitBlock && op.RequiresWholeParagraphReplace;
+
+    private static IrNodeList<IrEditOp> PhysicalSplitOps(IrNodeList<IrEditOp> ops)
+    {
+        if (!ops.Any(IsWholeSplit)) return ops;
+        var blocks = new List<IrEditOp>();
+        foreach (var op in ops)
+            if (IsWholeSplit(op)) LowerOneStructuralOp(op, blocks);
+            else blocks.Add(op);
+        return IrNodeList.From(blocks);
     }
 
     // ---- FOLLOW-ON A: native move composition planning ----
@@ -1527,14 +1552,21 @@ internal static class IrCompositeMerger
         {
             // Paragraph boundaries are part of a split. Text hashes alone also omit bookmarks
             // and comment positions, so compare the retained members before taking one copy.
-            var first = touched[0];
-            var members = ResultAnchors(first.Op).Select(a => reviewers[first.Reviewer].Ir.AnchorIndex[a]).ToList();
-            return touched.Skip(1).All(e => e.Op.SplitMergeAnchors is { } anchors && anchors.Count == members.Count &&
-                anchors.Select(a => reviewers[e.Reviewer].Ir.AnchorIndex[a]).Zip(members).All(pair =>
-                    pair.First.ContentHash == pair.Second.ContentHash &&
-                    pair.First.FormatFingerprint == pair.Second.FormatFingerprint &&
-                    pair.First.Source.Element is { } left && pair.Second.Source.Element is { } right &&
-                    IrHasher.CanonicalHash(left) == IrHasher.CanonicalHash(right)));
+            (IrHash Content, IrHash Format, IrHash Markup)[]? Signature((int Reviewer, IrEditOp Op) entry)
+            {
+                var document = reviewers[entry.Reviewer].Ir;
+                if (entry.Op.SplitMergeAnchors is not { } anchors) return null;
+                var hashes = new (IrHash, IrHash, IrHash)[anchors.Count];
+                for (int i = 0; i < hashes.Length; i++)
+                {
+                    var member = document.AnchorIndex[anchors[i]];
+                    if (member.Source.Element is not { } paragraph) return null;
+                    hashes[i] = (member.ContentHash, member.FormatFingerprint, SplitMemberIdentity(paragraph, document));
+                }
+                return hashes;
+            }
+            var first = Signature(touched[0]);
+            return first is not null && touched.Skip(1).All(entry => Signature(entry) is { } other && first.SequenceEqual(other));
         }
 
         if (kind == IrEditOpKind.DeleteBlock)
@@ -1658,6 +1690,33 @@ internal static class IrCompositeMerger
         ir.AnchorIndex.TryGetValue(anchor, out var block) && block is IrParagraph p
             ? IrDiffTokenizer.Tokenize(p, settings)
             : System.Array.Empty<IrDiffToken>();
+
+    // Compare what each reviewer supplied. Word's paragraph and text IDs change on save.
+    // A bookmark end names its start through a package-local ID, and a note reference names
+    // a definition in that reviewer's package. Resolve both before comparing the result.
+    private static IrHash SplitMemberIdentity(XElement paragraph, IrDocument document)
+    {
+        var copy = new XElement(paragraph);
+        foreach (var (source, target) in paragraph.DescendantsAndSelf().Zip(copy.DescendantsAndSelf()))
+        {
+            target.Attribute(W14.paraId)?.Remove();
+            target.Attribute(W14.textId)?.Remove();
+            if (source.Name == W.bookmarkEnd)
+                target.SetAttributeValue("bookmarkName", IrReader.BookmarkEndName(source));
+            else if (source.Name == W.footnoteReference || source.Name == W.endnoteReference)
+            {
+                var notes = source.Name == W.footnoteReference ? document.Footnotes : document.Endnotes;
+                if ((string?)source.Attribute(W.id) is { } id && notes.Notes.TryGetValue(id, out var note))
+                {
+                    var contents = new XElement("note", note.Blocks.Select(b => b.Source.Element));
+                    contents.Descendants().Attributes(W14.paraId).Remove();
+                    contents.Descendants().Attributes(W14.textId).Remove();
+                    target.SetAttributeValue(W.id, IrHasher.CanonicalHash(contents).ToHex());
+                }
+            }
+        }
+        return IrHasher.CanonicalHash(copy);
+    }
 
     // A split produces an ordered sequence of paragraphs. Both StackAll and conflict reports
     // consume this same result; a deletion contributes no right paragraph.
