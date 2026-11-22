@@ -55,10 +55,24 @@ internal static class IrTableDiffer
     internal static bool NeedsWholeTableFallback(IrTableDiff td, IrDiffSettings settings)
     {
         bool cellInsertionsTracked = settings.TrackTableFormatChanges && settings.TrackCellInsertionsAndDeletions;
-        return td.RowOps.Any(r => r.Kind == IrRowOpKind.ModifyRow && r.CellOps is { } cells
+        return td.ReplaceWhole || td.RowOps.Any(r => r.Kind == IrRowOpKind.ModifyRow && r.CellOps is { } cells
             && cells.Any(c => c.RightCellAnchor == null ||
                 (!cellInsertionsTracked && c.LeftCellAnchor == null)));
     }
+
+    /// <summary>
+    /// Whether two rows may pair as one edited or unchanged row: they sit in, and hold, the same content controls
+    /// (<see cref="IrRow.ControlDigest"/>). No markup tracks a change to a control, so a row whose controls change is
+    /// deleted in its original controls and inserted in its revised ones, as a replaced block control is (issue #1810).
+    /// </summary>
+    internal static bool RowsMayPair(IrRow left, IrRow right) => left.ControlDigest == right.ControlDigest;
+
+    /// <summary>Whether the redline can rebuild the content controls of a table's rows, or a row's cells, from both
+    /// sides' children (see <see cref="IrContainerControls"/>): no control on either side, or no marker among the
+    /// children and no control it cannot rebuild on either side.</summary>
+    internal static bool ControlsDrawable(IrContainerControls left, IrContainerControls right) =>
+        ((left | right) & IrContainerControls.Control) == 0 ||
+        ((left | right) & (IrContainerControls.Marker | IrContainerControls.MixedControlContent)) == 0;
 
     public static IrTableDiff Diff(IrTable left, IrTable right, IrDiffSettings settings)
     {
@@ -101,9 +115,82 @@ internal static class IrTableDiffer
         FillRowGaps(leftRows, rightRows, spinePairs, leftKind, rightKind, leftMatch, rightMatch, settings);
 
         // --- Emit row ops in right order with left-anchored deletion interleave (+ a move group id pass).
-        return new IrTableDiff(IrNodeList.From(
-            EmitRowOps(leftRows, rightRows, leftKind, rightKind, leftMatch, rightMatch, settings)));
+        var rowOps = EmitRowOps(leftRows, rightRows, leftKind, rightKind, leftMatch, rightMatch, settings);
+        return PlanRows(left, right, IrNodeList.From(rowOps));
     }
+
+    internal static IrTableDiff PlanRows(IrTable left, IrTable right, IrNodeList<IrRowOp> rowOps)
+    {
+        var diff = new IrTableDiff(rowOps);
+        if (left.ControlDigest == default && right.ControlDigest == default)
+            return diff;
+        var plan = IrTableControlPlanner.Plan(left, right, rowOps);
+        return diff with { ControlPlan = plan, ReplaceWhole = plan is null };
+    }
+
+    /// <summary>
+    /// Where the table-level content controls that deliver no row go among <paramref name="ops"/> (issue #1810): for each
+    /// revised-table boundary holding such controls (the number of rows before them), the index of the row op they go
+    /// before (<c>ops.Count</c>: after the last). No markup tracks such a control, so it is written once, unmarked, and
+    /// must sit between the same rows in both views: the original's boundaries and the revision's pair in order, with
+    /// the same controls, and each pair goes at the first place both views allow. Null when they do not pair or have no
+    /// such place, as beside a row only one table has when the other table's control is on its other side.
+    /// </summary>
+    internal static Dictionary<int, int>? ControlsInPlace(IrTable left, IrTable right, IReadOnlyList<IrRowOp> ops)
+    {
+        static List<(int Boundary, IrHash Digest)> Boundaries(IrTable table)
+        {
+            var boundaries = new List<(int, IrHash)>();
+            for (int i = 0; i < table.Rows.Count; i++)
+                if (table.Rows[i].ControlsBeforeDigest != default)
+                    boundaries.Add((i, table.Rows[i].ControlsBeforeDigest));
+            if (table.TrailingControlsDigest != default)
+                boundaries.Add((table.Rows.Count, table.TrailingControlsDigest));
+            return boundaries;
+        }
+        static int[] Positions(IrTable table, IReadOnlyList<IrRowOp> ops, bool leftSide)
+        {
+            var ordinal = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (int i = 0; i < table.Rows.Count; i++)
+                ordinal.TryAdd(table.Rows[i].Anchor.ToString(), i);
+            var positions = new int[table.Rows.Count];
+            Array.Fill(positions, -1);
+            for (int i = 0; i < ops.Count; i++)
+            {
+                var op = ops[i];
+                bool moved = op.Kind == IrRowOpKind.MovedRow;
+                var anchor = leftSide ? (moved && op.IsMoveSource != true ? null : op.LeftRowAnchor)
+                    : (moved && op.IsMoveSource == true ? null : op.RightRowAnchor);
+                if (anchor is not null && ordinal.TryGetValue(anchor, out var row))
+                    positions[row] = i;
+            }
+            return positions;
+        }
+        var result = new Dictionary<int, int>();
+        var (leftBoundaries, rightBoundaries) = (Boundaries(left), Boundaries(right));
+        if (leftBoundaries.Count == 0 && rightBoundaries.Count == 0)
+            return result;
+        if (leftBoundaries.Count != rightBoundaries.Count)
+            return null;
+        var (leftPositions, rightPositions) = (Positions(left, ops, true), Positions(right, ops, false));
+        if (Array.IndexOf(leftPositions, -1) >= 0 || Array.IndexOf(rightPositions, -1) >= 0)
+            return null;
+        int earliest = 0;
+        for (int k = 0; k < leftBoundaries.Count; k++)
+        {
+            if (leftBoundaries[k].Digest != rightBoundaries[k].Digest)
+                return null;
+            // Between the op holding the row before the boundary and the op holding the row after it, in each view.
+            int lb = leftBoundaries[k].Boundary, rb = rightBoundaries[k].Boundary;
+            int lo = Math.Max(earliest, Math.Max(lb == 0 ? 0 : leftPositions[lb - 1] + 1, rb == 0 ? 0 : rightPositions[rb - 1] + 1));
+            int hi = Math.Min(lb == leftPositions.Length ? ops.Count : leftPositions[lb], rb == rightPositions.Length ? ops.Count : rightPositions[rb]);
+            if (lo > hi)
+                return null;
+            result[rb] = earliest = lo;
+        }
+        return result;
+    }
+
 
     // ------------------------------------------------------------------ row anchoring / spine
 
@@ -121,7 +208,7 @@ internal static class IrTableDiffer
             var h = leftRows[i].ContentHash;
             if (!leftByHash.TryGetValue(h, out int li) || li != i)
                 continue;
-            if (!rightByHash.TryGetValue(h, out int rj))
+            if (!rightByHash.TryGetValue(h, out int rj) || !RowsMayPair(leftRows[i], rightRows[rj]))
                 continue;
             leftMatch[i] = rj;
             rightMatch[rj] = i;
@@ -224,7 +311,8 @@ internal static class IrTableDiffer
             if (rightMatch[j] == -1)
                 freeRight.Add(j);
 
-        if (TryAlignOrdinaryRowGap(leftRows, rightRows, freeLeft, freeRight, settings, out var alignment))
+        if (TryAlignRowsByContent(leftRows, rightRows, freeLeft, freeRight, settings, out var alignment) ||
+            TryAlignControlledRowGap(leftRows, rightRows, freeLeft, freeRight, out alignment))
         {
             foreach (var step in alignment)
             {
@@ -258,6 +346,12 @@ internal static class IrTableDiffer
         for (int k = 0; k < paired; k++)
         {
             int li = freeLeft[k], rj = freeRight[k];
+            if (!RowsMayPair(leftRows[li], rightRows[rj]))
+            {
+                leftKind[li] = IrRowOpKind.DeleteRow;
+                rightKind[rj] = IrRowOpKind.InsertRow;
+                continue;
+            }
             leftKind[li] = IrRowOpKind.ModifyRow;
             rightKind[rj] = IrRowOpKind.ModifyRow;
             leftMatch[li] = rj;
@@ -270,11 +364,29 @@ internal static class IrTableDiffer
     }
 
     /// <summary>
-    /// Direct, unit-span rows have a physical-cell order that is safe to align independently of the table
-    /// shell.  The renderer can represent every row-level insert/delete, so unlike cells this alignment may
-    /// legitimately produce unmatched units on either side.
+    /// A gap holding a row with content controls pairs its rows in order as the positional path does, but never two
+    /// rows <see cref="RowsMayPair"/> refuses, and so as to pair as many as it can: a row whose controls change does not
+    /// push the rows after it out of their pairs (issue #1810).
     /// </summary>
-    private static bool TryAlignOrdinaryRowGap(
+    private static bool TryAlignControlledRowGap(IrNodeList<IrRow> leftRows, IrNodeList<IrRow> rightRows,
+        List<int> freeLeft, List<int> freeRight, out List<MonotoneStep> alignment)
+    {
+        alignment = new List<MonotoneStep>();
+        if (freeLeft.Count == 0 || freeRight.Count == 0 || !FitsDpBudget(freeLeft.Count, freeRight.Count) ||
+            !freeLeft.Any(i => leftRows[i].ControlDigest != default) && !freeRight.Any(j => rightRows[j].ControlDigest != default))
+            return false;
+        alignment = BuildMonotoneAlignment(freeLeft.Count, freeRight.Count, (i, j) =>
+            RowsMayPair(leftRows[freeLeft[i]], rightRows[freeRight[j]])
+                ? MaxAffinity - CellPositionalTieBreak * Math.Abs(i - j)
+                : ForbiddenPair);
+        return true;
+    }
+
+    /// <summary>
+    /// Score legal pairs by content on unit grids and on controlled rows with the same physical grid.
+    /// Enclosing row controls constrain which rows may pair.
+    /// </summary>
+    private static bool TryAlignRowsByContent(
         IrNodeList<IrRow> leftRows, IrNodeList<IrRow> rightRows,
         List<int> freeLeft, List<int> freeRight, IrDiffSettings settings,
         out List<MonotoneStep> alignment)
@@ -284,12 +396,13 @@ internal static class IrTableDiffer
             !FitsDpBudget(freeLeft.Count, freeRight.Count))
             return false;
 
-        foreach (int index in freeLeft)
-            if (!CanUseOrdinaryRowAlignment(leftRows[index]))
+        var first = leftRows[freeLeft[0]];
+        if (!freeLeft.All(i => HasUnitCellGrid(leftRows[i])) || !freeRight.All(i => HasUnitCellGrid(rightRows[i])))
+        {
+            if (first.ControlDigest == default || !freeLeft.All(i => HasSameControlledGrid(first, leftRows[i])) ||
+                !freeRight.All(i => HasSameControlledGrid(first, rightRows[i])))
                 return false;
-        foreach (int index in freeRight)
-            if (!CanUseOrdinaryRowAlignment(rightRows[index]))
-                return false;
+        }
 
         var leftBodies = new IrHash[freeLeft.Count];
         var rightBodies = new IrHash[freeRight.Count];
@@ -319,17 +432,30 @@ internal static class IrTableDiffer
         // slides every base row down one slot. The bias is tiny per row of displacement, so any real
         // body affinity still wins — it only decides otherwise-noise-tied gaps.
         alignment = BuildMonotoneAlignment(freeLeft.Count, freeRight.Count,
-            (i, j) => BodyAffinity(leftBodies[i], rightBodies[j], leftSignatures[i], rightSignatures[j])
-                      - CellPositionalTieBreak * Math.Abs(i - j));
+            (i, j) => RowsMayPair(leftRows[freeLeft[i]], rightRows[freeRight[j]])
+                ? BodyAffinity(leftBodies[i], rightBodies[j], leftSignatures[i], rightSignatures[j]) - CellPositionalTieBreak * Math.Abs(i - j)
+                : ForbiddenPair);
         return true;
     }
 
-    private static bool CanUseOrdinaryRowAlignment(IrRow row)
+    private static bool HasUnitCellGrid(IrRow row)
     {
-        if (row.FromTableSdt || row.GridBefore != 0 || row.GridAfter != 0)
+        if (row.GridBefore != 0 || row.GridAfter != 0)
             return false;
         foreach (var cell in row.Cells)
             if (cell.GridSpan != 1 || cell.VMerge != IrVMerge.None || cell.FromRowSdt)
+                return false;
+        return true;
+    }
+
+    private static bool HasSameControlledGrid(IrRow left, IrRow right)
+    {
+        if (right.ControlDigest == default || left.GridBefore != right.GridBefore || left.GridAfter != right.GridAfter ||
+            left.Cells.Count != right.Cells.Count)
+            return false;
+        for (int i = 0; i < left.Cells.Count; i++)
+            if (left.Cells[i].GridSpan != right.Cells[i].GridSpan || left.Cells[i].VMerge != right.Cells[i].VMerge ||
+                left.Cells[i].FromRowSdt != right.Cells[i].FromRowSdt)
                 return false;
         return true;
     }
@@ -348,6 +474,9 @@ internal static class IrTableDiffer
     /// the same column (keeping a rewritten row's base cells in place). Tiny relative to <see cref="MaxAffinity"/>
     /// so genuine body affinity always dominates.</summary>
     private const int CellPositionalTieBreak = 100;
+
+    /// <summary>An affinity that forbids pairing the two units: the alignment deletes and inserts them instead.</summary>
+    private const int ForbiddenPair = int.MinValue;
 
     private enum MonotoneStepKind : byte
     {
@@ -401,10 +530,12 @@ internal static class IrTableDiffer
             for (int j = 1; j <= rightCount; j++)
             {
                 int affinityScore = affinity(i - 1, j - 1);
-                var best = scores[(i - 1) * width + j - 1] with
-                {
-                    AffinityPenalty = scores[(i - 1) * width + j - 1].AffinityPenalty + (MaxAffinity - affinityScore)
-                };
+                var best = affinityScore == ForbiddenPair
+                    ? new AlignmentScore(int.MaxValue, int.MaxValue)
+                    : scores[(i - 1) * width + j - 1] with
+                    {
+                        AffinityPenalty = scores[(i - 1) * width + j - 1].AffinityPenalty + (MaxAffinity - affinityScore)
+                    };
                 var bestKind = MonotoneStepKind.Pair;
 
                 var delete = scores[(i - 1) * width + j] with
@@ -772,7 +903,8 @@ internal static class IrTableDiffer
     /// </summary>
     private static bool CanUseOrdinaryGridAlignment(IrRow left, IrRow right)
     {
-        return CanUseOrdinaryRowAlignment(left) && CanUseOrdinaryRowAlignment(right);
+        return !left.FromTableSdt && !right.FromTableSdt && left.ControlDigest == default && right.ControlDigest == default &&
+            HasUnitCellGrid(left) && HasUnitCellGrid(right);
     }
 
     /// <summary>

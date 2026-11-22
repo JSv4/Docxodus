@@ -5450,6 +5450,37 @@ the same original story (whose rejected text is that story), or else keeps the o
 unchanged, rather than marking the story deleted. Marking it deleted would need a copy of the part
 whenever another section shares it.
 
+### A section that inherits its header loses it when the break it inherits from is accepted away
+
+Issue #1805 (2026-11-21). A section break holds the properties of the section it ends, and a section with no
+`w:headerReference` of its own for a story shows the story of the section before it (ECMA-376 Part 1, `w:headerReference`). In
+the original below, the first paragraph's break names header `rStory` and the last section names none, so both
+sections show it:
+
+```xml
+<w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="rStory"/>…</w:sectPr></w:pPr>
+  <w:r><w:t>The night train leaves the depot after the signal check.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Porters load the mail vans before the last whistle.</w:t></w:r></w:p>
+<w:sectPr>…</w:sectPr>  <!-- no reference: inherits rStory -->
+```
+
+The revision keeps both paragraphs in one section whose break names the header. A comparison draws the first
+paragraph as the original's copy, with its break, deleted and the revision's copy inserted. Header references
+cannot be tracked, so the redline's last break must name the story itself: accepting removes the deleted copy and
+its break, and the last break is then the only one left.
+
+| Engine | Accept All of a redline whose last break names the story | Accept All of one whose last break names none |
+| --- | --- | --- |
+| Docxodus `RevisionProcessor.AcceptRevisions` | One section, with the header | One section, no header |
+| LibreOffice 25.8.7.3 | Keeps an empty first paragraph and its break: two sections, each with the header | The same: two sections |
+
+Docxodus before the fix wrote the second kind of redline (`IrEditScriptBuilder.MatchSectionBoundaries` stopped
+mapping sections for such a paragraph, so no story was bound to the last break), and accepting it left the document
+without a header. LibreOffice keeps the deleted paragraph's break on Accept All whichever redline it opens, the
+counterpart of its keeping an inserted paragraph's break on Reject All above, so it cannot tell the two apart; the
+[fidelity-bench cases](https://github.com/JSv4/docx-fidelity-bench) for this issue declare LibreOffice's accepted
+comparison ineligible and keep its rejected one. Word was not measured.
+
 ## Contributing
 
 When adding new corner cases to this document:

@@ -105,11 +105,23 @@ internal static class IrHasher
     /// materializing them: the canonical XML is encoded straight into a pooled buffer. Every paragraph,
     /// run and section read takes this path, so the per-call array mattered.
     /// </remarks>
-    public static IrHash CanonicalHash(XElement element, IrRelResolver? resolver)
+    public static IrHash CanonicalHash(XElement element, IrRelResolver? resolver) => CanonicalHash(element, resolver, null);
+
+    internal static IrHash CanonicalHash(XElement element, IrRelResolver? resolver, Action<XElement>? normalize)
     {
         var clone = new XElement(element);
         Clean(clone, resolver);
+        normalize?.Invoke(clone);
         return IrHash.ComputeUtf8(clone.ToXmlString(SaveOptions.DisableFormatting));
+    }
+
+    // Compare retained markup after the reader has closed its source package.
+    internal static IrHash RetainedMarkupHash(XElement markup, XElement? source)
+    {
+        var tokens = source?.Document?.Annotation<IrRelResolver.RetainedTokens>();
+        return tokens is null ? CanonicalHash(markup) : CanonicalHashWithAttributeRewrite(markup,
+            attribute => attribute.Name.Namespace == R && tokens.Values.TryGetValue(attribute.Value, out var value)
+                ? new XAttribute(attribute.Name, value) : attribute);
     }
 
     /// <summary>
@@ -506,6 +518,21 @@ internal sealed class IrRelResolver
         return token;
     }
 
+    internal sealed record RetainedTokens(IReadOnlyDictionary<string, string> Values);
+
+    internal void RetainReferencedTokens(XDocument source)
+    {
+        Dictionary<string, string>? tokens = null;
+        foreach (var attribute in source.Descendants().Attributes())
+        {
+            if (attribute.Name.Namespace != R.r) continue;
+            tokens ??= new Dictionary<string, string>(StringComparer.Ordinal);
+            if (!tokens.ContainsKey(attribute.Value))
+                tokens.Add(attribute.Value, ResolveToken(attribute.Value));
+        }
+        if (tokens is not null) source.AddAnnotation(new RetainedTokens(tokens));
+    }
+
     private string Classify(string relId)
     {
         if (_part is null || string.IsNullOrEmpty(relId))
@@ -618,6 +645,9 @@ internal sealed class IrContentHashBuilder
     // a code/wrapper-only edit cannot make the entire table align Equal.
     public const byte StructureInlineCarrier = 0x13;
     public const byte StructureFieldCarrier = 0x14;
+    // Closes a content control's children in a table's or row's control layout (IrRow.ControlDigest), so a control
+    // nested in another and one following it hash apart.
+    public const byte StructureSdtEnd = 0x15;
 
     private const byte SentinelLead = 0x01;
     private const byte StructureLead = 0x02;
