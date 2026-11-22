@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Xml.Linq;
@@ -20,6 +21,34 @@ internal sealed record IrTableOrder(IrNodeList<IrTableChild> Children, IrNodeLis
     internal IEnumerable<IrTableChild> EmptyControls =>
         Children.Where(child => child.Name == W.sdt && child.MemberCount == 0 &&
             (child.Parent < 0 || Children[child.Parent].MemberCount != 0));
+
+    /// <summary>Append each control's shell around its delivered members. A control with no members
+    /// contributes its complete digest. Each consumer supplies its own projection of a row or cell.</summary>
+    internal void AppendControlLayout(IrContentHashBuilder builder, Action<IrContentHashBuilder, int> appendMember)
+    {
+        void AppendChildren(int first, int end)
+        {
+            for (int i = first; i < end; i = Children[i].End)
+            {
+                var child = Children[i];
+                if (child.Name == W.sdt)
+                {
+                    if (child.MemberCount == 0)
+                        builder.AppendHash(child.Digest);
+                    else
+                    {
+                        builder.AppendStructure(IrContentHashBuilder.StructureSdt);
+                        builder.AppendHash(child.Digest);
+                        AppendChildren(i + 1, child.End);
+                        builder.AppendStructure(IrContentHashBuilder.StructureSdtEnd);
+                    }
+                }
+                else if (child.MemberCount != 0)
+                    appendMember(builder, child.FirstMember);
+            }
+        }
+        AppendChildren(0, Children.Count);
+    }
 }
 
 /// <summary>One child of a table, row or control's content. A control's digest covers its shell when it

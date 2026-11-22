@@ -13,6 +13,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `SemanticDiff.Compare` reports changes to the controls around table rows and cells, including changes to control properties, grouping, and the position of empty controls (#1814).
+
 - Revision lists include the text of an inserted or deleted row in a nested table or a table inside a content control (#1813).
 
 - Comparing a replacement or split at a section break keeps unchanged headers and footers free of revisions and reports genuine story edits against their corresponding section (#1816). When a rewritten passage gains or loses section breaks, each redline section keeps the headers and footers of the paragraphs it contains (#1757).

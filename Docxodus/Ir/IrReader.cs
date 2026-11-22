@@ -3182,30 +3182,8 @@ internal static class IrReader
             }
         builder.AppendStructure(IrContentHashBuilder.StructureRow);
         if (own)
-            AppendControlLayout(cells!.Children, 0, cells.Children.Count, builder);
+            cells!.AppendControlLayout(builder, static (b, _) => b.AppendStructure(IrContentHashBuilder.StructureCell));
         return builder.Build();
-    }
-
-    private static void AppendControlLayout(IrNodeList<IrTableChild> entries, int first, int end, IrContentHashBuilder builder)
-    {
-        for (int i = first; i < end; i = entries[i].End)
-        {
-            var child = entries[i];
-            if (child.Name == W + "tc")
-                builder.AppendStructure(IrContentHashBuilder.StructureCell);
-            else if (child.Name == W + "sdt")
-            {
-                if (child.MemberCount == 0)
-                    builder.AppendHash(child.Digest);
-                else
-                {
-                    builder.AppendStructure(IrContentHashBuilder.StructureSdt);
-                    builder.AppendHash(child.Digest);
-                    AppendControlLayout(entries, i + 1, child.End, builder);
-                    builder.AppendStructure(IrContentHashBuilder.StructureSdtEnd);
-                }
-            }
-        }
     }
 
     private static (IrRow Row, List<IrHash> CellFingerprints) BuildRow(XElement tr, ReadContext ctx)
