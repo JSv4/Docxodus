@@ -771,6 +771,20 @@ public sealed class DocxDiffSettings
     /// </summary>
     public int MoveMinimumWordCount { get; set; } = 3;
 
+    /// <summary>Minimum word tokens for a paragraph to anchor the block alignment.
+    /// Zero (the default) allows short paragraphs to anchor. Set to two when stand-alone
+    /// one-word labels renumber after an entry is inserted or removed. A shorter paragraph
+    /// that is unique in both documents and relocates unchanged is still reported as moved.</summary>
+    public int MinimumAnchorWordCount
+    {
+        get;
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            field = value;
+        }
+    }
+
     /// <summary>
     /// How <see cref="DocxDiff.GetRevisions"/> projects the edit script to revisions. Default
     /// <see cref="DocxDiffRevisionGranularity.Fine"/> (the engine's native one-revision-per-token-span
@@ -989,6 +1003,7 @@ public sealed class DocxDiffSettings
             RenderMoves = DetectMoves,
             MoveSimilarityThreshold = MoveSimilarityThreshold,
             MoveMinimumTokenCount = MoveMinimumWordCount,
+            MinimumAnchorWordCount = MinimumAnchorWordCount,
             RevisionGranularity = RevisionGranularity == DocxDiffRevisionGranularity.WmlComparerCompatible
                 ? Docxodus.Ir.Diff.RevisionGranularity.WmlComparerCompatible
                 : Docxodus.Ir.Diff.RevisionGranularity.Fine,

@@ -95,6 +95,23 @@ internal sealed class IrBlockSimilarity
         _ => 0,
     };
 
+    // The tokenizer splits a word at a formatting boundary so the diff can track both
+    // runs. For paragraph anchoring it is still one word. CJK elements remain separate.
+    public bool HasAnchorWords(IrParagraph paragraph, int minimum)
+    {
+        int count = 0;
+        bool insideWord = false;
+        foreach (var token in Bag(paragraph).Tokens)
+        {
+            bool word = token.Kind == IrDiffTokenKind.Word;
+            bool cjk = word && IrDiffTokenizer.IsCjk(token.Text, 0);
+            if (word && (!insideWord || cjk) && ++count >= minimum)
+                return true;
+            insideWord = word && !cjk;
+        }
+        return false;
+    }
+
     /// <summary>
     /// True iff <paramref name="block"/> is a FUNGIBLE blank-spacer paragraph: an
     /// <see cref="IrParagraph"/> whose tokens are all <see cref="IrDiffTokenKind.Separator"/> (or none)

@@ -467,6 +467,8 @@ export interface DocxDiffSettings {
   moveSimilarityThreshold?: number;
   /** Minimum word tokens for a fuzzy move (default 3). */
   moveMinimumWordCount?: number;
+  /** Minimum words for a paragraph to anchor alignment (default 0). Use 2 for one-word positional labels. */
+  minimumAnchorWordCount?: number;
   /** Revision projection grain (default Fine). */
   revisionGranularity?: DocxDiffRevisionGranularity;
   /** Run-format comparison policy (default ModeledOnly). */

@@ -35,6 +35,53 @@ public class DocxDiffTextMoveTests
 
     private static WmlDocument Doc(string body) => IrTestDocuments.FromParts(body);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ShortNumberLabelsCanFollowTheirEntryText(bool removeEntry)
+    {
+        string[] shared = { "Snow blanketed the ridge.", "Cairns mark the descent.",
+            "Rain filled the cistern.", "Swifts nest under the ledge.", "Granite lines the pass." };
+        const string addition = "A bell sounds at noon.";
+        WmlDocument Entries(string[] entries) => IrTestDocuments.Create(entries
+            .SelectMany((entry, i) => new[] { $"N{i + 1}", entry }).ToArray());
+        var shorter = Entries(shared);
+        var longer = Entries(shared.Take(1).Append(addition).Concat(shared.Skip(1)).ToArray());
+        var (left, right) = removeEntry ? (longer, shorter) : (shorter, longer);
+        var redline = new WmlDocument("numbered.docx", Docxodus.Internal.DocxDiffOps.Compare(
+            left.DocumentByteArray, right.DocumentByteArray, """{"minimumAnchorWordCount":2}"""));
+        var body = Body(redline.DocumentByteArray);
+        Assert.DoesNotContain(body.Descendants(), e => e.Name == W.moveFrom || e.Name == W.moveTo);
+        foreach (string entry in shared)
+            Assert.Contains(body.Elements(W.p), p => p.Value == entry &&
+                !p.Descendants().Any(e => e.Name == W.ins || e.Name == W.del));
+        var renumbered = body.Elements(W.p).Where(p => p.Descendants(W.delText).Any() &&
+            p.Descendants(W.ins).Any() && !p.Elements(W.pPr).Descendants(W.rPr).Any()).ToArray();
+        Assert.Equal(new[] { "N3", "N4", "N5" }, renumbered
+            .Select(p => p.Descendants(removeEntry ? W.t : W.delText).Single().Value));
+        Assert.Equal(new[] { "N4", "N5", "N6" }, renumbered
+            .Select(p => p.Descendants(removeEntry ? W.delText : W.t).Single().Value));
+        Assert.Equal(Ir.Diff.Docs.PlainText(left), Ir.Diff.Docs.PlainText(RevisionProcessor.RejectRevisions(redline)));
+        Assert.Equal(Ir.Diff.Docs.PlainText(right), Ir.Diff.Docs.PlainText(RevisionProcessor.AcceptRevisions(redline)));
+    }
+
+    [Fact]
+    public void ShortHeadingMoveSurvivesTheAnchorMinimum()
+    {
+        string[] rest = { "Wardens record the river level at dawn.", "Readings above the mark are reported.",
+            "Boats wait at the lower pool." };
+        var left = IrTestDocuments.Create(rest.Prepend("Scope").ToArray());
+        var right = IrTestDocuments.Create(rest[0], rest[1], "Scope", rest[2]);
+        var redline = new WmlDocument("moved.docx", Docxodus.Internal.DocxDiffOps.Compare(
+            left.DocumentByteArray, right.DocumentByteArray, """{"minimumAnchorWordCount":2}"""));
+        var body = Body(redline.DocumentByteArray);
+        Assert.Equal("Scope", Assert.Single(body.Descendants(W.moveFrom)).Value);
+        Assert.Equal("Scope", Assert.Single(body.Descendants(W.moveTo)).Value);
+        Assert.DoesNotContain(body.Descendants(), e => (e.Name == W.ins || e.Name == W.del) && e.Elements(W.r).Any());
+        Assert.Equal(Ir.Diff.Docs.PlainText(left), Ir.Diff.Docs.PlainText(RevisionProcessor.RejectRevisions(redline)));
+        Assert.Equal(Ir.Diff.Docs.PlainText(right), Ir.Diff.Docs.PlainText(RevisionProcessor.AcceptRevisions(redline)));
+    }
+
     public static TheoryData<string, string, string, string> TextMoves => new()
     {
         { "a sentence within its paragraph", P($"{First} {Second} {Third}"), P($"{Second} {Third} {First}"), First },

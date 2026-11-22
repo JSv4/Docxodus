@@ -414,7 +414,7 @@ internal static class IrDiffTokenizer
     }
 
     /// <summary>Han ideographs, kana, and Hangul, including supplementary and compatibility forms.</summary>
-    private static bool IsCjk(string text, int index)
+    internal static bool IsCjk(string text, int index)
     {
         int scalar = char.IsSurrogatePair(text, index) ? char.ConvertToUtf32(text, index) : text[index];
         // Unicode block ranges: https://www.unicode.org/Public/17.0.0/ucd/Blocks.txt

@@ -4583,6 +4583,9 @@ class DocxDiffSettings:
     #: keeps cell-level revisions regardless.
     track_cell_insertions_and_deletions: bool = True
 
+    #: Minimum word tokens for a paragraph to anchor alignment. Use 2 for one-word positional labels.
+    minimum_anchor_word_count: int = 0
+
     def to_wire(self) -> dict[str, Any]:
         """camelCase keys the host's ``DocxDiffOps.ParseSettings`` reads. Only
         non-default fields are emitted."""
@@ -4611,6 +4614,8 @@ class DocxDiffSettings:
             wire["detectMoves"] = False
         if self.move_similarity_threshold != 0.8:
             wire["moveSimilarityThreshold"] = self.move_similarity_threshold
+        if self.minimum_anchor_word_count != 0:
+            wire["minimumAnchorWordCount"] = self.minimum_anchor_word_count
         if self.move_minimum_word_count != 3:
             wire["moveMinimumWordCount"] = self.move_minimum_word_count
         if self.revision_granularity != DocxDiffRevisionGranularity.FINE:

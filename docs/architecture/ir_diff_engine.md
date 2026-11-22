@@ -413,6 +413,7 @@ A `ModifyBlock` over a paragraph carries a `tokenDiff`; over a table, a `tableDi
 | `WordSeparators` | `null` → default set | `WordSeparators` | |
 | `DetectMoves` | `true` | `RenderMoves` | render-time relabel: the engine always ALIGNS a relocation as a move; this controls whether it is REPORTED as one |
 | `MoveSimilarityThreshold` | `0.8` | same | |
+| `MinimumAnchorWordCount` | `0` | `MinimumAnchorWordCount` | A minimum of 2 leaves one-word positional labels for local pairing while longer entry text anchors the alignment. It applies to paragraph anchors throughout the document and can also change how short headings align. A shorter paragraph that is unique and unchanged in both documents is still reported as moved when the gap fill leaves it deleted on one side and inserted on the other, as it would be as an off-spine anchor. See `docs/ooxml_corner_cases.md`, "DocxDiff: renumbered one-word entry labels". |
 | `MoveMinimumWordCount` | `3` | `MoveMinimumTokenCount` | |
 | `RevisionGranularity` | `Fine` | `RevisionGranularity` | `Fine` = engine-native one-revision-per-token-span (byte-stable); `WmlComparerCompatible` = coalesce/trim/prune to match the legacy comparer's coarser revision set |
 | `FormatComparison` | `ModeledOnly` | `IrFormatComparison` | `ModeledOnly` reports only modeled-field deltas (false-negative on unmodeled rPr); `Full` sees every rPr difference. Governs paragraph-property comparison too (block-format-change family — see below) |

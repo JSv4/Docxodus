@@ -887,6 +887,86 @@ bookmark Docxodus tracks this way; only Docxodus's own accept and reject resolve
 
 ---
 
+## DocxDiff: renumbered one-word entry labels (#1817)
+
+**Status:** Opt-in setting (`minimumAnchorWordCount`); the default is unchanged.
+
+### Symptom
+
+Some documents give each entry a label paragraph that holds only its number, followed by the
+entry's text. Inserting or removing an entry renumbers every later label. Every label is unique
+in both documents, so the default comparison anchors on the labels and reports the surviving
+entry text as moved.
+
+### Minimal reproducer
+
+```xml
+<!-- original: five entries -->
+<w:p><w:r><w:t>R1</w:t></w:r></w:p>
+<w:p><w:r><w:t>Chalk outlines the roof.</w:t></w:r></w:p>
+<w:p><w:r><w:t>R2</w:t></w:r></w:p>
+<w:p><w:r><w:t>Copper covers the sill.</w:t></w:r></w:p>
+<w:p><w:r><w:t>R3</w:t></w:r></w:p>
+<w:p><w:r><w:t>Slate protects the wall.</w:t></w:r></w:p>
+<!-- R4 "Glass encloses the porch.", R5 "Oak supports the floor." -->
+
+<!-- revised: "Felt cushions the bracket." becomes the second entry, so the old R2..R5
+     entries are now R3..R6 -->
+```
+
+The removal case swaps the two documents. A control appends the new entry as R6 instead.
+The inputs are the `redline-numbered-entry-*` pairs in the fidelity bench.
+
+### Comparison
+
+| Case | Docxodus default | Docxodus, `minimumAnchorWordCount: 2` | Desktop word processor (build 16.0.20326), word level | Desktop word processor, character level | LibreOffice Writer 25.8.7.3 |
+| --- | --- | --- | --- | --- | --- |
+| Entry inserted | Three surviving entry texts tracked as moved; R6 inserted at the end | Entry texts untracked; the new entry inserted; R3→R4, R4→R5 and R5→R6 edited in place | Entry texts untracked; the new entry inserted; each renumbered label is a deleted label paragraph followed by an inserted one | Entry texts untracked; the new entry inserted; each label edited in place (`R` kept, digit replaced) | Entry texts untracked; each renumbering is a separate inserted and deleted label paragraph |
+| Entry removed | Labels R3, R4 and R5 tracked as moved; R6 deleted | Entry texts untracked; the entry deleted; labels edited in place | Entry texts untracked; the entry deleted; label paragraphs deleted and inserted | Entry texts untracked; the entry deleted; labels edited in place | Three surviving entry texts marked changed, with move markup |
+| Entry appended (control) | One insertion | One insertion | One insertion | Not measured | One insertion |
+| One-word paragraph moved ("Scope" from first to third) | Move | Move (a deletion and an insertion before #1817's review) | Move | Not measured | Not measured |
+| Two-word paragraph moved ("Payment Terms") | Move | Move | Move | Not measured | Not measured |
+
+Nothing in either reference application reported an entry's text as moved after an insertion.
+Accepting and rejecting every redline in the table gives the revised and original text.
+
+### Analysis
+
+The desktop word processor aligns on the longer entry texts. It does not pair the identical
+`R3` labels across the inserted entry when that would cost the alignment of the text around
+them. The label left in each gap is then paired with the label across from it. Docxodus
+anchors every paragraph that is unique in both documents, so the one-word labels win and the
+entry texts become moves.
+
+A minimum of two words keeps the labels out of the anchor set. Each label then pairs with the
+label in the same gap and is edited in place, which is the structure the desktop word processor
+writes at character level. The default stays at zero because the same application does treat a
+one-word paragraph as movable: a moved one-word heading is reported as a move. Under the
+minimum, a paragraph that is exact (same text and formatting) and unique in both documents is
+still reported as a move when the gap fill leaves it deleted on one side and inserted on the
+other. In the entry shape a label never ends up that way, because the label it would match is
+already paired in place.
+
+Inside an edited label the desktop word processor writes the deletion before the insertion.
+Docxodus writes the insertion first for every replacement, with or without this setting.
+Accepting and rejecting are unaffected.
+
+### Relevant code
+
+- `Docxodus/Ir/Diff/IrBlockAligner.cs`: the minimum check in `CollectAnchors` and the pass
+  before `DetectCrossGapMoves` that turns a recorded exact pair into a move.
+- `Docxodus/Ir/Diff/IrBlockSimilarity.cs`: `HasAnchorWords` counts a word split across
+  formatting runs once.
+
+### Tests
+
+- `DocxDiffTextMoveTests.ShortNumberLabelsCanFollowTheirEntryText` and
+  `ShortHeadingMoveSurvivesTheAnchorMinimum`
+- `IrBlockAlignerTests.FormattedLabelUsesTheSameAnchorThresholdInEitherDirection` and
+  `ShortExactParagraphMovesUnderAnyAnchorMinimum`
+
+---
+
 ## DocxDiff: `PreAcceptInputRevisions` accept-all flattens prior authorship
 
 **Status:** Documented (2026-06) — the `revisionsInInput` campaign.

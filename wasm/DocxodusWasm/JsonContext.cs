@@ -1139,6 +1139,7 @@ public class DocxDiffSettingsDto
     public bool? DetectMoves { get; set; }
     public double? MoveSimilarityThreshold { get; set; }
     public int? MoveMinimumWordCount { get; set; }
+    public int? MinimumAnchorWordCount { get; set; }
     public int? RevisionGranularity { get; set; }
     public int? FormatComparison { get; set; }
 }
