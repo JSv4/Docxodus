@@ -263,6 +263,8 @@ internal static class IrCompositeScriptJson
         foreach (var rowOp in diff.RowOps)
             WriteRowOp(writer, rowOp);
         writer.WriteEndArray();
+        if (diff.ReplaceWhole)
+            writer.WriteBoolean("replaceWhole", true);
         writer.WriteEndObject();
     }
 

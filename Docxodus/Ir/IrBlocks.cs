@@ -4,6 +4,11 @@ using System.Xml.Linq;
 
 namespace Docxodus.Ir;
 
+/// <summary>Physical outermost textbox bodies in a paragraph and the source content
+/// that crosses a body boundary. Available with either source retention setting.</summary>
+internal readonly record struct IrParagraphTextboxes(int Count, bool HasBlockMarkers,
+    bool HasSpanningField, bool HasCarrierRelationships);
+
 /// <summary>
 /// Base type for block-level IR content. Every block carries a stable <see cref="Anchor"/>, a
 /// <see cref="ContentHash"/> (text/structure digest) and a <see cref="FormatFingerprint"/>
@@ -34,6 +39,7 @@ internal abstract record IrBlock
 /// </summary>
 internal sealed record IrParagraph : IrBlock
 {
+    internal IrParagraphTextboxes PhysicalTextboxes { get; init; }
     /// <summary>Direct paragraph formatting (`w:pPr`); cascade resolution is an M1.3 view, not stored here.</summary>
     public required IrParaFormat Format { get; init; }
     public IrListInfo? List { get; init; }
@@ -173,6 +179,44 @@ internal sealed record IrTable : IrBlock
     /// <summary>Canonical hash of the table's `w:tblGrid` (empty-container hash when absent). Folded into
     /// <see cref="IrBlock.FormatFingerprint"/>; drives `w:tblGridChange` attribution.</summary>
     public required IrHash TblGridDigest { get; init; }
+
+    /// <summary>
+    /// The table's content controls (issue #1810): every row's <see cref="IrRow.ControlDigest"/> and
+    /// <see cref="IrRow.ControlsBeforeDigest"/>, then <see cref="TrailingControlsDigest"/>; <c>default</c> when the
+    /// table has none. Content controls are structural carriers, outside the content hash: a table whose controls
+    /// alone change is diffed rather than copied (<see cref="Diff.IrEditScriptBuilder.StructuralCarrierDiffers"/>).
+    /// </summary>
+    public IrHash ControlDigest { get; init; }
+
+    /// <summary>The table-level content controls that deliver no row after the last row, whole; <c>default</c> when
+    /// there are none.</summary>
+    public IrHash TrailingControlsDigest { get; init; }
+
+    /// <summary>What the table holds among its rows that decides whether the redline can rebuild its content controls
+    /// around them (issue #1810); see <see cref="IrContainerControls"/>.</summary>
+    public IrContainerControls Controls { get; init; }
+}
+
+/// <summary>
+/// What a table holds among its rows, or a row among its cells, that decides whether the redline can rebuild the
+/// content controls delivering them (issue #1810). The redline rebuilds each control around the rows or cells it
+/// delivers, so a pair of containers is drawn in place only when neither holds a control, or neither holds a bookmark
+/// or comment range among its children nor a control it cannot rebuild (<see cref="Diff.IrTableDiffer.ControlsDrawable"/>);
+/// otherwise the comparison replaces the table whole (<see cref="Diff.IrTableDiff.ReplaceWhole"/>), as the redline must.
+/// </summary>
+[System.Flags]
+internal enum IrContainerControls
+{
+    None = 0,
+
+    /// <summary>A content control among the children that delivers some of them (a row, or a cell).</summary>
+    Control = 1,
+
+    /// <summary>A bookmark or comment-range marker among the children.</summary>
+    Marker = 2,
+
+    /// <summary>A control that delivers children but also holds something else, or nests past the reader's cap.</summary>
+    Unrebuildable = 4,
 }
 
 /// <summary>
@@ -296,6 +340,27 @@ internal sealed record IrRow(IrAnchor Anchor, IrNodeList<IrCell> Cells, IrHash C
     /// </para>
     /// </summary>
     public bool FromTableSdt { get; init; }
+
+    /// <summary>
+    /// The content controls the row sits in and holds (issue #1810): the shells of the table-level controls around
+    /// it, outermost first, then the controls among its cells, each with the cells it delivers, and a control
+    /// delivering none whole; <c>default</c> when there are none. A control's identity is its shell (its attributes,
+    /// <c>w:sdtPr</c> and <c>w:sdtEndPr</c>), as a block wrapper's is. Two rows pair only when this is equal
+    /// (<see cref="Diff.IrTableDiffer.RowsMayPair"/>): no markup tracks a change to a control, so a row whose controls
+    /// change is deleted in its original controls and inserted in its revised ones.
+    /// </summary>
+    public IrHash ControlDigest { get; init; }
+
+    /// <summary>The table-level content controls that deliver no row between the previous row and this one, whole;
+    /// <c>default</c> when there are none.</summary>
+    public IrHash ControlsBeforeDigest { get; init; }
+
+    /// <summary>Number of rowless top-level controls preceding this row in its source table.</summary>
+    public int PrecedingEmptyControls { get; init; }
+
+    /// <summary>What the row holds among its cells that decides whether an edit of it can rebuild their content controls
+    /// (issue #1810); see <see cref="IrContainerControls"/>.</summary>
+    public IrContainerControls Controls { get; init; }
 }
 
 /// <summary>

@@ -355,12 +355,12 @@ public class IrHeaderFooterDiffTests
     }
 
     [Fact]
-    public void Builder_pairs_replaced_section_ends_and_keeps_the_extra_deleted_story()
+    public void Builder_pairs_mixed_boundary_sections_with_the_sections_their_content_came_from()
     {
         // Issue #1757. No paragraph is shared, so the review body is the right's two sections (one inserted
         // boundary) followed by the left's three (two deleted boundaries): the review sections hold
-        // [R0], [R1 + L0], [L1], [L2]. The first inserted end replaces the first deleted end. The
-        // story plan compares L0 with R0 once. The additional deleted section keeps its own L1 story.
+        // [R0], [R1 + L0], [L1], [L2]. Each pairs the stories of the sections it holds, not of its ordinal;
+        // [L1] disappears on accept, so it keeps L1's story unchanged and is only bound to it.
         HeaderFooterFixtures.Section[] Sections(string text, int count) => Enumerable.Range(0, count)
             .Select(i => new HeaderFooterFixtures.Section(new[] { string.Format(text, i) }, Headers: new[] { ("default", $"rId{i}") }))
             .ToArray();
@@ -374,7 +374,7 @@ public class IrHeaderFooterDiffTests
         Assert.Equal(
             new (int, string?, string?, bool, int?)[]
             {
-                (0, "hdr1", "hdr1", true, 0), (2, "hdr2", null, false, -1), (3, "hdr3", "hdr2", true, 1),
+                (0, null, "hdr1", true, 0), (1, "hdr1", "hdr2", true, 1), (2, "hdr2", null, false, -1), (3, "hdr3", "hdr2", true, 1),
             },
             script.HeaderFooterOps!.Select(diff => (diff.SectionIndex, diff.LeftScopeName,
                 diff.RightPartUri is null ? null : diff.ScopeName, diff.Ops.Count > 0, diff.ReferenceBindings?.Single().RightSectionIndex)));

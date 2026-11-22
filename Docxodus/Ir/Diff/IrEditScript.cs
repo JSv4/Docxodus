@@ -362,8 +362,11 @@ internal sealed record IrCellOp(
 /// The nested diff of one Modified table pair (M2.2 Task 4): an ordered list of <see cref="IrRowOp"/>
 /// in right-table row order (with deleted rows interleaved at their left positions, mirroring the
 /// block-level convention).
+/// <para><see cref="ReplaceWhole"/>: the redline cannot rebuild the tables' content controls around these row ops, so
+/// every surface reports and draws the table as deleted and inserted whole (issue #1810,
+/// <see cref="IrTableDiffer.NeedsWholeTableFallback"/>).</para>
 /// </summary>
-internal sealed record IrTableDiff(IrNodeList<IrRowOp> RowOps);
+internal sealed record IrTableDiff(IrNodeList<IrRowOp> RowOps, bool ReplaceWhole = false);
 
 /// <summary>
 /// The diff-as-data product: an ordered, anchor-addressed, JSON-round-trippable, apply-verifiable
