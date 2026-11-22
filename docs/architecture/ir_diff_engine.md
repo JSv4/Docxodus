@@ -655,3 +655,7 @@ source anchor. Inline marker changes on retained content are mapped into base re
 source-boundary merger. Gaps inside retained words split the source slice; other gaps follow every
 preceding insertion and deletion, including a replaced final word. Copies in other reviewer sources
 are withheld, so a removed range cannot reappear bare and an added range is emitted once (#1426).
+
+### Stories at replaced section ends
+
+The section planner matches section ends within a replacement gap in source order. The inserted copy carries the comparison of the two logical stories. The deleted copy retains the original story on rejection. Unmatched breaks retain their own visibility rules.

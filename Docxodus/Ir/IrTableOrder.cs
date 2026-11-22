@@ -10,14 +10,17 @@ namespace Docxodus.Ir;
 /// Member indexes count only the rows or cells delivered by the container.</summary>
 internal sealed record IrTableOrder(IrNodeList<IrTableChild> Children, IrNodeList<int> Members, IrContainerControls Summary)
 {
-    internal IEnumerable<IrTableChild> EnclosingControls(int member)
+    internal IEnumerable<IrTableChild> EnclosingControls(int member) => EnclosingControls(Children[Members[member]]);
+
+    internal IEnumerable<IrTableChild> EnclosingControls(IrTableChild child)
     {
-        for (int i = Children[Members[member]].Parent; i >= 0; i = Children[i].Parent)
+        for (int i = child.Parent; i >= 0; i = Children[i].Parent)
             yield return Children[i];
     }
 
     internal IEnumerable<IrTableChild> EmptyControls =>
-        Children.Where(child => child.Parent == -1 && child.Name == W.sdt && child.MemberCount == 0);
+        Children.Where(child => child.Name == W.sdt && child.MemberCount == 0 &&
+            (child.Parent < 0 || Children[child.Parent].MemberCount != 0));
 
     /// <summary>Append each control's shell around its delivered members. A control with no members
     /// contributes its complete digest. Each consumer supplies its own projection of a row or cell.</summary>

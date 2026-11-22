@@ -2467,7 +2467,7 @@ internal static class IrCompositeMerger
 
     /// <summary>Every row of <paramref name="ir"/>'s tables by anchor, nested tables included; built once per
     /// document.</summary>
-    private static Dictionary<string, IrRow> RowIndex(IrDocument ir) => RowIndexes.GetValue(ir, doc =>
+    internal static Dictionary<string, IrRow> RowIndex(IrDocument ir) => RowIndexes.GetValue(ir, doc =>
     {
         var index = new Dictionary<string, IrRow>(StringComparer.Ordinal);
         void Visit(IrTable table)
