@@ -11,6 +11,15 @@ namespace Docxodus.Ir;
 /// </summary>
 internal sealed record IrSourceContent(IReadOnlyList<IrSourceContent.Entry> Entries)
 {
+    internal Dictionary<XElement, int> TextWidths()
+    {
+        var widths = new Dictionary<XElement, int>();
+        foreach (var entry in Entries)
+            if (entry.TextLength > 0)
+                widths[entry.Source] = widths.GetValueOrDefault(entry.Source) + entry.TextLength;
+        return widths;
+    }
+
     // Atom ordinals are independent of word tokenization and contain no retained source references.
     internal readonly record struct CarrierSpan(int Start, int End);
 

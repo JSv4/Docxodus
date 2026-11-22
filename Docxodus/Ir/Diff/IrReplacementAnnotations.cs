@@ -14,10 +14,7 @@ internal static class IrReplacementAnnotations
         // Text in an opaque child, field code or nested textbox belongs to another stream.
         if (paragraph.Annotation<IrSourceContent>() is not { } source)
             yield break;
-        var lengths = new Dictionary<XElement, int>();
-        foreach (var entry in source.Entries)
-            if (entry.TextLength > 0)
-                lengths[entry.Source] = lengths.GetValueOrDefault(entry.Source) + entry.TextLength;
+        var lengths = source.TextWidths();
         int offset = 0;
         foreach (var element in paragraph.Descendants())
         {
@@ -60,6 +57,8 @@ internal static class IrReplacementAnnotations
                     Id: (string?)m.Element.Attribute(W.id)));
             foreach (var range in ranges)
             {
+                // Consolidation imports reviewer comment definitions only for body references.
+                if (!range.Key.Bookmark && !source.Ancestors(W.body).Any()) continue;
                 // A range crossing into another paragraph needs a cross-block placement. Here both
                 // endpoints and the comment reference must survive together in the same text span.
                 var markers = range.ToList();

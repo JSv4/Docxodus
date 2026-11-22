@@ -1458,7 +1458,7 @@ internal static partial class IrMarkupRenderer
             el.AddFirst(pPr);
     }
 
-    internal static void RenderBlockOp(IrEditOp op, RenderState state, List<XElement> sink)
+    internal static void RenderBlockOp(IrEditOp op, RenderState state, List<XElement> sink, XElement? acceptedCopy = null)
     {
         // A block-level content control owns a non-run OOXML envelope (`w:sdtPr`, `w:sdtEndPr`, nesting,
         // bindings, locks, etc.). It cannot be reconstructed safely from independent paragraph/table ops.
@@ -1530,7 +1530,7 @@ internal static partial class IrMarkupRenderer
                 break;
 
             case IrEditOpKind.ModifyBlock:
-                RenderModifyBlock(op, state, sink);
+                RenderModifyBlock(op, state, sink, acceptedCopy);
                 break;
 
             case IrEditOpKind.MoveBlock:
@@ -1543,7 +1543,7 @@ internal static partial class IrMarkupRenderer
                     if (op.IsMoveSource == true)
                         EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
                     else
-                        EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+                        EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true, acceptedCopy: acceptedCopy);
                     break;
                 }
                 // When move rendering is OFF (the DetectMoves=false analogue), a move is projected as a plain
@@ -2048,7 +2048,7 @@ internal static partial class IrMarkupRenderer
     /// Modified pair (table, opaque, section break, or a paragraph that somehow lacks a token diff) falls back
     /// to a conservative whole-block del(left)+ins(right) that keeps the invariant — Task 4 refines tables.
     /// </summary>
-    private static void RenderModifyBlock(IrEditOp op, RenderState state, List<XElement> sink)
+    private static void RenderModifyBlock(IrEditOp op, RenderState state, List<XElement> sink, XElement? acceptedCopy = null)
     {
         bool leftIsPara = ResolveBlock(op.LeftAnchor, state.Left) is IrParagraph;
         bool rightIsPara = ResolveBlock(op.RightAnchor, state.RightSource) is IrParagraph;
@@ -2101,7 +2101,7 @@ internal static partial class IrMarkupRenderer
         if (op.LeftAnchor != null)
             EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
         if (op.RightAnchor != null)
-            EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+            EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true, acceptedCopy: acceptedCopy);
     }
 
     /// <summary>
@@ -5629,10 +5629,15 @@ internal static partial class IrMarkupRenderer
         state.AuthorOverride = savedAuthor;
     }
 
-    /// <summary>Write the retained ranges the planner placed on the accepted copy of a replaced paragraph.</summary>
-    internal static void WriteReplacementAnnotations(XElement target, IEnumerable<IrEqualReviewerMarkers> reviewers,
+    /// <summary>Place the retained ranges on the winning source copy before it is wrapped in revisions.</summary>
+    internal static XElement PrepareReplacementCopy(XElement winner, IEnumerable<IrEqualReviewerMarkers> reviewers,
         IrDocument baseIr, IReadOnlyList<IrDocument> reviewerIrs, RenderState state)
     {
+        var copy = new XElement(winner);
+        var insertions = new Dictionary<int, List<XElement>>();
+        var comments = copy.Descendants().Where(IsCommentMarker)
+            .Select(m => (m.Name, (string?)m.Attribute(W.id))).ToHashSet();
+        var bookmarks = copy.Descendants(W.bookmarkStart).Select(e => (string?)e.Attribute(W.name)).ToHashSet();
         state.BaseBookmarkNames ??= BodyBookmarkNames(baseIr);
         var savedAuthor = state.AuthorOverride;
         foreach (var reviewer in reviewers)
@@ -5641,31 +5646,100 @@ internal static partial class IrMarkupRenderer
                 SourceElement(reviewer.Anchor, reviewerIrs[reviewer.Reviewer]) is not { } source)
                 continue;
             var markers = IrReplacementAnnotations.Markers(source).Select(m => m.Element).ToArray();
-            var projected = positions.Select(p => (Element: markers[p.Ordinal], p.Offset)).ToList();
             var baseComments = state.ReviewerComparisons?[reviewer.Reviewer].BaseCommentAnchors;
-            var comments = projected.Where(p => IsCommentMarker(p.Element) &&
-                (string?)p.Element.Attribute(W.id) is { } id && baseComments?.ContainsKey(id) != true);
             state.AuthorOverride = reviewer.Author;
-            CarryCommentMarkers(target, comments.Select(p => (p.Element, p.Offset, false)), nextId: state.NextId);
-
-            foreach (var range in projected.Where(p => p.Element.Name == W.bookmarkStart || p.Element.Name == W.bookmarkEnd)
-                         .GroupBy(p => (string?)p.Element.Attribute(W.id)))
+            var bookmarkIds = new HashSet<string>();
+            foreach (var position in positions)
             {
-                var start = range.FirstOrDefault(p => p.Element.Name == W.bookmarkStart).Element;
-                if (start?.Attribute(W.name)?.Value is not { } name || state.BaseBookmarkNames.Contains(name) ||
-                    state.CompositeBookmarks?.Allows(reviewer.Reviewer, start) == false ||
-                    target.Descendants(W.bookmarkStart).Any(e => (string?)e.Attribute(W.name) == name))
-                    continue;
-                foreach (var (element, offset) in range)
+                var marker = markers[position.Ordinal];
+                if ((string?)marker.Attribute(W.id) is not { } id) continue;
+                if (IsCommentMarker(marker))
                 {
-                    var marker = StripUnids(new XElement(element));
-                    InsertAtTextOffset(target, marker, offset, nextId: state.NextId);
-                    WrapMarkerInRevision(marker, RevKind.Ins, state);
+                    if (baseComments?.ContainsKey(id) == true || !comments.Add((marker.Name, id))) continue;
                 }
+                else if (marker.Name == W.bookmarkStart)
+                {
+                    if ((string?)marker.Attribute(W.name) is not { } name || state.BaseBookmarkNames.Contains(name) ||
+                        state.CompositeBookmarks?.Allows(reviewer.Reviewer, marker) == false || !bookmarks.Add(name)) continue;
+                    bookmarkIds.Add(id);
+                }
+                else if (!bookmarkIds.Contains(id)) continue;
+                if (!insertions.TryGetValue(position.Offset, out var at))
+                    insertions[position.Offset] = at = new();
+                var content = StripUnids(new XElement(marker));
+                if (marker.Name == W.commentReference)
+                    content = new XElement(W.r, marker.Parent?.Element(W.rPr), content);
+                var revision = new XElement(W.ins, state.RevisionAttributes(), content);
+                (state.ReplacementMarkerRevisions ??= new()).Add(revision.Attribute(W.id)!.Value);
+                at.Add(revision);
             }
         }
         state.AuthorOverride = savedAuthor;
+        PlaceOnCopy(winner, copy, insertions);
+        return copy;
     }
+
+    /// <summary>Split the winning copy at the reader's physical text leaves. Positions at a shared
+    /// boundary are inserted together in source order, including the endpoints of a collapsed range.</summary>
+    private static void PlaceOnCopy(XElement source, XElement copy, Dictionary<int, List<XElement>> insertions)
+    {
+        if (insertions.Count == 0 || source.Annotation<IrSourceContent>() is not { } content) return;
+        var widths = content.TextWidths();
+        var leaves = new List<(XElement Copy, int Start, int End)>();
+        int end = 0;
+        // Source and copy are still identical trees. Only the reader decides which leaves belong
+        // to the paragraph; an embedded textbox, for example, has its own text stream.
+        foreach (var (original, cloned) in source.Descendants().Zip(copy.Descendants()))
+            if (widths.TryGetValue(original, out int width))
+            {
+                leaves.Add((cloned, end, end + width));
+                end += width;
+            }
+        if (leaves.Count == 0)
+        {
+            foreach (var group in insertions.OrderBy(p => p.Key)) copy.Add(group.Value);
+            return;
+        }
+        // Work backwards so splitting one text leaf never invalidates a smaller pending offset.
+        int index = leaves.Count - 1;
+        foreach (var (offset, revisions) in insertions.OrderByDescending(p => p.Key))
+        {
+            bool hasStart = revisions.Any(r => r.Element(W.bookmarkStart) is not null || r.Element(W.commentRangeStart) is not null);
+            while (index > 0 && (offset < leaves[index].Start || offset == leaves[index].Start && !hasStart)) index--;
+            var (leaf, start, limit) = leaves[index];
+            var run = leaf.Parent!;
+            bool afterLeaf = offset >= limit;
+            var tail = leaf.ElementsAfterSelf().ToList();
+            if (offset > start && !afterLeaf && leaf.Name == W.t)
+            {
+                var suffix = new XElement(leaf);
+                suffix.Value = leaf.Value[(offset - start)..];
+                leaf.Value = leaf.Value[..(offset - start)];
+                foreach (var t in new[] { leaf, suffix }) t.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+                tail.Insert(0, suffix);
+            }
+            else if (!afterLeaf) tail.Insert(0, leaf);
+            if (tail.Count == 0)
+                run.AddAfterSelf(revisions);
+            else if (tail[0] == run.Elements().First(e => e.Name != W.rPr))
+                run.AddBeforeSelf(revisions);
+            else
+            {
+                var rest = new XElement(W.r, run.Attributes(), run.Element(W.rPr));
+                foreach (var child in tail)
+                {
+                    if (child.Parent is not null) child.Remove();
+                    rest.Add(child);
+                }
+                run.AddAfterSelf(revisions, rest);
+            }
+        }
+    }
+
+    // An annotation placed on the fresh copy already carries its own reviewer's insertion.
+    private static bool IsComposedAnnotationRevision(XElement child, RenderState state) =>
+        state.ReplacementMarkerRevisions is { } markers && child.Name == W.ins &&
+        (string?)child.Attribute(W.id) is { } id && markers.Contains(id);
 
     /// <summary>A block is copied from only one source. Preserve missing comment markers from a counterpart
     /// with the same text at their source offsets, including their order at a shared offset. Common comments stay
@@ -6466,7 +6540,8 @@ internal static partial class IrMarkupRenderer
         List<XElement> sink,
         RevKind kind,
         bool fromRight,
-        bool projectLeftDeletionAsInsertion = false)
+        bool projectLeftDeletionAsInsertion = false,
+        XElement? acceptedCopy = null)
     {
         var src = SourceElement(anchor, doc);
         if (src == null)
@@ -6511,7 +6586,7 @@ internal static partial class IrMarkupRenderer
             }
             return;
         }
-        var clone = new XElement(src);
+        var clone = acceptedCopy ?? new XElement(src);
         if (IsDeleteGrade(kind) &&
             ResolveBlock(anchor, doc) is IrParagraph deletedParagraph &&
             deletedParagraph.List is not null &&
@@ -6629,6 +6704,7 @@ internal static partial class IrMarkupRenderer
     /// </summary>
     private static void MarkWholeSdtContentChild(XElement child, RevKind kind, RenderState state)
     {
+        if (IsComposedAnnotationRevision(child, state)) return;
         if (child.Name == W.p)
         {
             MarkWholeParagraph(child, kind, state);
@@ -6752,7 +6828,8 @@ internal static partial class IrMarkupRenderer
             // paragraph children. Leave them exactly as-is — their content is already revision-marked
             // (foreign ins stays inserted, foreign del/moveFrom stays deleted-grade), and re-wrapping
             // would nest same-kind wrappers. Unreachable when the flag is off: sources are accept-view.
-            if (state.Settings.PreserveInputRevisions && PreservedWrapperNames.Contains(child.Name))
+            if (IsComposedAnnotationRevision(child, state) ||
+                state.Settings.PreserveInputRevisions && PreservedWrapperNames.Contains(child.Name))
                 wrapped.Add(child);
             else
                 wrapped.AddRange(WrapFieldAware(child, kind, state));
@@ -11912,6 +11989,8 @@ internal static partial class IrMarkupRenderer
 
         /// <summary>Per-reviewer paragraph alignment and base comment ownership, supplied by the merger.</summary>
         internal IrNodeList<IrReviewerComparison>? ReviewerComparisons { get; init; }
+        // Reviewer-owned marker revisions in the whole paragraph currently being emitted.
+        internal HashSet<string>? ReplacementMarkerRevisions { get; set; }
 
         public CompositeBookmarkPlan? CompositeBookmarks { get; set; }
 
