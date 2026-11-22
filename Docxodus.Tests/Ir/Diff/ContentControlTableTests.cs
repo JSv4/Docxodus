@@ -801,6 +801,34 @@ public class ContentControlTableTests
             AssertRedline(left, right, IrMarkupRenderer.Render(plan, left, right, settings));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Composed_controls_bind_to_fresh_reviewer_sources(bool retain)
+    {
+        WmlDocument Make(string dock, string crane) => Table(Row("Dock", dock),
+            Control(9, Row("Crane", Control(12, Cell(P(crane))))));
+        var original = Make("Berth one", "Hook two");
+        var editor = Make("Berth one, north", "Hook two");
+        var inspector = Make("Berth one", "Hook two, spare");
+        var expected = Make("Berth one, north", "Hook two, spare");
+        var options = new IrReaderOptions { RetainSources = retain, RevisionView = RevisionView.Accept };
+        var settings = new IrDiffSettings();
+        var plan = IrCompositeMerger.Merge(IrReader.Read(original, options),
+            new[] { ("Editor", IrReader.Read(editor, options)), ("Inspector", IrReader.Read(inspector, options)) },
+            ConflictResolution.BaseWins, settings);
+        Assert.Empty(plan.Conflicts);
+        var table = Assert.Single(plan.Operations, op => op.AuthoredRows is not null);
+        Assert.NotNull(table.ControlPlacement?.Rows);
+        Assert.Single(table.ControlPlacement.Cells);
+        var marked = IrCompositeMarkupRenderer.Render(plan, original, new[] { ("Editor", editor), ("Inspector", inspector) }, settings);
+        var accepted = RevisionProcessor.AcceptRevisions(marked);
+        var rejected = RevisionProcessor.RejectRevisions(marked);
+        Assert.Equal(Layout(expected), Layout(accepted));
+        Assert.Equal(Layout(original), Layout(rejected));
+        AssertValid(marked, accepted, rejected);
+    }
+
     private static readonly ConflictResolution[] Policies =
         { ConflictResolution.BaseWins, ConflictResolution.FirstReviewerWins, ConflictResolution.StackAll };
 
@@ -1038,13 +1066,10 @@ public class ContentControlTableTests
     {
         // The row diff pairs a gap's rows in order, so no comparison reaches this today. A row only the original's
         // control holds, written after a row the revision adds outside it, would split the control in two.
-        static XElement Parse(params string[] children) => Body(Table(children)).Element(W + "tbl")!;
-        var left = Parse(Control(9, Row("Crane", "Hook two"), Row("Barge", "Rope three")));
-        var right = Parse(Control(9, Row("Crane", "Hook two")), Row("Lighthouse", "Lamp oil"));
-        var (leftRows, rightRows) = (left.Descendants(W + "tr").ToList(), right.Descendants(W + "tr").ToList());
-        var apart = new List<(XElement?, XElement?)> { (leftRows[0], rightRows[0]), (null, rightRows[1]), (leftRows[1], null) };
-        Assert.Null(Docxodus.Ir.Diff.IrMarkupRenderer.PlanControls(apart, left, right, W + "tr"));
-        var adjacent = new List<(XElement?, XElement?)> { (leftRows[0], rightRows[0]), (leftRows[1], null), (null, rightRows[1]) };
-        Assert.NotNull(Docxodus.Ir.Diff.IrMarkupRenderer.PlanControls(adjacent, left, right, W + "tr"));
+        var control = new IrTableControlId(-1, 0);
+        var wrapped = new[] { control };
+        var bare = System.Array.Empty<IrTableControlId>();
+        Assert.False(IrTableControlPlanner.StayTogether(new[] { wrapped, bare, wrapped }));
+        Assert.True(IrTableControlPlanner.StayTogether(new[] { wrapped, wrapped, bare }));
     }
 }
