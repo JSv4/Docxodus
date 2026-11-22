@@ -270,12 +270,6 @@ internal static class IrTableControlPlanner
             if (!IrTableDiffer.ControlsDrawable(source.Controls, source.Controls) ||
                 outputCells.Count != source.Cells.Count || outputCells.Any(c => c.Kind != IrAuthoredCellKind.Content))
                 return null;
-            foreach (var contribution in contributions)
-                foreach (var op in contribution.Diff.RowOps)
-                    if (op.LeftRowAnchor == originalAnchor && op.RightRowAnchor is { } right &&
-                        reviewRows[contribution.Reviewer].TryGetValue(right, out var reviewedOrdinal) &&
-                        !IrTableDiffer.ControlsDrawable(source.Controls, tables[contribution.Reviewer].Rows[reviewedOrdinal].Controls))
-                        return null;
             var cellChains = new IrTableControlId[outputCells.Count][];
             for (int j = 0; j < outputCells.Count; j++)
             {
@@ -284,6 +278,13 @@ internal static class IrTableControlPlanner
             }
             cells[originalAnchor] = (baseOrdinal, new IrControlLayout(cellChains, new()));
         }
+        if (cells.Count > 0)
+            foreach (var contribution in contributions)
+                foreach (var op in contribution.Diff.RowOps)
+                    if (op.LeftRowAnchor is { } left && cells.TryGetValue(left, out var cellPlan) &&
+                        op.RightRowAnchor is { } right && reviewRows[contribution.Reviewer].TryGetValue(right, out int index) &&
+                        !IrTableDiffer.ControlsDrawable(original.Rows[cellPlan.Row].Controls, tables[contribution.Reviewer].Rows[index].Controls))
+                        return null;
         foreach (var shared in surviving) authors.Remove(shared);
         List<int>? order = null;
         if (!StayTogether(chains))

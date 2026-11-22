@@ -306,7 +306,7 @@ internal static class IrTableDiffer
             if (rightMatch[j] == -1)
                 freeRight.Add(j);
 
-        if (TryAlignUnitGridRowGap(leftRows, rightRows, freeLeft, freeRight, settings, out var alignment) ||
+        if (TryAlignRowsByContent(leftRows, rightRows, freeLeft, freeRight, settings, out var alignment) ||
             TryAlignControlledRowGap(leftRows, rightRows, freeLeft, freeRight, out alignment))
         {
             foreach (var step in alignment)
@@ -378,10 +378,10 @@ internal static class IrTableDiffer
     }
 
     /// <summary>
-    /// For rows with direct, unit-span cells, score legal pairs by content. Enclosing row controls
-    /// constrain which rows may pair while preserving the order of the cells being compared.
+    /// Score legal pairs by content on unit grids and on controlled rows with the same physical grid.
+    /// Enclosing row controls constrain which rows may pair.
     /// </summary>
-    private static bool TryAlignUnitGridRowGap(
+    private static bool TryAlignRowsByContent(
         IrNodeList<IrRow> leftRows, IrNodeList<IrRow> rightRows,
         List<int> freeLeft, List<int> freeRight, IrDiffSettings settings,
         out List<MonotoneStep> alignment)
@@ -391,12 +391,13 @@ internal static class IrTableDiffer
             !FitsDpBudget(freeLeft.Count, freeRight.Count))
             return false;
 
-        foreach (int index in freeLeft)
-            if (!HasUnitCellGrid(leftRows[index]))
+        var first = leftRows[freeLeft[0]];
+        if (!freeLeft.All(i => HasUnitCellGrid(leftRows[i])) || !freeRight.All(i => HasUnitCellGrid(rightRows[i])))
+        {
+            if (first.ControlDigest == default || !freeLeft.All(i => HasSameControlledGrid(first, leftRows[i])) ||
+                !freeRight.All(i => HasSameControlledGrid(first, rightRows[i])))
                 return false;
-        foreach (int index in freeRight)
-            if (!HasUnitCellGrid(rightRows[index]))
-                return false;
+        }
 
         var leftBodies = new IrHash[freeLeft.Count];
         var rightBodies = new IrHash[freeRight.Count];
@@ -438,6 +439,18 @@ internal static class IrTableDiffer
             return false;
         foreach (var cell in row.Cells)
             if (cell.GridSpan != 1 || cell.VMerge != IrVMerge.None || cell.FromRowSdt)
+                return false;
+        return true;
+    }
+
+    private static bool HasSameControlledGrid(IrRow left, IrRow right)
+    {
+        if (right.ControlDigest == default || left.GridBefore != right.GridBefore || left.GridAfter != right.GridAfter ||
+            left.Cells.Count != right.Cells.Count)
+            return false;
+        for (int i = 0; i < left.Cells.Count; i++)
+            if (left.Cells[i].GridSpan != right.Cells[i].GridSpan || left.Cells[i].VMerge != right.Cells[i].VMerge ||
+                left.Cells[i].FromRowSdt != right.Cells[i].FromRowSdt)
                 return false;
         return true;
     }

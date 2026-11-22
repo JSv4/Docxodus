@@ -518,6 +518,80 @@ public class ContentControlTableTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(false, false)]
+    public void Repeated_rows_with_the_same_grid_keep_edits_on_the_retained_row(bool spanning, bool reverse)
+    {
+        string Item(string name, string detail) => spanning
+            ? Row(Cell(P(name) + P(detail)).Replace("</w:tcPr>", "<w:gridSpan w:val=\"2\"/></w:tcPr>"))
+            : Row(name, detail);
+        WmlDocument Form(params string[] rows) => Table(Control(9, rows));
+        var original = Form(Item("Crane", "Hook"));
+        var inserted = Form(Item("Crane", "New equipment"), Item("Crane", "Hook spare"));
+        var edited = Form(Item("Crane arm", "Hook"));
+        AssertRedline(original, inserted, DocxCompare.Compare(original, inserted));
+        AssertComposed(original, inserted, edited, Form(Item("Crane", "New equipment"), Item("Crane arm", "Hook spare")), reverse);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Moving_a_rowless_control_between_identical_siblings_is_reported(bool move)
+    {
+        string Shell(params string[] contents) => "<w:sdt><w:sdtPr/><w:sdtContent>" +
+            string.Concat(contents) + "</w:sdtContent></w:sdt>";
+        string first = Row("Dock", "West"), last = Row("Crane", "East");
+        var original = Table(Shell(first, EmptyControl), Shell(last));
+        var revised = move ? Table(Shell(first), Shell(EmptyControl, last)) : original;
+        var reviewer = new[] { new DocxDiffReviewer { Author = "Editor", Document = revised } };
+        Assert.Equal(move, DocxDiff.GetRevisions(original, revised).Any());
+        Assert.Equal(move, DocxDiff.GetConsolidatedRevisions(original, reviewer).Any());
+        Assert.Empty(DocxDiff.GetConflicts(original, reviewer));
+        foreach (var raw in new[] { DocxCompare.Compare(original, revised), DocxCompare.Consolidate(original, reviewer) })
+        {
+            var accepted = RevisionProcessor.AcceptRevisions(raw);
+            var rejected = RevisionProcessor.RejectRevisions(raw);
+            Assert.Equal(EmptyControlLayout(revised), EmptyControlLayout(accepted));
+            Assert.Equal(EmptyControlLayout(original), EmptyControlLayout(rejected));
+            AssertValid(raw, accepted, rejected);
+        }
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public void A_table_bookmark_before_a_rowless_control_keeps_the_insert_on_its_side(bool bookmark, bool reverse)
+    {
+        string first = Row("Dock", "West"), last = Row("Crane", "East"), added = Row("Mast", "Sail");
+        string start = bookmark ? "<w:bookmarkStart w:id=\"3\" w:name=\"Ledger\"/>" : "";
+        string end = bookmark ? "<w:bookmarkEnd w:id=\"3\"/>" : "";
+        WmlDocument Form(string firstRow, string insert) => Table(firstRow, start, EmptyControl, insert, end, last);
+        var original = Form(first, "");
+        var inserted = Form(first, added);
+        var edited = Form(Row("Dock", "North"), "");
+        var expected = Form(Row("Dock", "North"), added);
+        AssertComposed(original, inserted, edited, expected, reverse);
+        var reviewers = reverse ? Reviewers(edited, inserted) : Reviewers(inserted, edited);
+        static string Children(WmlDocument doc) => string.Join(",", Body(doc).Element(W + "tbl")!.Elements()
+            .Where(e => e.Name != W + "tblPr" && e.Name != W + "tblGrid").Select(e => e.Name.LocalName));
+        var comparison = DocxCompare.Compare(original, inserted);
+        Assert.Equal(Children(inserted), Children(comparison));
+        Assert.Equal(Children(inserted), Children(RevisionProcessor.AcceptRevisions(comparison)));
+        Assert.Equal(Children(original), Children(RevisionProcessor.RejectRevisions(comparison)));
+        foreach (var policy in Policies)
+        {
+            var raw = DocxCompare.Consolidate(original, reviewers, new DocxDiffConsolidateSettings { ConflictResolution = policy });
+            Assert.Equal(Children(expected), Children(raw));
+            Assert.Equal(Children(expected), Children(RevisionProcessor.AcceptRevisions(raw)));
+            Assert.Equal(Children(original), Children(RevisionProcessor.RejectRevisions(raw)));
+        }
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
     public void An_edit_and_a_prepended_row_keep_their_own_cells(bool controlled, bool reverse)
     {
         WmlDocument Form(params string[] rows) => controlled ? Table(Control(9, rows)) : Table(rows);
