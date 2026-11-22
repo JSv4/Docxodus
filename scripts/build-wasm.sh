@@ -135,9 +135,16 @@ const files = fs.readdirSync(dir).filter(f => !f.endsWith(".br") && fs.statSync(
 Promise.all(files.map(async f => {
   const p = path.join(dir, f);
   const buf = fs.readFileSync(p);
-  const c = await compress(buf, { params: {
+  const params = {
     [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
-    [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buf.length } });
+    [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buf.length
+  };
+  // The generated schema assembly compresses better with this window and distance encoding.
+  if (f === "DocumentFormat.OpenXml.wasm") {
+    params[zlib.constants.BROTLI_PARAM_LGWIN] = 21;
+    params[zlib.constants.BROTLI_PARAM_NPOSTFIX] = 2;
+  }
+  const c = await compress(buf, { params });
   fs.writeFileSync(p + ".br", c);
   return [buf.length, c.length];
 })).then(sizes => {
@@ -192,15 +199,26 @@ du -sh "$WASM_DIST"
 # CI measured the branch at 6,078,467 bytes before its rebase, 3 over 5936 KiB. 8 KiB more covers
 # the change with the spread between runners; assembly roots, dependencies and the AOT profile are
 # unchanged.
-# Table Properties (#1802: SetTableProperties, SetCellProperties, GetTableProperties, their JSON and
-# bridge exports) put CI's build at 6,088,414 bytes, 1,758 over 5944 KiB (a local build measured
-# 6,074,144: runners build larger). 8 KiB more covers it with the spread between runners; assembly
-# roots, dependencies and the AOT profile are unchanged.
-# Rebased on main f5cefdd1, whose own CI build measured 6,086,051 bytes, 605 under 5944 KiB, CI
-# measured the branch at 6,097,339, 2,491 over 5952 KiB; on the same base, #1800 and #1801 (no
-# engine change) measured 6,088,245, about 2 KB over main's own build. 8 KiB more leaves room for
-# that spread between runs.
-WIRE_BUDGET_BYTES=$((5960 * 1024))
+# The comparison fixes for #1804 and #1805 add no wire size of their own: local builds of main f5cefdd1 and
+# each branch, differing only in that change, measured 6,086,099 (main), 6,086,133 (#1805) and 6,083,500
+# (#1804) bytes, and CI's build-npm job measured the #1805 branch at 6,083,474. CI's fidelity compare job,
+# on a different runner, measured the same branches at 6,087,674 and 6,090,928, up to 4,272 over 5944 KiB:
+# main had 557 bytes of headroom on local and build-npm builds, less than that spread. 8 KiB more covers it;
+# assembly roots, dependencies and the AOT profile are unchanged.
+# The content-control table fixes for #1810 (on top of the Consolidate marker fixes for #1812) measured
+# 6,099,381 to 6,100,036 bytes on CI's build, build-npm and compare jobs, up to 5,188 over 5952 KiB, against
+# 6,081,672 for main c70ea5e9 and 6,084,232 to 6,087,847 for the #1812 branch below it on the same jobs. Local
+# builds of the three measured 6,081,885, 6,079,102 and 6,088,766: on these branches CI's output runs up to
+# 11 KB over a local build, more than any spread recorded above. 12 KiB more covers the change and the section
+# fixes for #1809 (CI measured that branch 2,126 over main) landing beside it; assembly roots, dependencies and
+# the AOT profile are unchanged.
+# Table Properties (SetTableProperties, SetCellProperties, GetTableProperties, their JSON and bridge
+# exports) add about 11 KB: on main f5cefdd1, CI measured the branch at 6,097,339 bytes against
+# 6,086,051 for main. On main 27673a03, CI's build-npm job measured 6,097,186 bytes and the fidelity
+# compare job, on another runner, 6,104,357, which is 2,779 under 5964 KiB, so the change lands about
+# 8 KB over on that job. 16 KiB more covers it and the spread between runners; assembly roots,
+# dependencies and the AOT profile are unchanged.
+WIRE_BUDGET_BYTES=$((5980 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""

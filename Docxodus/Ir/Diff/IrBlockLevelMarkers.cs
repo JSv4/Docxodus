@@ -129,10 +129,10 @@ internal static partial class IrMarkupRenderer
 
     // Rows and cells use the same gap matching as paragraph blocks; their sources are resolved by the table
     // renderer because row/cell anchors are not part of the document's block index.
-    private static MarkerLayout? ComputeMarkerLayout(List<XElement>[] leftBlocks, List<XElement>[] rightBlocks)
+    private static MarkerLayout? ComputeMarkerLayout(List<XElement>[] leftBlocks, List<XElement>[] rightBlocks, bool tableControls = false)
     {
-        var left = ReadSideMarkers(leftBlocks);
-        var right = ReadSideMarkers(rightBlocks);
+        var left = ReadSideMarkers(leftBlocks, tableControls);
+        var right = ReadSideMarkers(rightBlocks, tableControls);
         if (left is null && right is null)
             return null;
         left ??= new SideMarkers(new(), new());
@@ -234,10 +234,12 @@ internal static partial class IrMarkupRenderer
     /// reviewer ops (a stream the merger composed without them) the base markers are kept as they are. Returns
     /// null when there is nothing to place.
     /// </summary>
-    internal static Dictionary<int, List<XElement>>? PlanCompositeBlockLevelMarkers(
+    internal static CompositeBlockMarkers? PlanCompositeBlockLevelMarkers(
         IReadOnlyList<IrCompositeOp> ops, IrDocument baseIr, IReadOnlyList<IrDocument> reviewerIrs,
         IReadOnlyList<IReadOnlyList<IrEditOp>>? reviewerOps, IReadOnlyList<string> authors, RenderState state)
     {
+        if (reviewerOps is not null && reviewerOps.Any(list => list.Any(o => o.Kind == IrEditOpKind.SplitBlock)))
+            reviewerOps = reviewerOps.Select(list => (IReadOnlyList<IrEditOp>)list.SelectMany(MarkerMembers).ToList()).ToList();
         // Nothing to place when the base has no marker between these blocks and no reviewer has one between
         // theirs: decide that before resolving every op.
         bool baseHasMarkers =
@@ -248,6 +250,22 @@ internal static partial class IrMarkupRenderer
             layouts[r] = ComputeMarkerLayout(reviewerOps![r], baseIr, reviewerIrs[r]);
         if (!baseHasMarkers && layouts.All(l => l is null))
             return null;
+        // A native split renders several paragraphs. Give each member an address in the marker
+        // alignment while leaving the actual split operation and its text revisions intact.
+        int[]? starts = null;
+        if (ops.Any(o => o.Op.Kind == IrEditOpKind.SplitBlock))
+        {
+            starts = new int[ops.Count + 1];
+            var boundaries = new List<IrCompositeOp>();
+            for (int i = 0; i < ops.Count; i++)
+            {
+                starts[i] = boundaries.Count;
+                var source = ops[i];
+                foreach (var member in MarkerMembers(source.Op)) boundaries.Add(source with { Op = member });
+            }
+            starts[^1] = boundaries.Count;
+            ops = boundaries;
+        }
         var baseBlocks = ops.Select(o => SourceElement(o.Op.LeftAnchor, baseIr) is { } el
             ? new List<XElement> { el } : new List<XElement>()).ToArray();
         var baseSide = ReadSideMarkers(baseBlocks);
@@ -258,17 +276,70 @@ internal static partial class IrMarkupRenderer
                 byBaseAnchor.TryAdd(a, i);
         int? BaseIndex(string? anchor) => anchor is not null && byBaseAnchor.TryGetValue(anchor, out var i) ? i : null;
 
-        return PlanCompositeMarkers(ops.Count, baseSide, layouts,
-            (r, j) => BaseIndex(reviewerOps![r][j].LeftAnchor),
-            (r, j) => reviewerOps![r][j].RightAnchor is { } right
-                ? Enumerable.Range(0, ops.Count).Cast<int?>().FirstOrDefault(i =>
-                    ops[i!.Value].SourceReviewer == r && ops[i.Value].Op.RightAnchor == right)
-                : null, authors, state);
+        int? RightIndex(int r, int j) => reviewerOps![r][j].RightAnchor is { } right
+            ? Enumerable.Range(0, ops.Count).Cast<int?>().FirstOrDefault(i =>
+                ops[i!.Value].SourceReviewer == r && ops[i.Value].Op.RightAnchor == right)
+            : null;
+        // A marker supplied by a reviewer borders that reviewer's surviving contribution.
+        // Other reviewers can insert blocks between the same pair of base anchors.
+        var selected = new Dictionary<(int Reviewer, XElement Source), int>();
+        for (int i = 0; i < ops.Count; i++)
+        {
+            var op = ops[i];
+            if (op.SourceReviewer >= 0 && op.Op.Kind is IrEditOpKind.InsertBlock or IrEditOpKind.ModifyBlock &&
+                SourceElement(op.Op.RightAnchor, reviewerIrs[op.SourceReviewer]) is { } source)
+                selected.TryAdd((op.SourceReviewer, source), i);
+        }
+        int? ContributionBoundary(int reviewer, XElement marker)
+        {
+            bool end = marker.Name == W.bookmarkEnd || marker.Name == W.commentRangeEnd;
+            var sibling = end ? marker.PreviousNode : marker.NextNode;
+            while (sibling is not null)
+            {
+                if (sibling is XElement element && !IsBlockLevelMarker(element))
+                    return selected.TryGetValue((reviewer, element), out int index) ? index + (end ? 1 : 0) : null;
+                sibling = end ? sibling.PreviousNode : sibling.NextNode;
+            }
+            return null;
+        }
+        var positions = PlanCompositeMarkers(ops.Count, baseSide, layouts,
+            (r, j) => BaseIndex(reviewerOps![r][j].LeftAnchor), RightIndex, authors, state, ContributionBoundary);
+        return positions is null ? null : new CompositeBlockMarkers(positions, starts);
+    }
+
+    private static IEnumerable<IrEditOp> MarkerMembers(IrEditOp op)
+    {
+        if (op.Kind != IrEditOpKind.SplitBlock || op.SplitMergeAnchors is not { Count: > 0 } members)
+        {
+            yield return op;
+            yield break;
+        }
+        for (int i = 0; i < members.Count; i++)
+            yield return new IrEditOp(i == 0 ? IrEditOpKind.ModifyBlock : IrEditOpKind.InsertBlock,
+                i == 0 ? op.LeftAnchor : null, members[i], null, null, null);
+    }
+
+    internal sealed record CompositeBlockMarkers(Dictionary<int, List<XElement>> Positions, int[]? Starts)
+    {
+        public List<XElement>? Before(int op) => Positions.GetValueOrDefault(Starts?[op] ?? op);
+
+        public void PlaceInside(int op, int from, List<XElement> output)
+        {
+            if (Starts is null) return;
+            int count = Starts[op + 1] - Starts[op];
+            if (count <= 1) return;
+            // A whole-source fallback can also emit a deleted original before the result members.
+            int firstMember = output.Count - count;
+            if (firstMember < from) return;
+            for (int i = count - 1; i > 0; i--)
+                if (Positions.TryGetValue(Starts[op] + i, out var markers))
+                    output.InsertRange(firstMember + i, markers);
+        }
     }
 
     private static Dictionary<int, List<XElement>>? PlanCompositeMarkers(int count, SideMarkers? baseSide,
         IReadOnlyList<MarkerLayout?> layouts, Func<int, int, int?> baseIndex, Func<int, int, int?> rightIndex,
-        IReadOnlyList<string> authors, RenderState state)
+        IReadOnlyList<string> authors, RenderState state, Func<int, XElement, int?>? contributionBoundary = null)
     {
         var placement = new CompositeMarkerPlacement(state);
         for (int r = 0; r < layouts.Count; r++)
@@ -280,7 +351,8 @@ internal static partial class IrMarkupRenderer
             void Take(MarkerEntry entry, int position, bool beforeBase)
             {
                 if (!layout.IsShared(entry))
-                    placement.Take(entry, reviewer, position, beforeBase);
+                    placement.Take(entry, reviewer, entry.Left is null && entry.Right is { } marker
+                        ? contributionBoundary?.Invoke(reviewer, marker) ?? position : position, beforeBase);
             }
             foreach (var (g, entries) in layout.GapStart)
             {
@@ -319,10 +391,10 @@ internal static partial class IrMarkupRenderer
     /// <summary>Put a table or row's markers around its rendered rows/cells, using their actual pairings rather
     /// than their output ordinals. An inserted/deleted row or cell can shift every subsequent boundary.</summary>
     private static void ReconcileTableStreamMarkers(XElement emitted,
-        IReadOnlyList<(XElement? Left, XElement? Right)> pairs, RenderState state)
+        IReadOnlyList<(XElement? Left, XElement? Right)> pairs, RenderState state, bool tableControls = false)
     {
         var layout = ComputeMarkerLayout(pairs.Select(p => MarkerBlock(p.Left)).ToArray(),
-            pairs.Select(p => MarkerBlock(p.Right)).ToArray());
+            pairs.Select(p => MarkerBlock(p.Right)).ToArray(), tableControls);
         if (layout is null)
             return;
         var entries = new Dictionary<int, List<MarkerEntry>>();
@@ -339,14 +411,17 @@ internal static partial class IrMarkupRenderer
         foreach (var (index, entry) in layout.Interior)
             Add(index, new[] { entry });
         PlaceStreamMarkers(emitted, entries.ToDictionary(p => p.Key,
-            p => RenderMarkerEntries(p.Value, layout.IsShared, state)));
+            p => RenderMarkerEntries(p.Value, layout.IsShared, state)), tableControls);
     }
 
     private static List<XElement> MarkerBlock(XElement? element) => element is null ? new() : new() { element };
 
-    private static void PlaceStreamMarkers(XElement stream, IReadOnlyDictionary<int, List<XElement>> markers)
+    private static void PlaceStreamMarkers(XElement stream, IReadOnlyDictionary<int, List<XElement>> markers, bool tableControls = false)
     {
-        var blocks = stream.Elements().Where(IsMarkerStreamContent).ToList();
+        // Before row controls are rewrapped, the only direct controls in the output are the
+        // paired empty controls included as physical boundaries in the table marker alignment.
+        var blocks = stream.Elements().Where(e => stream.Name == W.tbl ? e.Name == W.tr || tableControls && e.Name == W.sdt
+            : stream.Name == W.tr ? e.Name == W.tc : IsMarkerStreamContent(e)).ToList();
         stream.Elements().Where(IsBlockLevelMarker).Remove();
         foreach (var (index, values) in markers.OrderBy(p => p.Key))
         {
@@ -365,15 +440,15 @@ internal static partial class IrMarkupRenderer
 
     private static void ReconcileCompositeTableStreamMarkers(XElement emitted, IReadOnlyList<XElement?> baseElements,
         IReadOnlyList<(int Reviewer, XElement? Element)> insertedElements, IReadOnlyList<MarkerStreamReview> reviewers,
-        int reviewerCount, RenderState state)
+        int reviewerCount, RenderState state, bool tableControls = false)
     {
-        var baseSide = ReadSideMarkers(baseElements.Select(MarkerBlock).ToArray());
+        var baseSide = ReadSideMarkers(baseElements.Select(MarkerBlock).ToArray(), tableControls);
         var layouts = new MarkerLayout?[reviewerCount];
         var authors = new string[reviewerCount];
         foreach (var reviewer in reviewers)
         {
             layouts[reviewer.Reviewer] = ComputeMarkerLayout(reviewer.Pairs.Select(p => MarkerBlock(p.Left)).ToArray(),
-                reviewer.Pairs.Select(p => MarkerBlock(p.Right)).ToArray());
+                reviewer.Pairs.Select(p => MarkerBlock(p.Right)).ToArray(), tableControls);
             authors[reviewer.Reviewer] = reviewer.Author;
         }
         if (baseSide is null && layouts.All(l => l is null))
@@ -392,41 +467,76 @@ internal static partial class IrMarkupRenderer
             (r, j) => Source(r, j, true) is { } right && byRight.TryGetValue((r, right), out var i) ? i : null,
             authors, state);
         if (plan is not null)
-            PlaceStreamMarkers(emitted, plan);
+            PlaceStreamMarkers(emitted, plan, tableControls);
     }
 
-    private static void ReconcileComposedTableMarkers(XElement emitted, IrCompositeOp op,
+    // In a drawable table the control planner pairs empty controls in source order. Treat those
+    // pairs as boundaries alongside rows so bookmarks on either side keep their physical order.
+    private static void IncludeEmptyControls(List<(XElement? Left, XElement? Right)> pairs,
+        IrTable original, IrTable revised, IrTableControlPlan plan)
+    {
+        if (original.ChildOrder is not { } left || revised.ChildOrder is not { } right) return;
+        foreach (var (a, b) in left.EmptyControls.Where(c => c.Parent < 0).Zip(right.EmptyControls.Where(c => c.Parent < 0)).Reverse())
+            pairs.Insert(plan.EmptyControlPositions[b.FirstMember], (a.Source.Element, b.Source.Element));
+    }
+
+    private static void ReconcileComposedTableMarkers(XElement emitted, IrCompositeOp op, IrTable original,
         Dictionary<string, XElement> baseRows, Dictionary<string, XElement> baseCells,
         IReadOnlyList<IrDocument> reviewerIrs, RenderState state)
     {
         if (op.AuthoredRows is not { } rows || op.ReviewerTables is not { } tables)
             return;
         XElement? RightRow(int reviewer, string? anchor) => anchor is null ? null : FindRowSource(reviewerIrs[reviewer], anchor);
-        var reviews = tables.Select(t => new MarkerStreamReview(t.Reviewer, t.Author,
-            t.Diff.RowOps.Select(r => (
+        var outputBaseRows = rows.Select(r => baseRows.GetValueOrDefault(r.BaseRowAnchor ?? "")).ToList();
+        var outputInsertRows = rows.Select(r => (r.SourceReviewer, r.Kind == IrRowOpKind.InsertRow
+            ? RightRow(r.SourceReviewer, r.RightRowAnchor) : null)).ToList();
+        bool tableControls = false;
+        if (op.ControlPlacement?.Children is { } children && original.ChildOrder is { } order)
+            for (int i = children.Count - 1; i >= 0; i--)
+            {
+                var (child, before) = children[i];
+                if (order.Children[child].Name != W.sdt) continue;
+                outputBaseRows.Insert(before, order.Children[child].Source.Element);
+                outputInsertRows.Insert(before, (-1, null));
+                tableControls = true;
+            }
+
+        var reviews = new List<MarkerStreamReview>();
+        foreach (var t in tables)
+        {
+            IReadOnlyList<IrRowOp> ops = t.Diff.RowOps;
+            IrTable? rightTable = null;
+            IrTableControlPlan? plan = null;
+            if (tableControls && t.Diff.ControlPlan is { } positions &&
+                op.ControlPlacement!.TableAnchors.TryGetValue(t.Reviewer, out var anchor))
+            {
+                rightTable = ResolveBlock(anchor, reviewerIrs[t.Reviewer]) as IrTable;
+                plan = positions;
+                ops = positions.Rows.Select(row => t.Diff.RowOps[row.OpIndex]).ToArray();
+            }
+            var pairs = ops.Select(r => (
                 r.Kind == IrRowOpKind.MovedRow && r.IsMoveSource != true ? null : baseRows.GetValueOrDefault(r.LeftRowAnchor ?? ""),
-                r.Kind == IrRowOpKind.MovedRow && r.IsMoveSource == true ? null : RightRow(t.Reviewer, r.RightRowAnchor)))
-                .ToList())).ToList();
-        ReconcileCompositeTableStreamMarkers(emitted,
-            rows.Select(r => baseRows.GetValueOrDefault(r.BaseRowAnchor ?? "")).ToList(),
-            rows.Select(r => (r.SourceReviewer, r.Kind == IrRowOpKind.InsertRow ? RightRow(r.SourceReviewer, r.RightRowAnchor) : null)).ToList(),
-            reviews, reviewerIrs.Count, state);
+                r.Kind == IrRowOpKind.MovedRow && r.IsMoveSource == true ? null : RightRow(t.Reviewer, r.RightRowAnchor))).ToList();
+            if (plan is not null && rightTable is not null) IncludeEmptyControls(pairs, original, rightTable, plan);
+            reviews.Add(new(t.Reviewer, t.Author, pairs));
+        }
+        ReconcileCompositeTableStreamMarkers(emitted, outputBaseRows, outputInsertRows, reviews, reviewerIrs.Count, state, tableControls);
 
         var outputRows = emitted.Elements(W.tr).ToList();
         for (int i = 0; i < rows.Count && i < outputRows.Count; i++)
         {
             var row = rows[i];
-            if (row.Kind != IrRowOpKind.EqualRow && row.Kind != IrRowOpKind.ModifyRow ||
+            if (row.EqualReviewerMarkers is not null || row.Kind != IrRowOpKind.EqualRow && row.Kind != IrRowOpKind.ModifyRow ||
                 row.BaseRowAnchor is not { } anchor || !baseRows.TryGetValue(anchor, out var source))
                 continue;
-            var baseRowCells = source.Elements(W.tc).ToList();
+            var baseRowCells = RowCells(source);
             var cellReviews = new List<MarkerStreamReview>();
             foreach (var table in tables)
             {
                 var pair = table.Diff.RowOps.FirstOrDefault(r => r.LeftRowAnchor == anchor);
                 if (pair is null || RightRow(table.Reviewer, pair.RightRowAnchor) is not { } right)
                     continue;
-                var rightCells = right.Elements(W.tc).ToList();
+                var rightCells = RowCells(right);
                 int l = 0, r = 0;
                 var pairs = pair.CellOps is { } cells
                     ? cells.Select(c => (c.LeftCellAnchor is null ? null : baseRowCells[l++],
@@ -534,8 +644,9 @@ internal static partial class IrMarkupRenderer
     internal static void ReconcileCompositeEqualContainerMarkers(XElement emitted, XElement baseSource,
         IReadOnlyList<(int Reviewer, XElement Counterpart)> counterparts, IReadOnlyList<string> authors, RenderState state)
     {
-        CarryReviewerOnlyBookmarks(emitted, counterparts.Select(c =>
-            (c.Reviewer, c.Counterpart, authors[c.Reviewer])), state.Left, state);
+        CarryReviewerInlineMarkers(emitted, counterparts.Select(c =>
+            (c.Reviewer, c.Counterpart, authors[c.Reviewer])).ToList(), state.Left, baseSource, state);
+        ApplyCopiedCommentAttachments(emitted, baseSource, state);
         var placement = new CompositeMarkerPlacement(state);
         var streams = new Dictionary<XElement, XElement>(ReferenceEqualityComparer.Instance); // emitted -> base
         foreach (var (reviewer, counterpart) in counterparts)
@@ -593,6 +704,7 @@ internal static partial class IrMarkupRenderer
     /// </summary>
     internal static bool ReconcileEqualContainerMarkers(XElement emitted, XElement? left, XElement? right, RenderState state)
     {
+        ApplyCopiedCommentAttachments(emitted, left, state);
         if (left is null || right is null || ReferenceEquals(left, right) ||
             !HasMarkerBetweenBlocks(left) && !HasMarkerBetweenBlocks(right))
             return false;
@@ -627,7 +739,8 @@ internal static partial class IrMarkupRenderer
         return true;
     }
 
-    /// <summary>Marker-only table and cell reviewers also contribute bookmarks inside paragraphs.</summary>
+    /// <summary>Marker-only table and cell reviewers also contribute the bookmarks and comments inside paragraphs
+    /// (issue #1812).</summary>
     internal static bool CompositeMarkersDiffer(XElement? left, XElement? right)
     {
         static IEnumerable<(int Paragraph, int Offset, string Key)> Inline(XElement? container)
@@ -639,7 +752,8 @@ internal static partial class IrMarkupRenderer
                 foreach (var element in p.Descendants())
                 {
                     if (element.Name == W.t) offset += element.Value.Length;
-                    if ((element.Name == W.bookmarkStart || element.Name == W.bookmarkEnd) && IsRunLevelBookmark(element))
+                    if ((element.Name == W.bookmarkStart || element.Name == W.bookmarkEnd) && IsRunLevelBookmark(element) ||
+                        IsCommentMarker(element))
                         yield return (paragraph, offset, MarkerKey(element));
                 }
                 paragraph++;
@@ -909,9 +1023,10 @@ internal static partial class IrMarkupRenderer
     /// <summary>One side's block-level markers in the stream that holds its <paramref name="blocks"/>: every run
     /// of markers keyed by the consumed block that follows it, and those after the last consumed block. Null
     /// when the side consumes no block or its stream has no marker.</summary>
-    private static SideMarkers? ReadSideMarkers(List<XElement>[] blocks)
+    private static SideMarkers? ReadSideMarkers(List<XElement>[] blocks, bool tableControls = false)
     {
-        var stream = blocks.SelectMany(b => b).Select(b => b.Parent).FirstOrDefault(p => p is not null);
+        var first = blocks.SelectMany(b => b).FirstOrDefault();
+        var stream = tableControls ? first?.Ancestors(W.tbl).FirstOrDefault() : first?.Parent;
         if (stream is null || !stream.Elements().Any(IsBlockLevelMarker))
             return null;
 
@@ -1007,20 +1122,7 @@ internal static partial class IrMarkupRenderer
         if (marker.Name == W.bookmarkStart)
             return "b\u0000" + ((string?)marker.Attribute(W.name) ?? "#" + id);
         if (marker.Name == W.bookmarkEnd)
-        {
-            var names = marker.Document is { } document
-                ? BookmarkNamesById.GetValue(document, d => d.Descendants(W.bookmarkStart)
-                    .Where(s => s.Attribute(W.id) is not null && s.Attribute(W.name) is not null)
-                    .GroupBy(s => (string)s.Attribute(W.id)!)
-                    .ToDictionary(g => g.Key, g => (string)g.First().Attribute(W.name)!, StringComparer.Ordinal))
-                : null;
-            return "b\u0000" + (names?.GetValueOrDefault(id) ?? "#" + id);
-        }
+            return "b\u0000" + IrReader.BookmarkEndName(marker);
         return "c\u0000" + id;
     }
-
-    /// <summary>Each source document's bookmark names by id, built once per document: an end names its bookmark
-    /// only through its start. The renderer only reads its source documents.</summary>
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<XDocument, Dictionary<string, string>>
-        BookmarkNamesById = new();
 }

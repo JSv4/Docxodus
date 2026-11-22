@@ -430,7 +430,7 @@ internal static class IrTestDocuments
     /// by the diff fuzzer's footnote-edit mutation: the body XML is supplied verbatim, the footnote ref is
     /// appended in its own trailing paragraph so it does not perturb the body paragraphs the fuzzer mutates.
     /// </summary>
-    internal static WmlDocument FromBodyXmlWithFootnote(string bodyInnerXml, string footnoteText)
+    internal static WmlDocument FromBodyXmlWithFootnote(string bodyInnerXml, string footnoteText, bool appendReference = true)
     {
         using var ms = new MemoryStream();
         using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
@@ -449,7 +449,7 @@ internal static class IrTestDocuments
 
             var documentXml =
                 $"<w:document xmlns:w=\"{W}\"><w:body>{bodyInnerXml}" +
-                "<w:p><w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p>" +
+                (appendReference ? "<w:p><w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p>" : "") +
                 "</w:body></w:document>";
             WritePartXml(main, documentXml);
         }
@@ -460,11 +460,11 @@ internal static class IrTestDocuments
         s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
 
     /// <summary>
-    /// Like <see cref="FromBodyXmlWithFootnote"/> but the real footnote (id=1) paragraph's INNER XML is
+    /// Like <see cref="FromBodyXmlWithFootnote"/> but the real footnote (id=1) paragraphs' inner XML is
     /// supplied directly (e.g. <c>&lt;w:pPr&gt;&lt;w:jc w:val="center"/&gt;&lt;/w:pPr&gt;&lt;w:r&gt;…</c>),
     /// so a test can vary the footnote paragraph's <c>w:pPr</c> across two documents.
     /// </summary>
-    internal static WmlDocument FromBodyXmlWithFootnoteParagraph(string bodyInnerXml, string footnotePInnerXml)
+    internal static WmlDocument FromBodyXmlWithFootnoteParagraph(string bodyInnerXml, params string[] paragraphContents)
     {
         using var ms = new MemoryStream();
         using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
@@ -478,7 +478,7 @@ internal static class IrTestDocuments
                 $"<w:footnotes xmlns:w=\"{W}\">" +
                 "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>" +
                 "<w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>" +
-                $"<w:footnote w:id=\"1\"><w:p>{footnotePInnerXml}</w:p></w:footnote>" +
+                "<w:footnote w:id=\"1\">" + string.Concat(paragraphContents.Select(p => "<w:p>" + p + "</w:p>")) + "</w:footnote>" +
                 "</w:footnotes>");
 
             var documentXml =
