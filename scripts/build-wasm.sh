@@ -139,8 +139,11 @@ Promise.all(files.map(async f => {
     [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
     [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buf.length
   };
-  // The generated Open XML schema assembly compresses better with a 2 MiB history window.
-  if (f === "DocumentFormat.OpenXml.wasm") params[zlib.constants.BROTLI_PARAM_LGWIN] = 21;
+  // The generated schema assembly compresses better with this window and distance encoding.
+  if (f === "DocumentFormat.OpenXml.wasm") {
+    params[zlib.constants.BROTLI_PARAM_LGWIN] = 21;
+    params[zlib.constants.BROTLI_PARAM_NPOSTFIX] = 2;
+  }
   const c = await compress(buf, { params });
   fs.writeFileSync(p + ".br", c);
   return [buf.length, c.length];

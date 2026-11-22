@@ -107,11 +107,13 @@ internal static class IrCompositeMarkupRenderer
         state.IndexEditedMoves(script.Operations.Select(o => o.Op));
         for (int i = 0; i < script.Operations.Count; i++)
         {
-            if (bodyMarkers?.GetValueOrDefault(i) is { } before)
+            if (bodyMarkers?.Before(i) is { } before)
                 bodyBlocks.AddRange(before);
+            int firstOutput = bodyBlocks.Count;
             EmitCompositeOp(script.Operations[i], baseIr, reviewerIrs, state, bodyBlocks);
+            bodyMarkers?.PlaceInside(i, firstOutput, bodyBlocks);
         }
-        if (bodyMarkers?.GetValueOrDefault(script.Operations.Count) is { } trailing)
+        if (bodyMarkers?.Before(script.Operations.Count) is { } trailing)
             bodyBlocks.AddRange(trailing);
 
         // SimplifyMoveMarkup post-pass (mirrors the two-way renderer): rewrite native move markup to del/ins.
@@ -149,17 +151,27 @@ internal static class IrCompositeMarkupRenderer
                     bodyEl.Add(bodyBlocks);
                 }
 
-                // Per-reviewer media import: each reviewer's media-bearing clones live in their own bucket
-                // (keyed by reviewer index); import each from THAT reviewer's package. Opening every reviewer
-                // package only when it actually has clones to import keeps the text-only common case cheap.
-                foreach (var (sourceId, clones) in state.RightSourcedClonesBySource.OrderBy(kvp => kvp.Key))
+                // Each body or note part has its own relationship namespace. Consume the clones
+                // for that part before rendering the next scope.
+                void ImportReviewerRelationships(OpenXmlPart output)
                 {
-                    if (sourceId < 0 || sourceId >= reviewers.Count || clones.Count == 0)
-                        continue;   // base-sourced (-1) clones reference base parts already present; nothing to import.
-                    using var revStream = new OpenXmlMemoryStreamDocument(reviewers[sourceId].Doc);
-                    using var wDocRev = revStream.GetMeasuredWordprocessingDocument();
-                    IrMarkupRenderer.ImportRightSourcedMedia(clones, main, wDocRev.MainDocumentPart, streamDoc, revStream);
+                    foreach (var (sourceId, clones) in state.RightSourcedClonesBySource.OrderBy(kvp => kvp.Key))
+                    {
+                        if (sourceId < 0 || sourceId >= reviewers.Count || clones.Count == 0) continue;
+                        using var revStream = new OpenXmlMemoryStreamDocument(reviewers[sourceId].Doc);
+                        using var review = revStream.GetMeasuredWordprocessingDocument();
+                        var reviewerMain = review.MainDocumentPart;
+                        OpenXmlPart? source = output switch
+                        {
+                            FootnotesPart => reviewerMain?.FootnotesPart,
+                            EndnotesPart => reviewerMain?.EndnotesPart,
+                            _ => reviewerMain,
+                        };
+                        IrMarkupRenderer.ImportRightSourcedMedia(clones, output, source, streamDoc, revStream);
+                    }
+                    state.RightSourcedClonesBySource.Clear();
                 }
+                ImportReviewerRelationships(main);
 
                 // Strip ALL engine-internal pt bookkeeping from the assembled body.
                 foreach (var attr in bodyEl.DescendantsAndSelf().Attributes()
@@ -177,7 +189,7 @@ internal static class IrCompositeMarkupRenderer
                 // (creating reviewer-inserted definitions under fresh ids), then run the SAME body-order
                 // renumber + cross-kind nested-reference sweep the two-way renderer runs.
                 ReconcileUnchangedCompositeNoteMarkers(script, main, baseIr, reviewerIrs, authors, state);
-                RenderCompositeNoteScopes(script, state, main, baseIr, reviewerIrs, authors, settings);
+                RenderCompositeNoteScopes(script, state, main, baseIr, reviewerIrs, authors, settings, ImportReviewerRelationships);
 
                 // Carry each reviewer's missing styles + numbering into the base-based package (continuity for
                 // right-only styles / legal numbering referenced by cloned content). Order is reviewer index;
@@ -285,7 +297,7 @@ internal static class IrCompositeMarkupRenderer
         IrDocument baseIr,
         IReadOnlyList<IrDocument> reviewerIrs,
         IReadOnlyList<string> authors,
-        IrDiffSettings settings)
+        IrDiffSettings settings, Action<OpenXmlPart> importRelationships)
     {
         if (script.NoteIdMaps is null && script.NoteOps is null)
             return;
@@ -344,10 +356,10 @@ internal static class IrCompositeMarkupRenderer
         {
             ApplyCompositeNoteDiffs(
                 noteOps.Where(n => n.Kind == IrNoteKind.Footnote).ToList(), isFootnote: true,
-                main, script, baseIr, reviewerIrs, authors, state, freshIdByInserted, outputId, settings);
+                main, script, baseIr, reviewerIrs, authors, state, freshIdByInserted, outputId, settings, importRelationships);
             ApplyCompositeNoteDiffs(
                 noteOps.Where(n => n.Kind == IrNoteKind.Endnote).ToList(), isFootnote: false,
-                main, script, baseIr, reviewerIrs, authors, state, freshIdByInserted, outputId, settings);
+                main, script, baseIr, reviewerIrs, authors, state, freshIdByInserted, outputId, settings, importRelationships);
         }
 
         // ---- 4. Body-order renumber + cross-kind nested-reference sweep (the two-way pipeline). ----
@@ -498,7 +510,7 @@ internal static class IrCompositeMarkupRenderer
         IrMarkupRenderer.RenderState state,
         IReadOnlyDictionary<(IrNoteKind Kind, int Reviewer, string ReviewerId), string> freshIdByInserted,
         IReadOnlyDictionary<(int Reviewer, IrNoteKind Kind, string ReviewerId), string> outputId,
-        IrDiffSettings settings)
+        IrDiffSettings settings, Action<OpenXmlPart> importRelationships)
     {
         if (diffs.Count == 0)
             return;
@@ -556,11 +568,13 @@ internal static class IrCompositeMarkupRenderer
             var noteBlocks = new List<XElement>();
             for (int i = 0; i < diff.Ops.Count; i++)
             {
-                if (noteMarkers?.GetValueOrDefault(i) is { } before)
+                if (noteMarkers?.Before(i) is { } before)
                     noteBlocks.AddRange(before);
+                int firstOutput = noteBlocks.Count;
                 RenderOneCompositeBlock(diff.Ops[i], baseIr, reviewerIrs, state, noteBlocks);
+                noteMarkers?.PlaceInside(i, firstOutput, noteBlocks);
             }
-            if (noteMarkers?.GetValueOrDefault(diff.Ops.Count) is { } trailing)
+            if (noteMarkers?.Before(diff.Ops.Count) is { } trailing)
                 noteBlocks.AddRange(trailing);
             if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
                 foreach (var b in noteBlocks)
@@ -599,6 +613,7 @@ internal static class IrCompositeMarkupRenderer
             foreach (var attr in root.DescendantsAndSelf().Attributes()
                          .Where(a => a.Name.Namespace == PtOpenXml.pt).ToList())
                 attr.Remove();
+            importRelationships(part!);
             part!.PutXDocument();
         }
     }
