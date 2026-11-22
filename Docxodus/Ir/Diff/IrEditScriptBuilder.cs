@@ -81,7 +81,7 @@ internal static class IrEditScriptBuilder
 
     // Relocation pairing runs after Build and can turn an ordinary deletion into a gap barrier, and a redline that
     // keeps the revision's own tracked changes replaces some kept blocks whole (preservedReplacements, the right
-    // anchors IrMarkupRenderer.PreservedReplacementAnchors names). Reproject only the stories; body/note move ids
+    // anchors from the original input pairings). Reproject only the stories; body/note move ids
     // already participate in the paired scripts.
     internal static IrEditScript FinalizeHeaderFooterOps(
         IrEditScript script, IrDocument left, IrDocument right, IrDiffSettings settings,
@@ -293,7 +293,7 @@ internal static class IrEditScriptBuilder
             switch (op.Kind)
             {
                 case IrEditOpKind.ModifyBlock:
-                    return Draw(op.LeftAnchor, op.RightAnchor, copies: DrawnAsCopies(op, left, right, preservedReplacements));
+                    return Draw(op.LeftAnchor, op.RightAnchor, copies: IrBodyPlacement.RequiresCopies(op, left, right, preservedReplacements));
                 case IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock or IrEditOpKind.InsertBlock or IrEditOpKind.DeleteBlock:
                     // A move's source is drawn where it was and its destination where it goes.
                     return Draw(op.LeftAnchor, op.RightAnchor);
@@ -322,18 +322,19 @@ internal static class IrEditScriptBuilder
                 if (!DrawOp(bodyOps[step.Start])) return null;
                 continue;
             }
-            // Both copies of a replaced section end remain in the marked document. Match the
-            // source boundaries within this replacement gap in order. The inserted copy owns the
-            // story comparison, while the deleted copy only needs the original story on reject.
-            // Unmatched endings keep their existing visibility for actual section additions/removals.
+            // When the gap replaces its section ends one for one, the inserted copy owns the
+            // story comparison and the deleted copy retains the original story on reject. With
+            // an extra break on either side, ordinal pairs are ambiguous. Keep the assignments
+            // from the paragraphs drawn in each section.
             int first = sections.Count;
             foreach (var op in step.Side(bodyOps, IrEditOpKind.InsertBlock))
                 if (!DrawOp(op)) return null;
             int firstDeleted = sections.Count;
             foreach (var op in step.Side(bodyOps, IrEditOpKind.DeleteBlock))
                 if (!DrawOp(op)) return null;
-            int pairs = Math.Min(firstDeleted - first, sections.Count - firstDeleted);
-            for (int i = 0; i < pairs; i++)
+            int insertedEnds = firstDeleted - first;
+            if (insertedEnds != sections.Count - firstDeleted) continue;
+            for (int i = 0; i < insertedEnds; i++)
             {
                 int original = sections[firstDeleted + i].Item1;
                 sections[first + i] = (original, sections[first + i].Item2);
@@ -344,19 +345,6 @@ internal static class IrEditScriptBuilder
             return null;
         sections.Add((leftCount, rightCount));
         return sections;
-    }
-
-    // A kept paragraph the redline replaces whole is drawn as its deleted copy, then its inserted copy
-    // (RenderModifyBlock's fallback), each with its own break (issue #1805): one the edit op marks for whole
-    // replacement, one whose text boxes cannot be redlined in place (TextboxBodiesDiffInPlace, the renderer's own
-    // test), and one whose revision keeps its own tracked changes (preservedReplacements, issue #1809).
-    private static bool DrawnAsCopies(IrEditOp op, IrDocument left, IrDocument right, IReadOnlySet<string>? preservedReplacements)
-    {
-        if (op.RequiresWholeParagraphReplace || op.RightAnchor is { } anchor && preservedReplacements?.Contains(anchor) == true)
-            return true;
-        return op.TextboxDiffs is { } textboxes && (left.AnchorIndex.GetValueOrDefault(op.LeftAnchor ?? "")?.Source.Element is not { } leftSource ||
-            right.AnchorIndex.GetValueOrDefault(op.RightAnchor ?? "")?.Source.Element is not { } rightSource ||
-            !IrMarkupRenderer.TextboxBodiesDiffInPlace(leftSource, rightSource, textboxes.Count));
     }
 
     private static readonly IrHeaderFooterKind[] HeaderFooterKinds =

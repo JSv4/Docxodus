@@ -17,6 +17,22 @@ internal readonly record struct IrBodyStep(int Start, int End, bool IsGap)
 /// <summary>Physical paragraph order and paragraph-mark ownership shared by story binding and markup.</summary>
 internal static class IrBodyPlacement
 {
+    /// <summary>Whether a modified paragraph occupies two physical paragraphs in the redline.
+    /// The public edit script can still describe token and textbox changes inside these copies.</summary>
+    internal static bool RequiresCopies(IrEditOp op, IrDocument left, IrDocument right,
+        IReadOnlySet<string>? preservedReplacements)
+    {
+        if (op.RequiresWholeParagraphReplace || op.RightAnchor is { } anchor && preservedReplacements?.Contains(anchor) == true)
+            return true;
+        if (op.TextboxDiffs is not { } boxes) return false;
+        return !CanBind(left, op.LeftAnchor) || !CanBind(right, op.RightAnchor);
+
+        bool CanBind(IrDocument source, string? key) =>
+            key is not null && source.AnchorIndex.TryGetValue(key, out var block) && block is IrParagraph paragraph &&
+            paragraph.PhysicalTextboxes is { HasBlockMarkers: false, HasSpanningField: false, HasCarrierRelationships: false } facts &&
+            facts.Count == boxes.Count;
+    }
+
     internal static IEnumerable<IrBodyStep> Steps(IReadOnlyList<IrEditOp> operations, bool renderMoves)
     {
         bool InGap(IrEditOp op) => op.Kind is IrEditOpKind.InsertBlock or IrEditOpKind.DeleteBlock &&

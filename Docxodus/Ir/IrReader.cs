@@ -930,7 +930,7 @@ internal static class IrReader
         // Inline SDT/smartTag carriers are intentionally transparent to the modeled inline stream, but their
         // wrapper topology cannot be reconstructed safely by a token-level redline. Keep a separate canonical
         // envelope digest so the edit builder can lower a carrier change to a reversible whole paragraph pair.
-        var inlineEnvelopeDigest = InlineEnvelopeDigestFor(p, processed, ctx);
+        var inlineEnvelopeDigest = InlineEnvelopeDigestFor(p, processed, ctx, out var physicalTextboxes);
 
         // A non-hyperlink field's code and begin-state are deliberately transparent to content/token alignment:
         // the cached result is what is visible. Keep their independent structural carrier digest so a same-result
@@ -953,6 +953,7 @@ internal static class IrReader
             Format = paraFormat,
             List = listInfo,
             Inlines = IrNodeList.From(processed),
+            PhysicalTextboxes = physicalTextboxes,
             ProjectedInlines = !ctx.ProjectCustomXml && p.Descendants(W + "customXml").Any()
                 ? IrNodeList.From(WalkInlines(p.Elements().Where(c => c.Name != W + "pPr"),
                     ctx.WithoutComments(projectCustomXml: true))) : null,
@@ -983,19 +984,22 @@ internal static class IrReader
     /// but a wrapper-only change there must still prevent the outer source drawing from aligning Equal.
     /// </summary>
     private static IrHash InlineEnvelopeDigestFor(
-        XElement paragraph, IReadOnlyList<IrInline> inlines, ReadContext ctx)
+        XElement paragraph, IReadOnlyList<IrInline> inlines, ReadContext ctx, out IrParagraphTextboxes textboxes)
     {
-        var envelopes = paragraph.Descendants()
-            .Where(element => IsInlineEnvelope(element) &&
-                IsOutermostInlineEnvelope(paragraph, element))
-            .ToList();
-
         var stream = new XElement("inlineEnvelopes");
-        foreach (var envelope in envelopes)
+        textboxes = default;
+        foreach (var element in paragraph.Descendants())
         {
-            stream.Add(new XElement("carrier",
-                new XAttribute("path", InlineElementPath(paragraph, envelope)),
-                new XElement(envelope)));
+            if (IsInlineEnvelope(element) && IsOutermostInlineEnvelope(paragraph, element))
+                stream.Add(new XElement("carrier",
+                    new XAttribute("path", InlineElementPath(paragraph, element)), new XElement(element)));
+            if (element.Name != WTxbxContent) continue;
+            var ancestors = element.Ancestors().TakeWhile(a => a != paragraph);
+            if (ancestors.Any(a => a.Name == WTxbxContent)) continue;
+            var (markers, field) = ScanWrapperContent(element.Elements());
+            textboxes = new(textboxes.Count + 1, textboxes.HasBlockMarkers || markers,
+                textboxes.HasSpanningField || field,
+                textboxes.HasCarrierRelationships || ancestors.Attributes().Any(a => a.Name.Namespace == R));
         }
         AppendTextboxGraphCarrierEntries(paragraph, ctx, stream);
         AppendTextboxInlineEnvelopeEntries(inlines, "", stream);

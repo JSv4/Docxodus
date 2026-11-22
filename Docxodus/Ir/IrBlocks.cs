@@ -4,6 +4,11 @@ using System.Xml.Linq;
 
 namespace Docxodus.Ir;
 
+/// <summary>Physical outermost textbox bodies in a paragraph and the source content
+/// that crosses a body boundary. Available with either source retention setting.</summary>
+internal readonly record struct IrParagraphTextboxes(int Count, bool HasBlockMarkers,
+    bool HasSpanningField, bool HasCarrierRelationships);
+
 /// <summary>
 /// Base type for block-level IR content. Every block carries a stable <see cref="Anchor"/>, a
 /// <see cref="ContentHash"/> (text/structure digest) and a <see cref="FormatFingerprint"/>
@@ -34,6 +39,7 @@ internal abstract record IrBlock
 /// </summary>
 internal sealed record IrParagraph : IrBlock
 {
+    internal IrParagraphTextboxes PhysicalTextboxes { get; init; }
     /// <summary>Direct paragraph formatting (`w:pPr`); cascade resolution is an M1.3 view, not stored here.</summary>
     public required IrParaFormat Format { get; init; }
     public IrListInfo? List { get; init; }
