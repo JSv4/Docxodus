@@ -167,13 +167,13 @@ internal static class IrEditScriptBuilder
         private IrTableDiff Table(IrTableDiff table)
         {
             var rows = new Dictionary<int, int>();
-            return new IrTableDiff(IrNodeList.From(table.RowOps.Select(row => row with
+            return table with { RowOps = IrNodeList.From(table.RowOps.Select(row => row with
             {
                 MoveGroupId = row.MoveGroupId is { } id ? Fresh(rows, id) : null,
                 CellOps = row.CellOps is { } cells
                     ? IrNodeList.From(cells.Select(c => c.BlockOps is { } ops ? c with { BlockOps = Scope(ops) } : c))
                     : null,
-            })));
+            })) };
         }
     }
 
@@ -2043,6 +2043,7 @@ internal static class IrEditScriptBuilder
     /// Structural carrier facts stay outside visible-content identity. Descend through equal containers so
     /// textbox geometry changes are still compared, without making stable textbox shells unsliceable.
     /// A section boundary's presence cannot be archived in pPrChange or sectPrChange; replace its carrier.
+    /// A table's content controls are carriers too (issue #1810): a table whose controls alone change is diffed.
     /// </summary>
     internal static bool StructuralCarrierDiffers(IrBlock left, IrBlock right)
     {
@@ -2054,6 +2055,7 @@ internal static class IrEditScriptBuilder
                  TextboxCarriersDiffer(CollectTextboxes(lp.Inlines), CollectTextboxes(rp.Inlines)));
         if (left is IrTable lt && right is IrTable rt)
         {
+            if (lt.ControlDigest != rt.ControlDigest) return true;
             for (int i = 0; i < Math.Min(lt.Rows.Count, rt.Rows.Count); i++)
                 if (RowCarriersDiffer(lt.Rows[i], rt.Rows[i])) return true;
             return false;
@@ -2122,22 +2124,6 @@ internal static class IrEditScriptBuilder
         if (!left.TblPrDigest.Equals(right.TblPrDigest) || !left.TblGridDigest.Equals(right.TblGridDigest)) return true;
         for (int i = 0; i < Math.Min(left.Rows.Count, right.Rows.Count); i++)
             if (!left.Rows[i].TrPrDigest.Equals(right.Rows[i].TrPrDigest)) return true;
-        return false;
-    }
-
-    /// <summary>Whether a content control delivers one of the table's rows, or a cell of one.</summary>
-    internal static bool HasContentControlRow(IrTable table)
-    {
-        for (int i = 0; i < table.Rows.Count; i++)
-            if (FromContentControl(table.Rows[i])) return true;
-        return false;
-    }
-
-    private static bool FromContentControl(IrRow row)
-    {
-        if (row.FromTableSdt) return true;
-        for (int i = 0; i < row.Cells.Count; i++)
-            if (row.Cells[i].FromRowSdt) return true;
         return false;
     }
 

@@ -202,7 +202,14 @@ du -sh "$WASM_DIST"
 # on a different runner, measured the same branches at 6,087,674 and 6,090,928, up to 4,272 over 5944 KiB:
 # main had 557 bytes of headroom on local and build-npm builds, less than that spread. 8 KiB more covers it;
 # assembly roots, dependencies and the AOT profile are unchanged.
-WIRE_BUDGET_BYTES=$((5952 * 1024))
+# The content-control table fixes for #1810 (on top of the Consolidate marker fixes for #1812) measured
+# 6,099,381 to 6,100,036 bytes on CI's build, build-npm and compare jobs, up to 5,188 over 5952 KiB, against
+# 6,081,672 for main c70ea5e9 and 6,084,232 to 6,087,847 for the #1812 branch below it on the same jobs. Local
+# builds of the three measured 6,081,885, 6,079,102 and 6,088,766: on these branches CI's output runs up to
+# 11 KB over a local build, more than any spread recorded above. 12 KiB more covers the change and the section
+# fixes for #1809 (CI measured that branch 2,126 over main) landing beside it; assembly roots, dependencies and
+# the AOT profile are unchanged.
+WIRE_BUDGET_BYTES=$((5964 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""

@@ -391,7 +391,7 @@ internal static partial class IrMarkupRenderer
     /// <summary>Put a table or row's markers around its rendered rows/cells, using their actual pairings rather
     /// than their output ordinals. An inserted/deleted row or cell can shift every subsequent boundary.</summary>
     private static void ReconcileTableStreamMarkers(XElement emitted,
-        IReadOnlyList<(XElement? Left, XElement? Right)> pairs, RenderState state)
+        IReadOnlyList<(XElement? Left, XElement? Right)> pairs, RenderState state, bool includeControls = false)
     {
         var layout = ComputeMarkerLayout(pairs.Select(p => MarkerBlock(p.Left)).ToArray(),
             pairs.Select(p => MarkerBlock(p.Right)).ToArray());
@@ -411,16 +411,16 @@ internal static partial class IrMarkupRenderer
         foreach (var (index, entry) in layout.Interior)
             Add(index, new[] { entry });
         PlaceStreamMarkers(emitted, entries.ToDictionary(p => p.Key,
-            p => RenderMarkerEntries(p.Value, layout.IsShared, state)));
+            p => RenderMarkerEntries(p.Value, layout.IsShared, state)), includeControls);
     }
 
     private static List<XElement> MarkerBlock(XElement? element) => element is null ? new() : new() { element };
 
-    private static void PlaceStreamMarkers(XElement stream, IReadOnlyDictionary<int, List<XElement>> markers)
+    private static void PlaceStreamMarkers(XElement stream, IReadOnlyDictionary<int, List<XElement>> markers,
+        bool includeControls = false)
     {
-        // A table's markers are planned between its rows and a row's between its cells; a content control among them
-        // that holds none (issue #1812) is not one of the positions.
-        var blocks = stream.Elements().Where(e => stream.Name == W.tbl ? e.Name == W.tr
+        // Row-delivering controls are rewrapped after marker placement. Only rowless controls are present here.
+        var blocks = stream.Elements().Where(e => stream.Name == W.tbl ? e.Name == W.tr || includeControls && e.Name == W.sdt
             : stream.Name == W.tr ? e.Name == W.tc : IsMarkerStreamContent(e)).ToList();
         stream.Elements().Where(IsBlockLevelMarker).Remove();
         foreach (var (index, values) in markers.OrderBy(p => p.Key))
@@ -440,7 +440,7 @@ internal static partial class IrMarkupRenderer
 
     private static void ReconcileCompositeTableStreamMarkers(XElement emitted, IReadOnlyList<XElement?> baseElements,
         IReadOnlyList<(int Reviewer, XElement? Element)> insertedElements, IReadOnlyList<MarkerStreamReview> reviewers,
-        int reviewerCount, RenderState state)
+        int reviewerCount, RenderState state, bool includeControls = false)
     {
         var baseSide = ReadSideMarkers(baseElements.Select(MarkerBlock).ToArray());
         var layouts = new MarkerLayout?[reviewerCount];
@@ -467,25 +467,60 @@ internal static partial class IrMarkupRenderer
             (r, j) => Source(r, j, true) is { } right && byRight.TryGetValue((r, right), out var i) ? i : null,
             authors, state);
         if (plan is not null)
-            PlaceStreamMarkers(emitted, plan);
+            PlaceStreamMarkers(emitted, plan, includeControls);
     }
 
-    private static void ReconcileComposedTableMarkers(XElement emitted, IrCompositeOp op,
+    private static IEnumerable<(XElement Element, int Before)> TopLevelRowlessControls(XElement table)
+    {
+        int rows = 0;
+        foreach (var child in table.Elements())
+            if (child.Name == W.tr) rows++;
+            else if (child.Name == W.sdt)
+            {
+                int count = IrReader.UnwrapSdtChildren(child, W.tr).Count();
+                if (count == 0) yield return (child, rows);
+                else rows += count;
+            }
+    }
+
+    private static void ReconcileComposedTableMarkers(XElement emitted, IrCompositeOp op, IrTable original,
         Dictionary<string, XElement> baseRows, Dictionary<string, XElement> baseCells,
         IReadOnlyList<IrDocument> reviewerIrs, RenderState state)
     {
         if (op.AuthoredRows is not { } rows || op.ReviewerTables is not { } tables)
             return;
         XElement? RightRow(int reviewer, string? anchor) => anchor is null ? null : FindRowSource(reviewerIrs[reviewer], anchor);
-        var reviews = tables.Select(t => new MarkerStreamReview(t.Reviewer, t.Author,
-            t.Diff.RowOps.Select(r => (
+        var outputBaseRows = rows.Select(r => baseRows.GetValueOrDefault(r.BaseRowAnchor ?? "")).ToList();
+        var outputRight = rows.Select(r => (r.SourceReviewer, r.Kind == IrRowOpKind.InsertRow
+            ? RightRow(r.SourceReviewer, r.RightRowAnchor) : null)).ToList();
+        var controls = emitted.Element(W.sdt) is not null && (original.Source.Element!.Elements().Any(IsBlockLevelMarker) ||
+            tables.Any(t => t.RevisedTable?.Source.Element?.Elements().Any(IsBlockLevelMarker) == true))
+            ? TopLevelRowlessControls(original.Source.Element!).ToList() : null;
+        if (controls is { Count: > 0 })
+            foreach (var (left, placed) in controls.Zip(TopLevelRowlessControls(emitted)).Reverse())
+            {
+                outputBaseRows.Insert(placed.Before, left.Element);
+                outputRight.Insert(placed.Before, (-1, null));
+            }
+        var reviews = new List<MarkerStreamReview>();
+        foreach (var t in tables)
+        {
+            var pairs = t.Diff.RowOps.Select(r => (
                 r.Kind == IrRowOpKind.MovedRow && r.IsMoveSource != true ? null : baseRows.GetValueOrDefault(r.LeftRowAnchor ?? ""),
                 r.Kind == IrRowOpKind.MovedRow && r.IsMoveSource == true ? null : RightRow(t.Reviewer, r.RightRowAnchor)))
-                .ToList())).ToList();
-        ReconcileCompositeTableStreamMarkers(emitted,
-            rows.Select(r => baseRows.GetValueOrDefault(r.BaseRowAnchor ?? "")).ToList(),
-            rows.Select(r => (r.SourceReviewer, r.Kind == IrRowOpKind.InsertRow ? RightRow(r.SourceReviewer, r.RightRowAnchor) : null)).ToList(),
-            reviews, reviewerIrs.Count, state);
+                .ToList();
+            if (controls is { Count: > 0 } && t.RevisedTable is { } revised &&
+                PlanTableControls(t.Diff.RowOps, original.Source.Element!, revised.Source.Element!, baseRows,
+                    IndexRows(revised)) is { } drawn && IrTableDiffer.ControlsInPlace(original, revised, drawn.RowOps) is { } positions)
+            {
+                pairs = drawn.Sources;
+                foreach (var (left, right) in controls.Zip(TopLevelRowlessControls(revised.Source.Element!)).Reverse())
+                    pairs.Insert(positions[right.Before], (left.Element, right.Element));
+            }
+            reviews.Add(new(t.Reviewer, t.Author, pairs));
+        }
+        ReconcileCompositeTableStreamMarkers(emitted, outputBaseRows, outputRight, reviews, reviewerIrs.Count, state,
+            controls is { Count: > 0 });
 
         var outputRows = emitted.Elements(W.tr).ToList();
         for (int i = 0; i < rows.Count && i < outputRows.Count; i++)
@@ -494,14 +529,14 @@ internal static partial class IrMarkupRenderer
             if (row.Kind != IrRowOpKind.EqualRow && row.Kind != IrRowOpKind.ModifyRow ||
                 row.BaseRowAnchor is not { } anchor || !baseRows.TryGetValue(anchor, out var source))
                 continue;
-            var baseRowCells = source.Elements(W.tc).ToList();
+            var baseRowCells = RowCells(source);
             var cellReviews = new List<MarkerStreamReview>();
             foreach (var table in tables)
             {
                 var pair = table.Diff.RowOps.FirstOrDefault(r => r.LeftRowAnchor == anchor);
                 if (pair is null || RightRow(table.Reviewer, pair.RightRowAnchor) is not { } right)
                     continue;
-                var rightCells = right.Elements(W.tc).ToList();
+                var rightCells = RowCells(right);
                 int l = 0, r = 0;
                 var pairs = pair.CellOps is { } cells
                     ? cells.Select(c => (c.LeftCellAnchor is null ? null : baseRowCells[l++],

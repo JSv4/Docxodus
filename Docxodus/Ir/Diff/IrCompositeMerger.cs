@@ -587,7 +587,7 @@ internal static class IrCompositeMerger
                 ? row
                 : row with { MoveGroupId = gid, CellOps = cells };
         });
-        return ReferenceEquals(rows, table.RowOps) ? table : new IrTableDiff(rows);
+        return ReferenceEquals(rows, table.RowOps) ? table : table with { RowOps = rows };
     }
 
     /// <summary><paramref name="items"/> mapped through <paramref name="map"/>; the same list when every item
@@ -1860,27 +1860,45 @@ internal static class IrCompositeMerger
         IReadOnlyList<(string Author, IrDocument Ir)> reviewers, IrDocument baseIr, Docxodus.ConflictResolution policy,
         IrDiffSettings settings, List<IrCompositeOp> ops, List<IrConflict> conflicts, ref int nextConflictId)
     {
-        if (!touched.All(e => IsTableContentOrShellEdit(e.Op, reviewers[e.Reviewer].Ir)) || !MovedRowsComposable(touched))
+        if (!touched.All(e => IsTableContentOrShellEdit(e.Op, reviewers[e.Reviewer].Ir)) || !MovedRowsComposable(touched) ||
+            touched.Any(e => e.Op.TableDiff?.ReplaceWhole == true))
             return false;
-        // The composed table is built from bare rows and cells, so a row or cell a content control delivers would
-        // lose its control, or a table-level control be copied with its rows beside them (issue #1804). Such a table
-        // is recorded as a conflict, as any table the merge cannot compose is, even when the reviewers' tables look
-        // alike: a shortcut that took one reviewer's table could drop what only another's holds (a bookmark, a
-        // comment, a text box's formatting), and a recorded conflict loses nothing.
-        if (IrEditScriptBuilder.HasContentControlRow(baseTable) || touched.Any(e => e.Op.RightAnchor is { } ra &&
-                reviewers[e.Reviewer].Ir.AnchorIndex.TryGetValue(ra, out var rb) && rb is IrTable rt &&
-                IrEditScriptBuilder.HasContentControlRow(rt)))
+        // The composed table is built from bare rows and cells and then rebuilds the content controls around them
+        // (issue #1810): base rows in the base's controls, a reviewer's inserted row in the base control that reviewer's
+        // comparison pairs with its own, or in a control only that reviewer has. A table whose controls cannot be
+        // rebuilt so is recorded as a conflict, as any table the merge cannot compose is, even when the reviewers'
+        // tables look alike: a shortcut that took one reviewer's table could drop what only another's holds.
+        IrTable? RightTable((int Reviewer, IrEditOp Op) e) => e.Op.RightAnchor is { } ra &&
+            reviewers[e.Reviewer].Ir.AnchorIndex.TryGetValue(ra, out var rb) ? rb as IrTable : null;
+        bool controlled = baseTable.ControlDigest != default || touched.Any(e => RightTable(e)?.ControlDigest is { } d && d != default);
+        if (controlled && (baseTable.Source.Element is null ||
+                touched.Any(e => RightTable(e) is not { } rt || !IrTableDiffer.ControlsDrawable(baseTable.Controls, rt.Controls)) ||
+                ControlReplacementContested(baseTable, touched, RightTable)))
             return false;
         // Content composition over the CONTENT (ModifyBlock w/TableDiff) touchers — a pure shell
         // (FormatOnlyBlock) toucher contributes no row ops, so with only shell touchers ComposeTableDiffs
         // yields an all-EqualRow authored table onto which the shell attribution below layers the markup.
-        var reviewerTableDiffs = touched
+        var reviewerTables = IrNodeList.From(touched
             .Where(e => e.Op.Kind == IrEditOpKind.ModifyBlock && e.Op.TableDiff != null)
-            .Select(e => (e.Reviewer, reviewers[e.Reviewer].Author, e.Op.TableDiff!))
-            .ToList();
+            .Select(e => new IrReviewerTable(e.Reviewer, reviewers[e.Reviewer].Author, e.Op.TableDiff!) { RevisedTable = RightTable(e) }));
+        var reviewerTableDiffs = reviewerTables.Select(t => (t.Reviewer, t.Author, t.Diff)).ToList();
+        int firstConflictId = nextConflictId;
         var merged = ComposeTableDiffs(
             anchor, baseTable, reviewerTableDiffs, reviewers, baseIr, policy, settings,
             ref nextConflictId, out var tableConflicts, out var authoredRows);
+        List<int>? order = null;
+        if (controlled && !ComposedControlsRebuild(baseTable, authoredRows, reviewerTables, reviewers, out order))
+        {
+            nextConflictId = firstConflictId;
+            return false;
+        }
+        if (controlled && order is not null && merged.RowOps.Count == authoredRows.Count)
+        {
+            var rowsInOrder = order.Select(i => authoredRows[i]).ToList();
+            authoredRows.Clear();
+            authoredRows.AddRange(rowsInOrder);
+            merged = merged with { RowOps = IrNodeList.From(order.Select(i => merged.RowOps[i])) };
+        }
         conflicts.AddRange(tableConflicts);
 
         // B2: per-element table + row shell composition across ALL touchers (tblPr/tblGrid at table level;
@@ -1906,10 +1924,125 @@ internal static class IrCompositeMerger
             SourceRightAnchors: null,
             AuthoredRows: IrNodeList.From(authoredRows),
             TableShell: tableShell,
-            ReviewerTables: IrMarkupRenderer.HasTableBoundaryMarkers(baseTable.Source.Element) || touched.Any(t =>
+            ReviewerTables: controlled || IrMarkupRenderer.HasTableBoundaryMarkers(baseTable.Source.Element) || touched.Any(t =>
                 IrMarkupRenderer.HasTableBoundaryMarkers(IrMarkupRenderer.SourceElement(t.Op.RightAnchor, reviewers[t.Reviewer].Ir)))
-                ? IrNodeList.From(reviewerTableDiffs.Select(r => new IrReviewerTable(r.Reviewer, r.Author, r.Item3))) : null));
+                ? reviewerTables : null));
         return true;
+    }
+
+    /// <summary>
+    /// Whether one reviewer replaces rows another reviewer also touches (issue #1810). A row whose content controls
+    /// change comes out of its reviewer's comparison deleted and inserted again (<see cref="IrTableDiffer.RowsMayPair"/>),
+    /// so composing another reviewer's edit of that row would settle the deletion and leave the insertion standing,
+    /// writing the row twice. Such a table is recorded as a conflict instead.
+    /// </summary>
+    private static bool ControlReplacementContested(IrTable baseTable, List<(int Reviewer, IrEditOp Op)> touched,
+        Func<(int Reviewer, IrEditOp Op), IrTable?> rightTable)
+    {
+        static Dictionary<string, IrRow> Index(IrTable table)
+        {
+            var index = new Dictionary<string, IrRow>(StringComparer.Ordinal);
+            foreach (var row in table.Rows)
+                index.TryAdd(row.Anchor.ToString(), row);
+            return index;
+        }
+        var baseRows = Index(baseTable);
+        var replaced = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var e in touched)
+        {
+            if (e.Op.TableDiff is not { } diff || rightTable(e) is not { } table)
+                continue;
+            var rows = Index(table);
+            var deleted = new List<string>();
+            bool inserted = false, controlled = false;
+            foreach (var row in diff.RowOps.Append(null))
+            {
+                if (row?.Kind == IrRowOpKind.DeleteRow && row.LeftRowAnchor is { } left)
+                {
+                    deleted.Add(left);
+                    controlled |= baseRows.GetValueOrDefault(left)?.ControlDigest is { } d && d != default;
+                }
+                else if (row?.Kind == IrRowOpKind.InsertRow && row.RightRowAnchor is { } right)
+                {
+                    inserted = true;
+                    controlled |= rows.GetValueOrDefault(right)?.ControlDigest is { } d && d != default;
+                }
+                else if (row?.Kind != IrRowOpKind.MovedRow)
+                {
+                    // A gap ends at a row both tables keep: its deleted rows were replaced when it also inserts one.
+                    if (inserted && controlled)
+                        foreach (var anchor in deleted)
+                            replaced.TryAdd(anchor, e.Reviewer);
+                    deleted.Clear();
+                    inserted = controlled = false;
+                }
+            }
+        }
+        // Another reviewer's edit of a replaced row, or a row it inserts next to one (inside the controls being
+        // replaced, or beside them), cannot be composed with the replacement.
+        bool ReplacedByOther(string? anchor, int reviewer) =>
+            anchor is not null && replaced.TryGetValue(anchor, out var by) && by != reviewer;
+        foreach (var e in touched)
+        {
+            var rowOps = e.Op.TableDiff?.RowOps ?? IrNodeList.Empty<IrRowOp>();
+            string? previous = null;
+            for (int i = 0; i < rowOps.Count; i++)
+            {
+                var row = rowOps[i];
+                if (row.Kind == IrRowOpKind.InsertRow)
+                {
+                    var following = rowOps.Skip(i + 1).FirstOrDefault(r => r.LeftRowAnchor is not null)?.LeftRowAnchor;
+                    if (ReplacedByOther(previous, e.Reviewer) || ReplacedByOther(following, e.Reviewer))
+                        return true;
+                    continue;
+                }
+                if (row.Kind != IrRowOpKind.EqualRow && ReplacedByOther(row.LeftRowAnchor, e.Reviewer))
+                    return true;
+                previous = row.LeftRowAnchor ?? previous;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Whether the composed table's content controls can be rebuilt around its rows (issue #1810): the layout
+    /// <see cref="IrMarkupRenderer.PlanComposedControls"/> plans, which the renderer rebuilds, exists, and no edited row
+    /// whose cells a content control delivers gains or loses a cell (the composed row puts back only the base's cells).
+    /// </summary>
+    private static bool ComposedControlsRebuild(IrTable baseTable, List<IrAuthoredRowOp> authoredRows,
+        IrNodeList<IrReviewerTable> reviewerTables, IReadOnlyList<(string Author, IrDocument Ir)> reviewers, out List<int>? order)
+    {
+        order = null;
+        var controlledRows = new Dictionary<string, IrRow>(StringComparer.Ordinal);
+        foreach (var row in baseTable.Rows)
+            if ((row.Controls & IrContainerControls.Control) != 0)
+                controlledRows.TryAdd(row.Anchor.ToString(), row);
+        // An edited row whose cells a content control delivers is rebuilt from the base's cells inside the base's
+        // controls: it must gain or lose no cell, and each side's row must let the controls be rebuilt.
+        foreach (var row in authoredRows)
+        {
+            if (row.BaseRowAnchor is not { } anchor || !controlledRows.TryGetValue(anchor, out var baseRow))
+                continue;
+            if (row.ComposedCells is not { } cells)
+            {
+                controlledRows.Remove(anchor);
+                continue;
+            }
+            if (cells.Any(c => c.Kind != IrAuthoredCellKind.Content) || !IrTableDiffer.ControlsDrawable(baseRow.Controls, baseRow.Controls))
+                return false;
+        }
+        if (controlledRows.Count > 0)
+            foreach (var table in reviewerTables)
+            {
+                var reviewerRows = RowIndex(reviewers[table.Reviewer].Ir);
+                foreach (var op in table.Diff.RowOps)
+                    if (op.LeftRowAnchor is { } left && controlledRows.TryGetValue(left, out var source) &&
+                        op.RightRowAnchor is { } right && reviewerRows.TryGetValue(right, out var reviewerRow) &&
+                        !IrTableDiffer.ControlsDrawable(source.Controls, reviewerRow.Controls))
+                        return false;
+            }
+        return IrMarkupRenderer.PlanComposedControls(baseTable.Source.Element!, baseTable, authoredRows, reviewerTables,
+            reviewers.Select(r => r.Ir).ToList(), out order) is not null;
     }
 
     /// <summary>
