@@ -8,6 +8,27 @@ public class DocxDiffOpsConsolidateTests
 {
     private static byte[] Doc(params string[] paras) => Docxodus.Tests.Ir.Diff.Docs.Para(paras).DocumentByteArray;
 
+    [Theory]
+    [InlineData(null, false, "Crates hold nine dozen extra samples.")]
+    [InlineData("""{"wordSeparators":".;!?"}""", true, "Crates hold six dozen samples.")]
+    [InlineData("""{"wordSeparators":".;!?","conflictResolution":1}""", true, "Crates hold nine dozen samples.")]
+    public void Word_boundaries_determine_whether_two_edits_compete(
+        string? settings, bool expectConflict, string acceptedText)
+    {
+        const string original = "Crates hold six dozen samples.";
+        var bytes = Doc(original);
+        var reviewers = JsonSerializer.Serialize(new[]
+        {
+            new { author = "Ash", docB64 = Convert.ToBase64String(Doc("Crates hold nine dozen samples.")) },
+            new { author = "Elm", docB64 = Convert.ToBase64String(Doc("Crates hold six dozen extra samples.")) },
+        });
+        using var report = JsonDocument.Parse(DocxDiffOps.GetConflictsJson(bytes, reviewers, settings));
+        Assert.Equal(expectConflict, report.RootElement.GetProperty("conflicts").GetArrayLength() > 0);
+        var output = new WmlDocument("review.docx", DocxDiffOps.Consolidate(bytes, reviewers, settings));
+        Assert.Equal(acceptedText, Ir.Diff.Docs.PlainText(RevisionProcessor.AcceptRevisions(output)));
+        Assert.Equal(original, Ir.Diff.Docs.PlainText(RevisionProcessor.RejectRevisions(output)));
+    }
+
     [Fact]
     public void Consolidate_round_trips_through_wire()
     {
