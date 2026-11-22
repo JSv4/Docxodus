@@ -1195,9 +1195,10 @@ internal static class IrReader
     /// Hash the non-hyperlink field carriers embedded in one modeled inline tree. Field instructions are excluded
     /// from ordinary content/token identity on purpose, and run-based field plumbing is zero-width; recording
     /// both here gives the edit builder a precise structural signal without making a run-based cached-result edit
-    /// look like a whole-paragraph change. A simple field contributes its full source carrier through
-    /// <see cref="IrFieldRun.ScaffoldDigest"/> because <c>w:fldSimple</c> cannot be safely sliced into revisions;
-    /// any direct simple-field mutation therefore uses the whole-carrier path.
+    /// look like a whole-paragraph change. A simple field contributes its <c>w:fldSimple</c> shell (instruction,
+    /// state attributes and <c>w:fldData</c>) through <see cref="IrFieldRun.ScaffoldDigest"/>, so a change to its
+    /// code or state takes the whole-carrier path while a cached-result edit stays on the token path, as a
+    /// run-based field's does.
     /// </summary>
     private static IrHash FieldEnvelopeDigestFor(XElement paragraph, IReadOnlyList<IrInline> inlines, ReadContext ctx)
     {
@@ -2195,14 +2196,15 @@ internal static class IrReader
         // fldData is field metadata, not cached display content. It is retained by the structural carrier digest
         // and by revision expansion, but must not become a visible opaque inline or perturb result-token offsets.
         var result = WalkInlines(fldSimple.Elements().Where(element => element.Name != W + "fldData"), ctx);
-        // A direct fldSimple cannot be placed directly inside w:ins/w:del. Preserve its full carrier
-        // separately so any field mutation can take the proven whole-paragraph path. Its cached-result text still
-        // participates in the ordinary content hash, but the complete carrier remains the safe revision boundary.
+        // The field's own state (instruction, dirty/lock attributes, fldData) is its structural carrier, so a
+        // change to it takes the whole-paragraph path. The cached result is ordinary content, as it is for a
+        // run-based field: the renderer writes the field in run-based form to track an edit inside it.
         return CanonicalizeField(
             instruction,
             IrNodeList.From(result),
             isSimpleField: true,
-            scaffoldDigest: IrHasher.CanonicalHash(fldSimple, ctx.RelResolver),
+            scaffoldDigest: IrHasher.CanonicalHash(
+                new XElement(fldSimple.Name, fldSimple.Attributes(), fldSimple.Elements(W + "fldData")), ctx.RelResolver),
             hyperlinkFieldMetadataDigest: HyperlinkFieldMetadataDigestForSimple(instruction, fldSimple, ctx));
     }
 

@@ -14,6 +14,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A comparison tracks only the changed cached result of a simple field (`w:fldSimple`), as it already did for the same field in run-based form (#1844). A cross-reference whose cached number changed, `16.4` to `21.8`, made the redline delete and insert its whole paragraph, so unchanged prose around it showed as edited. The redline now writes such a field in run-based form, keeping its instruction, lock state and field data once outside every revision, and tracks only the result, as the desktop word processor's own comparison does; the revisions list reports only the result too. A change to a simple field's instruction or state still replaces the paragraph, and a simple field no edit reaches keeps its form.
+
 - `SemanticDiff.Compare` reports changes to the controls around table rows and cells, including changes to control properties, grouping, and the position of empty controls (#1814).
 
 - Revision lists include the text of an inserted or deleted row in a nested table or a table inside a content control (#1813).

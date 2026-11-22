@@ -169,29 +169,35 @@ public class IrFieldEnvelopeMarkupRendererTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void CachedReferenceResult_ResolvesToOneLiveFieldAndPreservesSurroundingProse(bool simple)
+    [InlineData(false, "false")]
+    [InlineData(false, "true")]
+    [InlineData(true, "false")]
+    [InlineData(true, "true")]
+    public void CachedReferenceResult_TracksOnlyTheResultAndResolvesToOneLiveField(bool simple, string locked)
     {
         const string code = " REF RidgeMarker ";
         const string prefix = "Record the survey at point ";
         const string suffix = " before leaving the ridge.";
         WmlDocument Version(string result)
         {
-            var field = simple ? SimpleFieldInner(code, result, "false", "false", "AQID")
-                : ComplexFieldInner(code, result);
+            var field = simple ? SimpleFieldInner(code, result, "false", locked, "AQID")
+                : ComplexFieldInner(code, result, locked);
             return Doc($"<w:p><w:r><w:t xml:space=\"preserve\">{prefix}</w:t></w:r>{field}" +
                 $"<w:r><w:t xml:space=\"preserve\">{suffix}</w:t></w:r></w:p>" +
                 """<w:p><w:bookmarkStart w:id="0" w:name="RidgeMarker"/><w:r><w:t>Survey checkpoint</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p>""");
         }
 
-        var redline = DocxDiff.Compare(Version("16.4"), Version("21.8"));
+        var (left, right) = (Version("16.4"), Version("21.8"));
+        var redline = DocxDiff.Compare(left, right);
         AssertSchemaValid(redline);
         var xml = MainXml(redline);
         string Tracked(string edit, string text) => string.Concat(xml.Descendants(W + edit)
             .SelectMany(e => e.Descendants(W + text)).Select(e => e.Value));
-        Assert.Equal(simple ? prefix + "16.4" + suffix : "16.4", Tracked("del", "delText"));
-        Assert.Equal(simple ? prefix + "21.8" + suffix : "21.8", Tracked("ins", "t"));
+        Assert.Equal("16.4", Tracked("del", "delText"));
+        Assert.Equal("21.8", Tracked("ins", "t"));
+        AssertFieldCodeOutsideRevisions(xml, code);
+        Assert.Equal(new[] { (DocxDiffRevisionType.Deleted, "16.4"), (DocxDiffRevisionType.Inserted, "21.8") },
+            DocxDiff.GetRevisions(left, right).Select(revision => (revision.Type, revision.Text)));
 
         foreach (var (doc, result) in new[] { (RevisionProcessor.AcceptRevisions(redline), "21.8"),
             (RevisionProcessor.RejectRevisions(redline), "16.4") })
@@ -203,6 +209,9 @@ public class IrFieldEnvelopeMarkupRendererTests
             var field = Assert.Single(paragraph.Inlines.OfType<IrFieldRun>());
             Assert.Equal(result, Assert.IsType<IrTextRun>(Assert.Single(field.CachedResult)).Text);
             var xmlView = MainXml(doc);
+            var fieldStart = Assert.Single(xmlView.Descendants().Where(e => e.Name == W + "fldSimple" ||
+                (e.Name == W + "fldChar" && (string?)e.Attribute(W + "fldCharType") == "begin")));
+            Assert.Equal(locked, (string?)fieldStart.Attribute(W + "fldLock"));
             var start = Assert.Single(xmlView.Descendants(W + "bookmarkStart"));
             var end = Assert.Single(xmlView.Descendants(W + "bookmarkEnd"));
             Assert.Equal("RidgeMarker", (string?)start.Attribute(W + "name"));
@@ -762,6 +771,35 @@ public class IrFieldEnvelopeMarkupRendererTests
         Assert.Contains("\"requiresWholeParagraphReplace\"", DocxDiff.GetConsolidatedEditScriptJson(baseDoc, reviewers, settings));
     }
 
+    [Fact]
+    public void Consolidate_SimpleFieldResultAndNearbyEdit_TrackOnlyTheChangedWords()
+    {
+        static WmlDocument Version(string result, string tail) => Doc("<w:p><w:r><w:t xml:space=\"preserve\">See </w:t></w:r>" +
+            SimpleFieldInner(" REF RidgeMarker ", result, "false", "true", "AQID") +
+            "<w:r><w:t xml:space=\"preserve\"> " + tail + " the ridge.</w:t></w:r></w:p>");
+        var baseDoc = Version("16.4", "before");
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Author = "Alice", Document = Version("21.8", "before") },
+            new DocxDiffReviewer { Author = "Bob", Document = Version("16.4", "after") },
+        };
+
+        var merged = DocxDiff.Consolidate(baseDoc, reviewers);
+        AssertSchemaValid(merged);
+        Assert.Empty(DocxDiff.GetConflicts(baseDoc, reviewers));
+        var xml = MainXml(merged);
+        Assert.Equal("16.4before", string.Concat(xml.Descendants(W + "delText").Select(e => e.Value)));
+        Assert.Equal("21.8after", string.Concat(xml.Descendants(W + "ins").Descendants(W + "t").Select(e => e.Value)));
+        AssertFieldCodeOutsideRevisions(xml, " REF RidgeMarker ");
+        foreach (var (doc, text) in new[] { (RevisionProcessor.AcceptRevisions(merged), "See 21.8 after the ridge."),
+            (RevisionProcessor.RejectRevisions(merged), "See 16.4 before the ridge.") })
+        {
+            AssertOneFieldInstruction(doc, " REF RidgeMarker ");
+            AssertNoRevisionMarkup(doc);
+            Assert.Equal(text, string.Concat(MainXml(doc).Descendants(W + "t").Select(e => e.Value)));
+        }
+    }
+
     private static WmlDocument Doc(string body) => IrTestDocuments.FromBodyXml(body);
 
     private static IrParagraph Paragraph(WmlDocument doc) =>
@@ -776,8 +814,8 @@ public class IrFieldEnvelopeMarkupRendererTests
         "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>" +
         "</w:p>";
 
-    private static string ComplexFieldInner(string instruction, string result) =>
-        "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>" +
+    private static string ComplexFieldInner(string instruction, string result, string? locked = null) =>
+        "<w:r><w:fldChar w:fldCharType=\"begin\"" + (locked is null ? "" : " w:fldLock=\"" + locked + "\"") + "/></w:r>" +
         "<w:r><w:instrText xml:space=\"preserve\">" + instruction + "</w:instrText></w:r>" +
         "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>" +
         "<w:r><w:t>" + result + "</w:t></w:r>" +
@@ -876,6 +914,18 @@ public class IrFieldEnvelopeMarkupRendererTests
         Assert.Equal(dirty, (string?)begin.Attribute(W + "dirty"));
         Assert.Equal(locked, (string?)begin.Attribute(W + "fldLock"));
         Assert.Equal(fieldData, (string?)begin.Element(W + "fldData"));
+    }
+
+    /// <summary>The redline keeps one copy of the field's code and characters, outside every revision, so only
+    /// its result is tracked, as in the reference application's own comparison.</summary>
+    private static void AssertFieldCodeOutsideRevisions(XContainer redline, string instruction)
+    {
+        Assert.Empty(redline.Descendants(W + "delInstrText"));
+        Assert.Equal(instruction, Assert.Single(redline.Descendants(W + "instrText")).Value);
+        Assert.Equal(new[] { "begin", "separate", "end" }, redline.Descendants(W + "fldChar")
+            .Select(fldChar => (string?)fldChar.Attribute(W + "fldCharType")));
+        Assert.DoesNotContain(redline.Descendants().Where(e => e.Name == W + "fldChar" || e.Name == W + "instrText"),
+            e => e.Ancestors().Any(a => a.Name == W + "ins" || a.Name == W + "del"));
     }
 
     private static void AssertDirectSimpleFieldAndText(WmlDocument doc, string instruction, string text)
