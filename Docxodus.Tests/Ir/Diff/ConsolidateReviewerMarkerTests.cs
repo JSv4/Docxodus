@@ -352,6 +352,35 @@ public class ConsolidateReviewerMarkerTests
         }
     }
 
+    [Fact]
+    public void An_identical_paragraph_elsewhere_does_not_own_a_deleted_comment_anchor()
+    {
+        var source = P("Alpha ", Commented("beta"), " gamma delta.");
+        var gap = P("The plates stay on the upper shelf.");
+        var duplicate = P("Alpha beta gamma delta.");
+        var target = P("Returns are due on Fridays.");
+        var baseTail = P("Invoices go out on Thursdays.");
+        var editedTail = P("Invoices go out on Mondays.");
+        var movedTarget = P(Commented("Returns"), " are due on Fridays.");
+        var original = CommentDoc(source + gap + duplicate + target + baseTail);
+        var marker = CommentDoc(gap + duplicate + movedTarget + baseTail);
+        var editor = CommentDoc(source + gap + duplicate + target + editedTail);
+        var expected = CommentDoc(gap + duplicate + movedTarget + editedTail);
+        foreach (var order in Orders())
+        {
+            var reviewers = InOrder((bool)order[1], editor, marker);
+            var settings = new DocxDiffConsolidateSettings { ConflictResolution = (ConflictResolution)order[0] };
+            var marked = DocxCompare.Consolidate(original, reviewers, settings);
+            var accepted = RevisionProcessor.AcceptRevisions(marked);
+            var rejected = RevisionProcessor.RejectRevisions(marked);
+            Assert.Empty(DocxDiff.GetConflicts(original, reviewers, settings));
+            Assert.Equal(View(expected), View(accepted));
+            Assert.Equal(View(original), View(rejected));
+            AssertRangesInOrder(marked, accepted, rejected);
+            AssertValid(marked, accepted, rejected);
+        }
+    }
+
     /// <summary>
     /// A reviewer who removes or rewrites a base comment's paragraph and anchors the comment on a block another
     /// reviewer edits does not carry it there (#1812 review): the editing reviewer's copy decides where the base's

@@ -94,6 +94,7 @@ internal static class IrCompositeMarkupRenderer
             IsComposite = true,
             CompositeBookmarks = script.Bookmarks,
             CommentAttachments = script.CommentAttachments,
+            ReviewerComparisons = script.ReviewerComparisons,
             AttachmentAuthor = reviewers.Count == 1 ? reviewers[0].Author : null,
         };
 
@@ -731,7 +732,7 @@ internal static class IrCompositeMarkupRenderer
                     AuthorsByReviewer(reviewerMarkers, reviewerIrs.Count), state);
             else if (!baseSourced && op.Kind != IrEditOpKind.DeleteBlock)
                 IrMarkupRenderer.CarryReviewerComments(sink.GetRange(emittedFrom, sink.Count - emittedFrom),
-                    counterparts.Select(c => c.Source), baseIr, IrMarkupRenderer.SourceElement(op.LeftAnchor, baseIr), state,
+                    counterparts.Select(c => (c.Reviewer, c.Source)), IrMarkupRenderer.SourceElement(op.LeftAnchor, baseIr), state,
                     originalView: false);
         }
 

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 #nullable enable
 
 using Docxodus.Ir;
@@ -234,4 +235,5 @@ internal sealed record IrCompositeScript(
 
 /// <summary>The parts of one reviewer's own two-way comparison with the base that the composite renderer reads
 /// (<see cref="IrCompositeScript.ReviewerComparisons"/>): the body ops and the note diffs.</summary>
-internal sealed record IrReviewerComparison(IrNodeList<IrEditOp> Operations, IrNodeList<IrNoteDiff>? NoteOps);
+internal sealed record IrReviewerComparison(IrNodeList<IrEditOp> Operations, IrNodeList<IrNoteDiff>? NoteOps,
+    IReadOnlyDictionary<string, bool>? BaseCommentAnchors = null);
