@@ -370,9 +370,11 @@ the thunks on when the runtime is upgraded before dropping the setting.
 ## Compression and serving
 
 `build-wasm.sh` writes a Brotli quality-11 `.br` sibling next to every `_framework` asset.
-For the generated Open XML schema assembly, a 2 MiB history window reduced the compressed
-size from 810,996 to 798,248 bytes on the combined comparison build. The raw assembly
-round-tripped byte for byte. Hosts serve the compressed assets through content negotiation.
+The generated Open XML schema assembly uses a 2 MiB history window with two postfix bits
+for backward distances. On the table-reader and combined comparison builds, the distance
+setting reduced the compressed assembly from 798,248 to 791,251 bytes. Both Node and the
+Brotli reference decoder recovered the original assembly byte for byte. Hosts serve the
+compressed assets through content negotiation.
 
 - **Hosts with content negotiation** (nginx `brotli_static on`, Caddy `precompressed`,
   Netlify, Vercel, Cloudflare Pages): serve the `.br` sibling with

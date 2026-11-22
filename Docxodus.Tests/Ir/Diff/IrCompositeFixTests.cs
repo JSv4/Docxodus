@@ -341,9 +341,7 @@ public class IrCompositeFixTests
     /// <summary>
     /// BUG 4 (split-vs-edit regression guard). Base one paragraph; Alice splits it into two; Bob edits a
     /// word. Accept must preserve all content; reject ≡ base. SplitBlock carries a LeftAnchor so it reached
-    /// the byBase path even before the fix — this guards that lowering split to delete+inserts does not
-    /// regress content preservation. Parameterized over all three policies (the split's two inserted
-    /// members are base-anchorless and survive accept under every policy).
+    /// the byBase path even before the fix. The words common to both edits survive every policy.
     /// </summary>
     [Theory]
     [InlineData(ConflictResolution.BaseWins)]
