@@ -205,6 +205,10 @@ __all__ = [
     "TableInsertOptions",
     "TableBorderSpec",
     "TableRowOptions",
+    "TableCellMargins",
+    "TablePropertiesOp",
+    "CellPropertiesOp",
+    "TablePropertiesInfo",
     "TableCellMetadata",
     "TableRowMetadata",
     "TableColumnMetadata",
@@ -1663,6 +1667,124 @@ class TableRowOptions:
     allow_break_across_pages: bool | None = None
     height_twips: int | None = None
     height_rule: TableRowHeightRule = TableRowHeightRule.AT_LEAST
+
+
+@dataclass(frozen=True, slots=True)
+class TableCellMargins:
+    """A table's default cell margins (``w:tblCellMar``), in twips. ``None`` leaves an edge as it
+    is (on a read: not set)."""
+
+    top_twips: int | None = None
+    left_twips: int | None = None
+    bottom_twips: int | None = None
+    right_twips: int | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        return {key: value for key, value in {
+            "topTwips": self.top_twips, "leftTwips": self.left_twips,
+            "bottomTwips": self.bottom_twips, "rightTwips": self.right_twips,
+        }.items() if value is not None}
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableCellMargins":
+        def edge(name: str) -> int | None:
+            value = d.get(name)
+            return int(value) if value is not None else None
+        return cls(top_twips=edge("topTwips"), left_twips=edge("leftTwips"),
+                   bottom_twips=edge("bottomTwips"), right_twips=edge("rightTwips"))
+
+
+@dataclass(frozen=True, slots=True)
+class TablePropertiesOp:
+    """Word's Table Properties, Table and Alt Text tabs (``DocxSession.set_table_properties``).
+    Every field is optional: ``None`` leaves that property as it is. ``width_type`` is ``"auto"``,
+    ``"twips"`` or ``"percent"``, with ``width`` in twips or percent of the text width;
+    ``alignment`` is ``"left"``, ``"center"`` or ``"right"``; ``indent_twips`` 0 removes the
+    indent; an empty ``alt_title`` or ``alt_description`` removes it."""
+
+    width_type: str | None = None
+    width: float | None = None
+    alignment: str | None = None
+    indent_twips: int | None = None
+    cell_margins: TableCellMargins | None = None
+    alt_title: str | None = None
+    alt_description: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        return {key: value for key, value in {
+            "widthType": self.width_type, "width": self.width, "alignment": self.alignment,
+            "indentTwips": self.indent_twips,
+            "cellMargins": self.cell_margins.to_wire() if self.cell_margins is not None else None,
+            "altTitle": self.alt_title, "altDescription": self.alt_description,
+        }.items() if value is not None}
+
+
+@dataclass(frozen=True, slots=True)
+class CellPropertiesOp:
+    """Cell properties (``DocxSession.set_cell_properties``): ``vertical_alignment`` is
+    ``"top"``, ``"center"`` or ``"bottom"``; ``None`` leaves it as it is."""
+
+    vertical_alignment: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        return {} if self.vertical_alignment is None else {"verticalAlignment": self.vertical_alignment}
+
+
+@dataclass(frozen=True, slots=True)
+class TablePropertiesInfo:
+    """What ``DocxSession.get_table_properties`` reads for a cell's table, row and cell, as Word's
+    Table Properties dialog shows them. ``None`` means not set on the element itself."""
+
+    table_anchor_id: str
+    column_widths_twips: tuple[int, ...] = ()
+    width_type: str | None = None
+    width: float | None = None
+    alignment: str | None = None
+    indent_twips: int | None = None
+    cell_margins: TableCellMargins | None = None
+    alt_title: str | None = None
+    alt_description: str | None = None
+    layout: str | None = None
+    column_index: int = 0
+    column_span: int = 1
+    row_index: int = 0
+    row_count: int = 0
+    row_height_twips: int | None = None
+    row_height_rule: str | None = None
+    allow_break_across_pages: bool = True
+    repeat_header: bool = False
+    vertical_alignment: str | None = None
+    cell_width_twips: int | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TablePropertiesInfo":
+        def opt_int(name: str) -> int | None:
+            value = d.get(name)
+            return int(value) if value is not None else None
+        margins = d.get("cellMargins")
+        width = d.get("width")
+        return cls(
+            table_anchor_id=d.get("tableAnchorId", ""),
+            column_widths_twips=tuple(int(w) for w in d.get("columnWidthsTwips", ())),
+            width_type=d.get("widthType"),
+            width=float(width) if width is not None else None,
+            alignment=d.get("alignment"),
+            indent_twips=opt_int("indentTwips"),
+            cell_margins=TableCellMargins._from_wire(margins) if margins is not None else None,
+            alt_title=d.get("altTitle"),
+            alt_description=d.get("altDescription"),
+            layout=d.get("layout"),
+            column_index=int(d.get("columnIndex", 0)),
+            column_span=int(d.get("columnSpan", 1)),
+            row_index=int(d.get("rowIndex", 0)),
+            row_count=int(d.get("rowCount", 0)),
+            row_height_twips=opt_int("rowHeightTwips"),
+            row_height_rule=d.get("rowHeightRule"),
+            allow_break_across_pages=bool(d.get("allowBreakAcrossPages", True)),
+            repeat_header=bool(d.get("repeatHeader", False)),
+            vertical_alignment=d.get("verticalAlignment"),
+            cell_width_twips=opt_int("cellWidthTwips"),
+        )
 
 
 @dataclass(frozen=True, slots=True)

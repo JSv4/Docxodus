@@ -1487,7 +1487,8 @@ internal static partial class Dispatcher
             "docxodus_table" => action is "insert" or "insert_row" or "insert_column"
                 or "delete_row" or "delete_column" or "replace_cell_content" or "merge_cells"
                 or "unmerge_cells" or "set_column_widths" or "set_borders" or "set_shading"
-                or "set_repeat_header_row" or "set_row_options" or "set_style",
+                or "set_repeat_header_row" or "set_row_options" or "set_style"
+                or "set_properties" or "set_cell_properties",
             "docxodus_list" => action is "apply_format" or "apply_format_range" or "set_level"
                 or "set_start" or "clear_start" or "remove" or "set_levels" or "continue" or "set_membership",
             "docxodus_comment" => action is "add" or "reply" or "resolve" or "update" or "remove",
@@ -1731,6 +1732,18 @@ internal static partial class Dispatcher
             case ("docxodus_table", "set_repeat_header_row"):
                 RequireStrings(args, "cellAnchorId");
                 ValidateOptionalBool(args, "repeat");
+                break;
+            case ("docxodus_table", "set_properties"):
+                RequireStrings(args, "cellAnchorId");
+                _ = DocxSessionJson.ParseTablePropertiesOp(RawObject(args, "op"));
+                break;
+            case ("docxodus_table", "set_cell_properties"):
+                RequireStrings(args, "cellAnchorId");
+                ValidateOptionalEnum(args, "scope", "cell", "row", "column", "table");
+                _ = DocxSessionJson.ParseCellPropertiesOp(RawObject(args, "op"));
+                break;
+            case ("docxodus_table", "get_properties"):
+                RequireStrings(args, "cellAnchorId");
                 break;
             case ("docxodus_table", "set_row_options"):
                 RequireStrings(args, "cellAnchorId");
@@ -2098,6 +2111,12 @@ internal static partial class Dispatcher
             session.Handle, Str(args, "cellAnchorId"), DocxSessionJson.AliasedBool(args, "repeatHeader", "repeat"),
             OptBool(args, "allowBreakAcrossPages"), OptInt(args, "heightTwips"),
             OptStr(args, "heightRule")),
+        "set_properties" => DocxSessionOps.SetTableProperties(
+            session.Handle, Str(args, "cellAnchorId"), RawObject(args, "op")),
+        "set_cell_properties" => DocxSessionOps.SetCellProperties(
+            session.Handle, Str(args, "cellAnchorId"), RawObject(args, "op"),
+            OptStr(args, "scope")),
+        "get_properties" => DocxSessionOps.GetTableProperties(session.Handle, Str(args, "cellAnchorId")),
         _ => throw new McpToolException($"unknown docxodus_table action: {action}"),
         }),
     };

@@ -803,7 +803,7 @@ internal static class ToolCatalog
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
-                "action": { "type": "string", "enum": ["get_metadata", "resolve_cell_anchor", "resolve_cell_coordinate", "insert", "insert_row", "insert_column", "delete_row", "delete_column", "replace_cell_content", "merge_cells", "unmerge_cells", "set_column_widths", "set_style", "set_borders", "set_shading", "set_repeat_header_row", "set_row_options"] },
+                "action": { "type": "string", "enum": ["get_metadata", "resolve_cell_anchor", "resolve_cell_coordinate", "insert", "insert_row", "insert_column", "delete_row", "delete_column", "replace_cell_content", "merge_cells", "unmerge_cells", "set_column_widths", "set_style", "set_borders", "set_shading", "set_repeat_header_row", "set_row_options", "set_properties", "set_cell_properties", "get_properties"] },
                 "anchorId": { "type": "string", "description": "insert: reference block (paired with position). set_style: canonical tbl or tc anchor." },
                 "styleId": { "type": "string", "description": "set_style: existing table style id; records tblPrChange when tracking." },
                 "tableAnchorId": { "type": "string", "description": "get_metadata/resolve_cell_coordinate: the table's canonical tbl anchor." },
@@ -852,7 +852,9 @@ internal static class ToolCatalog
                 "repeatHeader": { "type": "boolean", "description": "set_row_options: true marks the anchor's row as a repeating header row, false unmarks, omitted leaves it unchanged." },
                 "allowBreakAcrossPages": { "type": "boolean", "description": "set_row_options: true permits a row to split across pages; false writes w:cantSplit." },
                 "heightTwips": { "type": "integer", "minimum": 0, "description": "set_row_options: explicit row height in twips (20 twips = 1pt); zero removes an existing height." },
-                "heightRule": { "type": "string", "enum": ["auto", "atLeast", "exact"], "description": "set_row_options: how Word interprets a positive heightTwips value (default atLeast)." }
+                "heightRule": { "type": "string", "enum": ["auto", "atLeast", "exact"], "description": "set_row_options: how Word interprets a positive heightTwips value (default atLeast)." },
+                "op": { "type": "object", "description": "set_properties: Word's Table Properties for the cell's table, each field optional { widthType: auto|twips|percent, width (twips, or percent of the text width), alignment: left|center|right, indentTwips (0 removes it), cellMargins: { topTwips, leftTwips, bottomTwips, rightTwips }, altTitle, altDescription (\"\" removes) }. set_cell_properties: { verticalAlignment: top|center|bottom }." },
+                "scope": { "type": "string", "enum": ["cell", "row", "column", "table"], "description": "set_cell_properties: the anchor's cell (default), its row, its grid column (merged cells covering it included) or the whole table." }
               },
               "required": ["sessionId", "action"]
             }

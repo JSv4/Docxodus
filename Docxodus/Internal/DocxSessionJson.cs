@@ -959,6 +959,100 @@ internal static class DocxSessionJson
         };
     }
 
+    /// <summary>Parse a TablePropertiesOp; "" is the empty op (nothing changes).</summary>
+    public static TablePropertiesOp ParseTablePropertiesOp(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return new TablePropertiesOp();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var widthTypeToken = TryGetString(root, "widthType", null);
+        TableWidthType? widthType = widthTypeToken is null ? null : ParseToken(widthTypeToken, "table width type",
+            TableWidthType.Auto, ("auto", TableWidthType.Auto), ("twips", TableWidthType.Twips),
+            ("percent", TableWidthType.Percent));
+        TableCellMargins? margins = null;
+        if (root.TryGetProperty("cellMargins", out var m) && m.ValueKind == JsonValueKind.Object)
+            margins = new TableCellMargins
+            {
+                TopTwips = TryGetIntNullable(m, "topTwips"),
+                LeftTwips = TryGetIntNullable(m, "leftTwips"),
+                BottomTwips = TryGetIntNullable(m, "bottomTwips"),
+                RightTwips = TryGetIntNullable(m, "rightTwips"),
+            };
+        return new TablePropertiesOp
+        {
+            WidthType = widthType,
+            Width = TryGetDoubleNullable(root, "width"),
+            Alignment = TryGetString(root, "alignment", null),
+            IndentTwips = TryGetIntNullable(root, "indentTwips"),
+            CellMargins = margins,
+            AltTitle = TryGetString(root, "altTitle", null),
+            AltDescription = TryGetString(root, "altDescription", null),
+        };
+    }
+
+    /// <summary>Parse a CellPropertiesOp; "" is the empty op.</summary>
+    public static CellPropertiesOp ParseCellPropertiesOp(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return new CellPropertiesOp();
+        using var doc = JsonDocument.Parse(json);
+        return new CellPropertiesOp { VerticalAlignment = TryGetString(doc.RootElement, "verticalAlignment", null) };
+    }
+
+    /// <summary>"cell" | "row" | "column" | "table"; absent → <see cref="TableCellScope.Cell"/>.</summary>
+    public static TableCellScope ParseTableCellScope(string? scope) =>
+        ParseToken(scope, "cell scope", TableCellScope.Cell,
+            ("cell", TableCellScope.Cell), ("row", TableCellScope.Row),
+            ("column", TableCellScope.Column), ("table", TableCellScope.Table));
+
+    public static string SerializeTablePropertiesInfo(TablePropertiesInfo? info)
+    {
+        if (info is null) return "null";
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var sb = new StringBuilder(512);
+        void Field(string name, object? value)
+        {
+            sb.Append(',').Append(JsonString(name)).Append(':');
+            if (value is double d) sb.Append(d.ToString("R", inv));
+            else AppendJsonValue(sb, value);
+        }
+        sb.Append("{\"tableAnchorId\":").Append(JsonString(info.TableAnchorId));
+        Field("widthType", info.WidthType switch
+        {
+            TableWidthType.Auto => "auto", TableWidthType.Twips => "twips", TableWidthType.Percent => "percent", _ => null,
+        });
+        Field("width", info.Width);
+        Field("alignment", info.Alignment);
+        Field("indentTwips", info.IndentTwips);
+        sb.Append(",\"cellMargins\":");
+        if (info.CellMargins is { } m)
+        {
+            sb.Append("{\"topTwips\":"); AppendJsonValue(sb, m.TopTwips);
+            sb.Append(",\"leftTwips\":"); AppendJsonValue(sb, m.LeftTwips);
+            sb.Append(",\"bottomTwips\":"); AppendJsonValue(sb, m.BottomTwips);
+            sb.Append(",\"rightTwips\":"); AppendJsonValue(sb, m.RightTwips);
+            sb.Append('}');
+        }
+        else sb.Append("null");
+        Field("altTitle", info.AltTitle);
+        Field("altDescription", info.AltDescription);
+        Field("layout", info.Layout);
+        sb.Append(",\"columnWidthsTwips\":[").Append(string.Join(",", info.ColumnWidthsTwips.Select(w => w.ToString(inv)))).Append(']');
+        Field("columnIndex", info.ColumnIndex);
+        Field("columnSpan", info.ColumnSpan);
+        Field("rowIndex", info.RowIndex);
+        Field("rowCount", info.RowCount);
+        Field("rowHeightTwips", info.RowHeightTwips);
+        Field("rowHeightRule", info.RowHeightRule switch
+        {
+            TableRowHeightRule.Auto => "auto", TableRowHeightRule.Exact => "exact", TableRowHeightRule.AtLeast => "atLeast", _ => null,
+        });
+        Field("allowBreakAcrossPages", info.AllowBreakAcrossPages);
+        Field("repeatHeader", info.RepeatHeader);
+        Field("verticalAlignment", info.VerticalAlignment);
+        Field("cellWidthTwips", info.CellWidthTwips);
+        return sb.Append('}').ToString();
+    }
+
     /// <summary>"cell" | "row"; absent → <see cref="TableShadingScope.Cell"/>.</summary>
     public static TableShadingScope ParseTableShadingScope(string? scope) =>
         ParseToken(scope, "shading scope", TableShadingScope.Cell,
