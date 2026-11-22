@@ -52,6 +52,40 @@ public class DocxSessionListLevelsTests
         return s;
     }
 
+    // Labels the desktop word processor (build 16.0.20326) shows for these lists. A child level
+    // whose start continues its parent's count still reads "%1.%2": after 1., 2., 3. a child
+    // starting at 4 is 3.4, not a flat 4.
+    [Theory]
+    [InlineData("01101", 7, 8, false, "7. 7.8 7.9 8. 8.8")]
+    [InlineData("01101", 7, 8, true, "7. 7.8 7.9 8. 8.8")]
+    [InlineData("11", 7, 8, false, "7.8 7.9")]
+    [InlineData("11", 7, 8, true, "7.8 7.9")]
+    [InlineData("00011", 1, 4, true, "1. 2. 3. 3.4 3.5")]
+    [InlineData("0011", 7, 9, false, "7. 8. 8.9 8.10")]
+    public void NestedStartsKeepTheirParentPrefix(string levels, int parentStart, int childStart, bool legal,
+        string expected)
+    {
+        var names = new[] { "Grove", "Oak", "Pine", "Meadow", "Elm" }[..levels.Length];
+        var (session, anchors) = Open(names);
+        using (session)
+        {
+            Assert.True(session.ApplyListFormatRange(anchors[0], anchors[^1], ListFormat.Decimal).Success);
+            for (int i = 0; i < names.Length; i++)
+                if (levels[i] == '1')
+                    Assert.True(session.SetListLevel(AnchorOf(session, names[i]), 1).Success);
+            Assert.True(session.SetListLevels(AnchorOf(session, names[0]), new[]
+            {
+                new ListLevelSpec { Level = 0, Start = parentStart, Text = "%1." },
+                new ListLevelSpec { Level = 1, Start = childStart, Text = "%1.%2", Legal = legal },
+            }).Success);
+
+            using var reopened = new DocxSession(session.Save());
+            var ids = names.Select(name => AnchorOf(reopened, name)).ToArray();
+            var metadata = reopened.GetBlockMetadatas(ids);
+            Assert.Equal(expected.Split(' '), ids.Select(id => metadata[id]!.List!.GeneratedLabel));
+        }
+    }
+
     [Fact]
     public void LL001_GetListLevels_ReadsNineLevels_AndNullOffList()
     {

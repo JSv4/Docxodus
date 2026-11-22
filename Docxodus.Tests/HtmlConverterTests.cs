@@ -4110,14 +4110,15 @@ namespace Docxodus.Tests
 
         #endregion
 
-        #region Legal Numbering Continuation Pattern Tests
+        #region Deeper List Item After A Counted Parent Tests
 
         /// <summary>
-        /// Tests that a list with items at ilvl=0 (1., 2., 3.) followed by an item at ilvl=1
-        /// with start=4 renders as "4." instead of "3.4" (continuation pattern).
+        /// Items at ilvl=0 (1., 2., 3.) followed by an ilvl=1 item whose level starts at 4 and
+        /// reads "%1.%2": the desktop word processor (build 16.0.20326) labels the fourth "3.4".
+        /// A start value one past the parent's count does not turn the item into a flat "4.".
         /// </summary>
         [Fact]
-        public void HC050_ContinuationPattern_RendersCorrectNumber()
+        public void HC050_DeeperItemKeepsItsParentPrefix()
         {
             using (MemoryStream ms = new MemoryStream())
             {
@@ -4159,10 +4160,10 @@ namespace Docxodus.Tests
                                 new NumberingSymbolRunProperties(new Spacing { Val = 0 })
                             ) { LevelIndex = 0 },
                             new Level(
-                                new StartNumberingValue { Val = 4 },  // Start at 4 - key for continuation
+                                new StartNumberingValue { Val = 4 },  // Starts one past the parent's count of 3
                                 new IsLegalNumberingStyle(),  // Legal numbering
                                 new NumberingFormat { Val = NumberFormatValues.Decimal },
-                                new LevelText { Val = "%1.%2" },  // Format would normally produce "3.4"
+                                new LevelText { Val = "%1.%2" },  // The fourth item reads "3.4"
                                 new LevelJustification { Val = LevelJustificationValues.Left },
                                 new PreviousParagraphProperties(new Indentation { Left = "1560", Hanging = "480" }),
                                 new NumberingSymbolRunProperties(new Underline { Val = UnderlineValues.Single })
@@ -4203,7 +4204,7 @@ namespace Docxodus.Tests
                                     new NumberingProperties(
                                         new NumberingLevelReference { Val = 1 },  // ilvl=1, but start=4
                                         new NumberingId { Val = 1 })),
-                                new Run(new Text("Fourth item (should render as 4. not 3.4)")))));
+                                new Run(new Text("Fourth item (renders as 3.4)")))));
                     mainPart.Document.Save();
                 }
 
@@ -4212,31 +4213,21 @@ namespace Docxodus.Tests
                 {
                     var settings = new WmlToHtmlConverterSettings
                     {
-                        PageTitle = "Continuation Pattern Test"
+                        PageTitle = "Deeper Item Test"
                     };
 
                     var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
-                    var htmlString = html.ToString();
-
-                    // Should contain list numbers 1., 2., 3., 4.
-                    Assert.Contains(">1.<", htmlString);
-                    Assert.Contains(">2.<", htmlString);
-                    Assert.Contains(">3.<", htmlString);
-                    Assert.Contains(">4.<", htmlString);
-
-                    // Should NOT contain "3.4" which would be the incorrect rendering
-                    Assert.DoesNotContain(">3.4<", htmlString);
-                    Assert.DoesNotContain(">3.4", htmlString);  // Also check without closing bracket
+                    Assert.Equal(new[] { "1.", "2.", "3.", "3.4" }, ListMarkerTexts(html));
                 }
             }
         }
 
         /// <summary>
-        /// Tests that continuation pattern items use level 0's run properties (no underline)
-        /// even when level 1 has underline in its rPr.
+        /// The same deeper item formats its number with its own level's run properties: level 1
+        /// underlines its number and level 0 does not, so only "3.4" is underlined.
         /// </summary>
         [Fact]
-        public void HC051_ContinuationPattern_UsesLevel0Formatting()
+        public void HC051_DeeperItemUsesItsOwnLevelFormatting()
         {
             using (MemoryStream ms = new MemoryStream())
             {
@@ -4292,7 +4283,7 @@ namespace Docxodus.Tests
                         ) { NumberID = 1 });
                     numberingPart.Numbering.Save();
 
-                    // Create paragraphs: 3 at ilvl=0, then 1 at ilvl=1 (continuation)
+                    // Create paragraphs: 3 at ilvl=0, then 1 at ilvl=1 starting at 4
                     mainPart.Document = new Document(
                         new Body(
                             new Paragraph(
@@ -4322,7 +4313,7 @@ namespace Docxodus.Tests
                                     new NumberingProperties(
                                         new NumberingLevelReference { Val = 1 },
                                         new NumberingId { Val = 1 })),
-                                new Run(new Text("Fourth item (should NOT have underline)")))));
+                                new Run(new Text("Fourth item (underlined number)")))));
                     mainPart.Document.Save();
                 }
 
@@ -4331,37 +4322,26 @@ namespace Docxodus.Tests
                 {
                     var settings = new WmlToHtmlConverterSettings
                     {
-                        PageTitle = "Continuation Formatting Test"
+                        PageTitle = "Deeper Item Formatting Test",
+                        FabricateCssClasses = false,
                     };
 
                     var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
-                    var htmlString = html.ToString();
-
-                    // Find the CSS classes used for list item numbers
-                    // All four list numbers (1., 2., 3., 4.) should use the same CSS class
-                    // because continuation items should use level 0's formatting
-
-                    // The list number spans should NOT have text-decoration: underline
-                    // for any of the items if they're all using level 0's rPr
-
-                    // Count occurrences of the list number pattern - should be 4
-                    int listNumberCount = 0;
-                    int pos = 0;
-                    while ((pos = htmlString.IndexOf(">1.<", pos)) >= 0) { listNumberCount++; pos++; }
-                    pos = 0;
-                    while ((pos = htmlString.IndexOf(">2.<", pos)) >= 0) { listNumberCount++; pos++; }
-                    pos = 0;
-                    while ((pos = htmlString.IndexOf(">3.<", pos)) >= 0) { listNumberCount++; pos++; }
-                    pos = 0;
-                    while ((pos = htmlString.IndexOf(">4.<", pos)) >= 0) { listNumberCount++; pos++; }
-
-                    Assert.Equal(4, listNumberCount);
-
-                    // Verify no "3.4" in output
-                    Assert.DoesNotContain("3.4", htmlString);
+                    var markers = ListMarkers(html);
+                    Assert.Equal(new[] { "1.", "2.", "3.", "3.4" }, markers.Select(m => m.Value));
+                    Assert.Equal(new[] { false, false, false, true }, markers.Select(m =>
+                        ((string?)m.Attribute("style") ?? string.Empty).Contains("text-decoration: underline")));
                 }
             }
         }
+
+        /// <summary>The innermost list-marker spans of <paramref name="html"/>, in document order.</summary>
+        private static List<XElement> ListMarkers(XElement html) => html.Descendants()
+            .Where(e => (string?)e.Attribute("data-list-marker") == "true" && !e.Elements().Any())
+            .ToList();
+
+        private static string[] ListMarkerTexts(XElement html) =>
+            ListMarkers(html).Select(m => m.Value).ToArray();
 
         #endregion
 

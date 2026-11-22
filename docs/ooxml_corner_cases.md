@@ -43,7 +43,7 @@ This document tracks edge cases and quirks in Open XML document processing where
 ## Table of Contents
 
 1. [Numbering and Lists](#numbering-and-lists)
-   - [Legal Numbering with Multi-Level Format Strings](#legal-numbering-with-multi-level-format-strings)
+   - [A deeper list item keeps its parent prefix when its start continues the parent's count](#a-deeper-list-item-keeps-its-parent-prefix-when-its-start-continues-the-parents-count)
    - [List Numbering under Tracked Changes](#list-numbering-under-tracked-changes-deleted-paragraphs-dont-consume-numbers)
    - [Unresolvable Numbering vs. Removed Numbering (style indentation)](#unresolvable-numbering-vs-removed-numbering-style-indentation)
    - [`w:numberingChange/@w:original` holds at most 15 characters](#wnumberingchangeworiginal-holds-at-most-15-characters)
@@ -70,149 +70,79 @@ This document tracks edge cases and quirks in Open XML document processing where
 
 ## Numbering and Lists
 
-### Legal Numbering with Multi-Level Format Strings
+### A deeper list item keeps its parent prefix when its start continues the parent's count
 
-**Status:** Fixed (December 2024)
-**Discovered:** 2024-12-22
-**Test File:** `NVCA-Model-COI-10-1-2025.docx`
+**Status:** Fixed (#1845). This replaces an earlier entry, "Legal Numbering with Multi-Level
+Format Strings", whose rule this fix removes.
 
-#### The Problem
-
-When a paragraph uses a deeper indentation level (`ilvl`) with a format string that references parent levels (e.g., `%1.%2`), Word may not display the parent level numbers as expected.
-
-#### Example Document Structure
+#### Minimal XML reproducer
 
 ```xml
-<!-- abstractNum 3, level 0 -->
-<w:lvl w:ilvl="0">
-  <w:start w:val="1"/>
-  <w:numFmt w:val="decimal"/>
-  <w:lvlText w:val="%1."/>
-</w:lvl>
+<!-- numbering.xml -->
+<w:abstractNum w:abstractNumId="0">
+  <w:multiLevelType w:val="multilevel"/>
+  <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/></w:lvl>
+  <w:lvl w:ilvl="1"><w:start w:val="4"/><w:isLgl/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1.%2"/><w:lvlJc w:val="left"/></w:lvl>
+</w:abstractNum>
+<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
 
-<!-- abstractNum 3, level 1 -->
-<w:lvl w:ilvl="1">
-  <w:start w:val="4"/>
-  <w:isLgl/>
-  <w:numFmt w:val="decimal"/>
-  <w:lvlText w:val="%1.%2"/>
-</w:lvl>
+<!-- document.xml: three level-0 paragraphs, then two level-1 paragraphs, all numId 1 -->
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Item 1</w:t></w:r></w:p>
+<!-- Item 2 and Item 3 at ilvl 0, then Item 4 and Item 5 at ilvl 1 -->
 ```
 
-Document paragraphs:
-```
-Para 1: ilvl=0, numId=3  → Word displays: "1."
-Para 2: ilvl=0, numId=3  → Word displays: "2."
-Para 3: ilvl=0, numId=3  → Word displays: "3."
-Para 4: ilvl=1, numId=3  → Word displays: "4." (NOT "3.4")
-```
+#### Renderer comparison
 
-#### Expected vs Actual Behavior
+Levels are listed as the paragraphs' `w:ilvl` values in order. The child level's text is
+`%1.%2` in every row.
 
-| Renderer | Item 4 Output | Notes |
-|----------|---------------|-------|
-| Microsoft Word | `4.` | Period at end, not middle |
-| LibreOffice Writer | `4.` | Matches Word |
-| LibreOffice HTML export | `4` | Uses `<ol start="4">` |
-| Docxodus (current) | `3.4` | Incorrect - includes parent level |
+| Levels; level 0 start, level 1 start | Desktop word processor (build 16.0.20326) | Docxodus before #1845 | Docxodus now |
+| --- | --- | --- | --- |
+| 0 0 0 1 1; 1, 4 (with or without `w:isLgl`) | 1. 2. 3. 3.4 3.5 | 1. 2. 3. 4. 5. | 1. 2. 3. 3.4 3.5 |
+| 0 0 1 1; 7, 9 | 7. 8. 8.9 8.10 | 7. 8. 9. 10. | 7. 8. 8.9 8.10 |
+| 0 0 1; 1, 3 (with or without `w:isLgl`) | 1. 2. 2.3 | 1. 2. 3. | 1. 2. 2.3 |
+| 0 1 1 0 1; 7, 8 (with or without `w:isLgl`) | 7. 7.8 7.9 8. 8.8 | 7. 8. 9. 8. 8.8 | 7. 7.8 7.9 8. 8.8 |
+| 0 1 1 0 1; 4, 5 | 4. 4.5 4.6 5. 5.5 | 4. 5. 6. 5. 5.5 | 4. 4.5 4.6 5. 5.5 |
+| 1 1; 7, 8 (no level-0 paragraph) | 7.8 7.9 | 8. 9. | 7.8 7.9 |
+| 0 1 1 0 1; 7, 1 (control) | 7. 7.1 7.2 8. 8.1 | 7. 7.1 7.2 8. 8.1 | 7. 7.1 7.2 8. 8.1 |
 
-**Key observation**: Word outputs "4." (number then period) even though level 1's format string is `%1.%2` (which would produce "3.4" if evaluated literally).
-
-Note that level 0's format string is `%1.` (number then period). This suggests Word may be:
-1. Detecting that item 4 at `ilvl=1` is an "orphan" (no proper parent-child nesting)
-2. Falling back to level 0's format `%1.` but using the level 1 counter (4)
-3. Result: "4." - which matches the observed output!
-
-This "orphan detection" hypothesis would explain the behavior: Word recognizes when a deeper-level item doesn't have proper hierarchical nesting and reverts to simpler formatting.
+The reference labels were read from each paragraph's list string after opening freshly
+written fixtures. LibreOffice Writer 25.8.7.3 agrees on the 7/8, implicit-parent and 7/1
+rows (#1845).
 
 #### Analysis
 
-Our converter (`ListItemRetriever.cs`) builds `levelNumbers` for each paragraph by:
+The earlier rule treated a child level whose `w:start` was one past its parent's current
+counter as a continuation of a flat list. It then formatted the child with level 0's text,
+run properties and indentation, so `1. 2. 3.` followed by a child starting at 4 read `4.`.
+The reference application does not use that coincidence. In every case tested, `%1` in a
+child's level text showed the parent level's current counter, or the parent level's start
+value when no parent paragraph had appeared yet. The child also keeps its own level's
+formatting. In the `HC051` fixture, the reference application puts `3.4` at a 78pt left
+indent with a 24pt hanging indent and underlines the number, as level 1 declares. Level 0
+would give an 18pt indent and no underline.
 
-1. For `ilvl=1`, looping from level 0 to level 1
-2. For level 0: inheriting the counter from the previous paragraph (3)
-3. For level 1: using the `start` value (4)
-4. Result: `levelNumbers = [3, 4]`
-5. Format `%1.%2` produces: `"3" + "." + "4"` = `"3.4"`
+The earlier entry reported `4.` for a paragraph in `NVCA-Model-COI-10-1-2025.docx`.
+That document is not in the repository, and the structure recorded for it does not
+reproduce the label. Built exactly as described, the paragraph reads `3.4`, as do the
+`HC050`/`HC051` test fixtures written for the rule. Something the recorded structure
+omits must have produced `4.` there. The rule did not fire in any of the 129 numbered
+documents under `TestFiles/`.
 
-Word appears to use different logic where:
-- The `%1` token in the format string is either:
-  - Omitted when there's no "active" parent paragraph at that level
-  - Or interpreted differently when transitioning level depths
+#### Relevant code
 
-#### Potential Causes
+- `Docxodus/ListItemRetriever.cs`: `RetrieveListItem` formats every paragraph with its own
+  level's `w:lvlText` and counters (`GetParagraphLevel`). The per-level continuation
+  tracking and its annotation are gone.
+- `Docxodus/FormattingAssembler.cs` and `Docxodus/Internal/AutomaticParagraphSpacing.cs`
+  read a list paragraph's run and paragraph properties from its declared level.
+- `Docxodus/Internal/HtmlConversionOps.cs`: a block render still carries the live counters
+  (`pt:LevelNumbers`) and no longer writes `pt:ListContinuation`. `GetEffectiveLevel` and
+  `PtOpenXml.ListContinuation` remain as obsolete public members.
 
-1. **Orphan nesting detection**: Word may detect that para 4 at `ilvl=1` doesn't have a proper parent-child relationship with para 3 at `ilvl=0` (they're effectively siblings in a flat list that happens to use different levels).
-
-2. **Level entry tracking**: Word may only include `%N` tokens in the output when level N has been "entered" as part of the current nesting chain, not just referenced from previous items.
-
-3. **Start value heuristics**: When a level's `start` value (4) suggests continuation of an overall sequence, Word may apply special formatting rules.
-
-#### Relevant Code
-
-- `Docxodus/ListItemRetriever.cs`:
-  - `FormatListItem()` (lines 1100-1144): Processes `lvlText` format tokens
-  - Level number calculation (lines 980-1079): Builds `levelNumbers` array
-
-```csharp
-// Current logic in FormatListItem:
-int levelNumber = levelNumbers[indentationLevel];
-// This always uses the levelNumbers array, even if the level wasn't "entered"
-```
-
-#### The Fix
-
-**Implementation**: Added "continuation pattern" detection in `ListItemRetriever.cs`.
-
-**Detection criteria**:
-A paragraph at `ilvl > 0` is in a "continuation pattern" when:
-1. It's the first paragraph at this level in the current sequence, AND
-2. The level's `start` value equals the parent level's counter + 1 (continues the sequence)
-
-OR it inherits continuation status from a previous paragraph at the same level.
-
-**What the fix does**:
-When a continuation pattern is detected, the converter uses level 0's properties instead of the declared level's:
-- Format string (e.g., `%1.` instead of `%1.%2`)
-- Run properties (e.g., no underline instead of underline)
-- Paragraph properties (e.g., tab stops and indentation)
-
-**Code changes**:
-
-1. **`Docxodus/ListItemRetriever.cs`**:
-   - Added `ContinuationInfo` annotation class to track continuation state per paragraph
-   - Added `GetEffectiveLevel()` helper method that returns 0 for continuation patterns
-   - In `InitializeListItemRetriever`, after calculating `levelNumbers`:
-     ```csharp
-     // Detection logic
-     if (levelNumbers[ilvl] == startValue && startValue == levelNumbers[ilvl - 1] + 1)
-     {
-         isContinuation = true;
-     }
-     ```
-   - In `RetrieveListItem`, uses level 0's format string with current level's counter
-
-2. **`Docxodus/FormattingAssembler.cs`**:
-   - `NormalizeListItemsTransform`: Uses `GetEffectiveLevel()` to get list item level's rPr
-   - `ParaStyleParaPropsStack`: Uses `GetEffectiveLevel()` to yield correct level's pPr and rPr
-   - `AnnotateParagraph`: Uses `GetEffectiveLevel()` for numbering paragraph properties
-
-**Result**:
-- Items that continue a flat list sequence now render correctly (e.g., "4." instead of "3.4")
-- Formatting (underline, bold, etc.) from the effective level is applied consistently
-- Tab stops and indentation match the effective level's paragraph properties
-
-#### Test Cases Needed
-
-1. Standard multi-level list with proper nesting (1., 1.1, 1.2, 2., 2.1)
-2. "Orphan" nesting like the NVCA example (1., 2., 3., then jump to level 1)
-3. Legal numbering (`isLgl`) vs non-legal numbering behavior
-4. Various `start` values and how they affect parent level display
-
-#### References
-
-- [ECMA-376 Part 1, Section 17.9.10 - lvlText](https://www.ecma-international.org/publications-and-standards/standards/ecma-376/)
-- [ECMA-376 Part 1, Section 17.9.9 - isLgl](https://www.ecma-international.org/publications-and-standards/standards/ecma-376/)
+Tests: `DocxSessionListLevelsTests.NestedStartsKeepTheirParentPrefix`,
+`HC050_DeeperItemKeepsItsParentPrefix`, `HC051_DeeperItemUsesItsOwnLevelFormatting` and
+`HCO087_BlockRenderKeepsADeeperItemsParentPrefix`.
 
 ### List Numbering under Tracked Changes (deleted paragraphs don't consume numbers)
 
@@ -1128,6 +1058,57 @@ changes no longer reproduced either the base or its accepted view in those parts
 `DocxCompareTests.FrontDoorPolicy_*` pin the policy flags themselves.
 `ConsolidateFrontDoorTests` pins the N-way policy through `DocxCompare.Consolidate`, the facade, the
 stdio host and the MCP consolidate form.
+
+---
+
+## Consolidate: two reviewers editing different words of one quantity (#1843)
+
+### The corner case
+
+Consolidation finds conflicts on base tokens. If one reviewer changes the first word of a quantity
+and another adds words after it, the two edits touch different tokens. Both are kept, and accepting
+everything gives a quantity neither reviewer wrote. The desktop word processor's own document-combining
+feature does the same.
+
+### Minimal reproducer
+
+Single-paragraph documents, one plain run each:
+
+```text
+base        Crates hold six dozen samples.
+Reviewer A  Crates hold nine dozen samples.
+Reviewer B  Crates hold six dozen extra samples.
+```
+
+### Behavior table
+
+The desktop word processor (build 16.0.20326) combined the copies in both reviewer orders and two ways:
+the base with one copy and then the result with the other, and each copy's own comparison
+against the base combined with the other's. Each way gave the same revisions and accepted text.
+
+| Case | Docxodus, every policy (default word boundaries) | Docxodus, `wordSeparators: ".;!?"` | Desktop word processor (build 16.0.20326) |
+| --- | --- | --- | --- |
+| A: six → nine; B: adds "extra" | no conflict; accepted "nine dozen extra" | conflict; base wins: "six dozen" | no conflict marker; accepted "nine dozen extra" |
+| A: one hundred → one hundred and twenty; B: one → three | no conflict; "three hundred and twenty" | conflict; base wins | no conflict marker; "three hundred and twenty" |
+| Both replace "six" ("nine", "ten") | one conflict; `BaseWins` "six", `FirstReviewerWins` the first reviewer's word, `StackAll` both words in reviewer order | conflict | both insertions kept, the later-combined reviewer's word first ("tennine" with A combined first), one deletion, no conflict marker |
+| Edits in different sentences of one paragraph | no conflict; both kept | no conflict; both kept | both kept |
+
+LibreOffice Writer was not available on the capture machine.
+
+### Analysis
+
+On disjoint edits, the default matches the reference application, so it stays. A caller who needs a
+plain-text quantity reviewed as a whole can widen the token with a punctuation-only separator set, as
+`python/README.md` shows, and then gets a conflict that the reference application never reports.
+On an overlapping replacement, Docxodus is stricter on purpose: it records the conflict and
+applies the chosen policy. `StackAll` comes closest to the reference application, writing both
+words in reviewer order rather than putting the later-combined reviewer's word first.
+
+### Relevant code and tests
+
+- `Docxodus/DocxDiffConsolidate.cs` — `ConflictResolution`.
+- `Docxodus.Tests/DocxDiffOpsConsolidateTests.cs` —
+  `Word_boundaries_determine_whether_two_edits_compete` pins the first row through the JSON facade.
 
 ---
 
@@ -6502,6 +6483,57 @@ The page-background fix therefore tests the wrap element, rather than using z-or
 substitute. [Microsoft's clarification](https://learn.microsoft.com/en-us/answers/questions/195851/behinddoc-%28wp-wraptopandbottom%29-%28w10-wrap%29-style-m)
 also distinguishes DrawingML choice content from its legacy VML fallback; the two are alternative
 representations, not competing instructions to combine.
+## Date controls hold a calendar day, re-read from their text on save (#1842)
+
+A `w:date` content control records its value twice: the visible runs in `w:sdtContent`, and
+`w:date/@w:fullDate`. The schema types `w:fullDate` as an `xsd:dateTime`, so a writer can store any
+instant, but the desktop word processor (build 16.0.20326) treats the control as holding a calendar
+day: it writes the day at midnight UTC, keeps no time of day, and when it saves a document it
+re-derives `w:fullDate` from the visible text.
+
+```xml
+<w:sdt><w:sdtPr><w:id w:val="101"/>
+    <w:date w:fullDate="2026-12-14T23:00:00Z"><w:dateFormat w:val="d MMMM yyyy"/><w:lid w:val="en-GB"/>
+      <w:storeMappedDataAs w:val="dateTime"/><w:calendar w:val="gregorian"/></w:date></w:sdtPr>
+  <w:sdtContent><w:r><w:t>2026-12-15</w:t></w:r></w:sdtContent></w:sdt>
+```
+
+Filling a control (`SetContentControlDate`, default display text):
+
+| Input | Docxodus before | Docxodus after | Desktop word processor (build 16.0.20326) |
+| --- | --- | --- | --- |
+| `2026-12-15` on a host at UTC+1 | `2026-12-14T23:00:00Z`, text `2026-12-15` | `2026-12-15T00:00:00Z`, text `2026-12-15` | a date typed or chosen as 15 December is stored as `2026-12-15T00:00:00Z` |
+| `2032-03-04T01:00:00+05:00` | `2032-03-03T20:00:00Z`, text `2032-03-04` | `2032-03-04T00:00:00Z`, text `2032-03-04` | re-saving the "before" output stores `2032-03-04T00:00:00Z` |
+| `DateTimeOffset` 4 March 2032 00:00 at +01:00 | `2032-03-03T23:00:00Z` | `2032-03-04T00:00:00Z` | — |
+
+Re-saving stored values with the desktop word processor (fresh one-control documents, host at UTC-6):
+
+| Stored `w:fullDate` | Visible text | Saved `w:fullDate` |
+| --- | --- | --- |
+| `2026-12-14T23:00:00Z` | `2026-12-15` | `2026-12-15T00:00:00Z` |
+| `2026-12-20T00:00:00Z` | `15 December 2026` | `2026-12-15T00:00:00Z` |
+| `2026-12-15T16:30:00Z` | `2026-12-15` | `2026-12-15T00:00:00Z` |
+| `2026-12-15T00:00:00` (no offset) | `2026-12-15` | `2026-12-15T00:00:00Z` |
+| `2034-06-16T16:30:00Z` | `Garden inspection` | none: the attribute is dropped |
+
+LibreOffice Writer 25.8.7.3 showed the same date for the previous-day and midnight values
+(docx-fidelity-bench PR #262), as it shows the cached text. On open the desktop word processor does
+not reformat existing text either: an ISO `2026-12-15` stays as written. A date typed into the control
+is shown in the control's own format and language (`d MMMM yyyy` gives `15 December 2026` for `en-GB`
+and `15 Dezember 2026` for `de-DE`) and stored at midnight UTC.
+
+Analysis: in the desktop word processor the visible text is the value. A stored instant whose UTC day
+differs from the displayed day is corrected the next time it saves the document, but any reader that
+trusts `w:fullDate` in the meantime (a data binding or another application) gets the wrong day, and a display text that is not a date loses the stored value altogether. Docxodus converted
+every value to its UTC instant, so any non-zero offset could move the stored day: a date-only input
+parsed at the host's offset, an explicit offset, or a `DateTimeOffset` from a C# caller.
+
+Fix: `DocxSession.SetContentControlDate` writes the value's own calendar day, the one its default
+display text shows, as `yyyy-MM-ddT00:00:00Z`, and `DocxSessionOps.SetContentControlDate` parses an
+input without an offset as UTC so the host's time zone no longer matters. The default display text is
+still `yyyy-MM-dd` rather than the control's own format; that is tracked in #1851, because
+the browser build has no localized month names. Tests: `ContentControlDateTests`.
+
 ## Raised inline text boxes can paint above the body margin
 
 An inline DrawingML text box inside a run with `<w:position w:val="48"/>`

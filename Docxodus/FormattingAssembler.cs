@@ -359,12 +359,10 @@ namespace Docxodus
                                 mergedRunProps = MergeStyleElement(new XElement(W.rPr,
                                     accumulatedRunProps.Elements().Where(e => e.Name != W.vanish)), mergedRunProps);
 
-                            // Use effective level for continuation patterns (deeper-level items that continue a flat list)
-                            var effectiveLevel = ListItemRetriever.GetEffectiveLevel(element);
                             // Lvl() returns null only for a level index the list doesn't define;
-                            // effectiveLevel/paragraphLevel come from the same resolved list this
+                            // the paragraph's level comes from the same resolved list this
                             // listItemInfo describes, so the level is always present here.
-                            var listItemLvl = listItemInfo.Lvl(effectiveLevel)!;
+                            var listItemLvl = listItemInfo.Lvl(ListItemRetriever.GetParagraphLevel(element))!;
                             var listItemLvlRunProps = listItemLvl.Elements(W.rPr).FirstOrDefault();
                             listItemRunProps = MergeStyleElement(listItemLvlRunProps, mergedRunProps);
 
@@ -479,9 +477,8 @@ namespace Docxodus
 
                         AdjustFontAttributes(wDoc, listItemRun, null, listItemRunProps, settings);
 
-                        // Use effective level for suffix and justification (consistent with list item formatting)
                         // li non-null implies listItemInfo non-null (same annotation pass).
-                        var lvl = listItemInfo!.Lvl(ListItemRetriever.GetEffectiveLevel(element))!;
+                        var lvl = listItemInfo!.Lvl(paragraphLevel)!;
                         XElement? suffix = new XElement(W.tab);
                         var su = (string?)lvl.Elements(W.suff).Attributes(W.val).FirstOrDefault();
                         if (su == "space")
@@ -785,8 +782,7 @@ namespace Docxodus
                             new XAttribute(PtOpenXml.AbstractNumId, abstractNumId!),
                             listItemHtmlAttributes,
                             settings.AnnotateListMembership
-                                ? ListMembershipAttributes(listItemInfo, levelNums, paragraphLevel,
-                                    ListItemRetriever.GetEffectiveLevel(element), listNumFmt)
+                                ? ListMembershipAttributes(listItemInfo, levelNums, paragraphLevel, listNumFmt)
                                 : null,
                             newParaProps,
                             previousListItemRun,
@@ -883,12 +879,12 @@ namespace Docxodus
         /// stamps on a list paragraph. The value is the counter at the paragraph's own level, the
         /// number its marker text was built from.</summary>
         private static IEnumerable<XAttribute> ListMembershipAttributes(ListItemRetriever.ListItemInfo? info,
-            ListItemRetriever.LevelNumbers levelNumbers, int paragraphLevel, int effectiveLevel, string? numFmt)
+            ListItemRetriever.LevelNumbers levelNumbers, int paragraphLevel, string? numFmt)
         {
             var numId = info?.FromParagraph?.Main.NumId ?? info?.FromStyle?.Main.NumId;
             if (numId is { } id)
                 yield return new XAttribute(PtOpenXml.ListNumId, id);
-            yield return new XAttribute(PtOpenXml.ListLevel, effectiveLevel);
+            yield return new XAttribute(PtOpenXml.ListLevel, paragraphLevel);
             if (paragraphLevel < levelNumbers.LevelNumbersArray.Length)
                 yield return new XAttribute(PtOpenXml.ListValue, levelNumbers.LevelNumbersArray[paragraphLevel]);
             if (numFmt != null)
@@ -2469,24 +2465,22 @@ namespace Docxodus
             {
                 if (settings.RestrictToSupportedNumberingFormats)
                 {
-                    // Use effective level for continuation patterns (deeper-level items that continue a flat list)
-                    var effectiveLvl = lif.Lvl(ListItemRetriever.GetEffectiveLevel(para))!;
-                    string? numFmtForLevel = (string?)effectiveLvl.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
+                    var paragraphLvl = lif.Lvl(ListItemRetriever.GetParagraphLevel(para))!;
+                    string? numFmtForLevel = (string?)paragraphLvl.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
                     if (numFmtForLevel == null)
                     {
-                        var numFmtElement = effectiveLvl.Elements(MC.AlternateContent).Elements(MC.Choice).Elements(W.numFmt).FirstOrDefault();
+                        var numFmtElement = paragraphLvl.Elements(MC.AlternateContent).Elements(MC.Choice).Elements(W.numFmt).FirstOrDefault();
                         if (numFmtElement != null && (string?)numFmtElement.Attribute(W.val) == "custom")
                             numFmtForLevel = (string?)numFmtElement.Attribute(W.format);
                     }
-                    bool isLgl = effectiveLvl.Elements(W.isLgl).Any();
+                    bool isLgl = paragraphLvl.Elements(W.isLgl).Any();
                     if (isLgl && numFmtForLevel != "decimalZero")
                         numFmtForLevel = "decimal";
                     if (!AcceptableNumFormats.Contains(numFmtForLevel))
                         throw new UnsupportedNumberingFormatException(numFmtForLevel + " is not a supported numbering format");
                 }
 
-                // Use effective level for continuation patterns to get correct indentation
-                int paragraphLevel = ListItemRetriever.GetEffectiveLevel(para);
+                int paragraphLevel = ListItemRetriever.GetParagraphLevel(para);
                 var numberingParaProps = lif
                     .Lvl(paragraphLevel)!
                     .Elements(W.pPr)
@@ -2825,12 +2819,11 @@ namespace Docxodus
                 {
                     if (listItemInfo.IsListItem)
                     {
-                        // Use effective level for continuation patterns (deeper-level items that continue a flat list)
-                        var effectiveLevel = ListItemRetriever.GetEffectiveLevel(para);
-                        XElement? lipPr = listItemInfo.Lvl(effectiveLevel)!.Element(W.pPr);
+                        var paragraphLvl = listItemInfo.Lvl(ListItemRetriever.GetParagraphLevel(para))!;
+                        XElement? lipPr = paragraphLvl.Element(W.pPr);
                         if (lipPr == null)
                             lipPr = new XElement(W.pPr);
-                        XElement? lirPr = listItemInfo.Lvl(effectiveLevel)!.Element(W.rPr);
+                        XElement? lirPr = paragraphLvl.Element(W.rPr);
 
                         var elementToYield2 = new XElement(W.pPr,
                             lipPr.Attributes(),
