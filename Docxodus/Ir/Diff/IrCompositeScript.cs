@@ -29,7 +29,10 @@ internal sealed record IrSourceRightAnchor(int Reviewer, string Anchor,
 internal sealed record IrEqualReviewerMarkers(int Reviewer, string Anchor, string Author);
 
 /// <summary>A contributing reviewer's row/cell pairings, retained to place markers between rows and cells.</summary>
-internal sealed record IrReviewerTable(int Reviewer, string Author, IrTableDiff Diff);
+internal sealed record IrReviewerTable(int Reviewer, string Author, IrTableDiff Diff)
+{
+    public IrTable? RevisedTable { get; init; }
+}
 
 /// <summary>The kind of one composed table cell (see <see cref="IrAuthoredCellOp"/>).</summary>
 internal enum IrAuthoredCellKind

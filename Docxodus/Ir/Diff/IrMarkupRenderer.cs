@@ -2216,16 +2216,9 @@ internal static partial class IrMarkupRenderer
             var places = IrTableDiffer.ControlsInPlace(leftIr, rightIr, rowOps);
             if (places is null)
                 return false;
-            int rightRows = 0;
-            foreach (var child in rightTbl.Elements())
-            {
-                if (child.Name == W.tr)
-                    rightRows++;
-                else if (child.Name == W.sdt && IrReader.DeliversAny(child, W.tr))
-                    rightRows += IrReader.UnwrapSdtChildren(child, W.tr).Count();
-                else if (child.Name == W.sdt && places.TryGetValue(rightRows, out var before))
+            foreach (var (child, rightRows) in TopLevelRowlessControls(rightTbl))
+                if (places.TryGetValue(rightRows, out var before))
                     extras.Add((child, before));
-            }
         }
         int extrasPlaced = 0;
         void PlaceExtrasBefore(int rowIndex)
@@ -2318,7 +2311,12 @@ internal static partial class IrMarkupRenderer
         PlaceExtrasBefore(int.MaxValue);
 
         if (leftTbl.Elements().Any(IsBlockLevelMarker) || rightTbl.Elements().Any(IsBlockLevelMarker))
-            ReconcileTableStreamMarkers(newTbl, rowSources, state);
+        {
+            if (extras.Count > 0)
+                foreach (var (left, right) in TopLevelRowlessControls(leftTbl).Zip(extras).Reverse())
+                    rowSources.Insert(right.Before, (left.Element, right.Element));
+            ReconcileTableStreamMarkers(newTbl, rowSources, state, extras.Count > 0);
+        }
         RewrapInControls(newTbl, W.tr, rowControls, state);
         sink.Add(newTbl);
         return true;
@@ -3259,7 +3257,7 @@ internal static partial class IrMarkupRenderer
                      IrCompositeMerger.RowIndex(reviewerIrs[rowOp.SourceReviewer]).TryGetValue(insertedAnchor, out var inserted))
             {
                 while (extrasPlaced < extras.Count && extras[extrasPlaced].RowsBefore == boundary &&
-                       extras[extrasPlaced].Element.Name == W.sdt && emptyControlsPlaced < inserted.PrecedingEmptyControls)
+                       emptyControlsPlaced < inserted.PrecedingEmptyControls)
                     PlaceNextExtra();
             }
             switch (rowOp.Kind)
@@ -3298,7 +3296,7 @@ internal static partial class IrMarkupRenderer
         }
         PlaceExtrasBefore(int.MaxValue);
 
-        ReconcileComposedTableMarkers(newTbl, op, baseRowsByAnchor, baseCellsByAnchor, reviewerIrs, state);
+        ReconcileComposedTableMarkers(newTbl, op, baseTblBlock, baseRowsByAnchor, baseCellsByAnchor, reviewerIrs, state);
 
         // The rows and cells were built bare; their content controls go back around them last, once the markers among
         // them are placed (issue #1810). The merger composed the table only because this layout exists.

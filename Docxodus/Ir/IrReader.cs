@@ -2876,7 +2876,6 @@ internal static class IrReader
         // row's content. Unwrap table-level SDTs to their w:tr children, flag the delivered rows
         // FromTableSdt, and let the emitter narrow back to the oracle's direct-row view for parity.
         // The table-level controls that deliver no row sit before the row that follows them (issue #1810).
-        var controlsBefore = TableControlsBefore(tbl, out var trailingControls);
         // Which control instance each row sits in, by the positions of its controls among their siblings: rows that pair
         // ignore it (a control's identity is its shell), but the table's digest must tell one control around two rows
         // from two alike controls around one row each.
@@ -2893,6 +2892,8 @@ internal static class IrReader
             }
             return ordinals[control];
         }
+        IrHash trailingControls = default;
+        var controlsBefore = tbl.Element(W + "sdt") is null ? null : TableControlsBefore(tbl, ControlOrdinal, out trailingControls);
         List<string>? instances = null;
         int precedingEmptyControls = 0;
         foreach (var (tr, fromSdt) in TableChildren(tbl, W + "tr"))
@@ -3025,7 +3026,8 @@ internal static class IrReader
 
     /// <summary>The table-level controls that deliver no row, by the row that follows them (each run whole, in
     /// order), and those after the last row in <paramref name="trailing"/>; null when the table has none.</summary>
-    private static Dictionary<XElement, (IrHash Digest, int TopLevelCount)>? TableControlsBefore(XElement tbl, out IrHash trailing)
+    private static Dictionary<XElement, (IrHash Digest, int TopLevelCount)>? TableControlsBefore(XElement tbl,
+        Func<XElement, int> controlOrdinal, out IrHash trailing)
     {
         Dictionary<XElement, (IrHash, int)>? result = null;
         int topLevelCount = 0;
@@ -3052,6 +3054,7 @@ internal static class IrReader
                         {
                             pending.AppendStructure(IrContentHashBuilder.StructureSdt);
                             pending.AppendHash(ControlShellDigest(parent));
+                            pending.AppendText(controlOrdinal(parent).ToString(System.Globalization.CultureInfo.InvariantCulture));
                         }
                         pending.AppendHash(IrHasher.CanonicalHash(child));
                     }
