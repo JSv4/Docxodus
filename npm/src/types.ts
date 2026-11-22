@@ -1944,6 +1944,8 @@ export interface DocxodusWasmExports {
       optionsJson: string
     ) => string;
     AddReferenceBookmark: (handle: number, anchor: string) => string;
+    /** `optionsJson`: "" or a serialized {@link UpdateFieldsOptions}. */
+    UpdateFields: (handle: number, optionsJson: string) => string;
     InsertEndnote: (handle: number, anchor: string, characterOffset: number, markdown: string) => string;
     // Native Word comment authoring (issue #300). spanJson: "" = whole block, else
     // {"start":n,"length":n}; initials/date: "" = absent (date is ISO-8601).
@@ -3500,6 +3502,15 @@ export interface CrossBlockMatch {
  * field's switches: `\r` (reference the target's auto-number), `\h` (hyperlink),
  * `\p` (relative position, cached as "above"/"below").
  */
+/** Options for {@link DocxSession.updateFields}. */
+export interface UpdateFieldsOptions {
+  /** Only the fields that start in these paragraphs; absent: every field in the body (and the
+   *  document then no longer asks Word to update its fields on open). */
+  range?: DocumentRange;
+  /** The page each paragraph is on (keyed by anchor id or unid), for contents entries and PAGEREF. */
+  pages?: Record<string, string>;
+}
+
 export interface CrossReferenceOptions {
   referenceNumber?: boolean;
   hyperlink?: boolean;

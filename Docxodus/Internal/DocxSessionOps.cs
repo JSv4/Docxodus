@@ -1038,6 +1038,34 @@ internal static class DocxSessionOps
     public static string ListBookmarks(int handle, ProjectionScopes scopes = ProjectionScopes.All) =>
         DocxSessionJson.SerializeBookmarks(SessionRegistry.Get(handle).ListBookmarks(scopes));
 
+    /// <summary>Word's Update Field; see <see cref="DocxSession.UpdateFields"/>.
+    /// <paramref name="optionsJson"/>: <c>""</c> (every field, no pages) or
+    /// <c>{"range":{"startAnchorId","startOffset","endAnchorId","endOffset"}?,"pages":{"anchorOrUnid":"page"}?}</c>.</summary>
+    public static string UpdateFields(int handle, string? optionsJson)
+    {
+        UpdateFieldsOptions? options = null;
+        if (!string.IsNullOrWhiteSpace(optionsJson))
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(optionsJson);
+            var root = doc.RootElement;
+            DocumentRange? range = null;
+            if (root.TryGetProperty("range", out var r) && r.ValueKind == System.Text.Json.JsonValueKind.Object)
+                range = new DocumentRange(
+                    r.GetProperty("startAnchorId").GetString() ?? "", r.GetProperty("startOffset").GetInt32(),
+                    r.GetProperty("endAnchorId").GetString() ?? "", r.GetProperty("endOffset").GetInt32());
+            Dictionary<string, string>? pages = null;
+            if (root.TryGetProperty("pages", out var p) && p.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                pages = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var entry in p.EnumerateObject())
+                    pages[entry.Name] = entry.Value.ValueKind == System.Text.Json.JsonValueKind.Number
+                        ? entry.Value.GetRawText() : entry.Value.GetString() ?? "";
+            }
+            options = new UpdateFieldsOptions { Range = range, Pages = pages };
+        }
+        return DocxSessionJson.Serialize(SessionRegistry.Get(handle).UpdateFields(options));
+    }
+
     /// <summary>The hidden <c>_Ref</c> bookmark over a whole paragraph that a cross-reference to
     /// it targets; see <see cref="DocxSession.AddReferenceBookmark"/>.</summary>
     public static string AddReferenceBookmark(int handle, string anchorId) =>

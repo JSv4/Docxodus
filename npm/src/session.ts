@@ -90,6 +90,7 @@ import type {
   MutationBatchStepResult,
   MutationPreconditions,
   CrossReferenceOptions,
+  UpdateFieldsOptions,
   ReplaceOptions,
   RevisionListEntry,
   RevisionListFilter,
@@ -1597,6 +1598,15 @@ export class DocxSession {
    * number), what Word makes for a cross-reference to a heading or numbered item. One that
    * already spans it is reused. `bookmarkName` carries the name for {@link insertCrossReference}.
    */
+  /**
+   * Word's Update Field (F9): tables of contents built again from the headings, REF and PAGEREF
+   * fields given their targets' current text, number or page, SEQ fields numbered again. Page
+   * numbers come from `options.pages` (the session has no page layout). One undo step.
+   */
+  updateFields(options?: UpdateFieldsOptions): EditResult {
+    return JSON.parse(this.wasm.UpdateFields(this.handle, options ? JSON.stringify(options) : "")) as EditResult;
+  }
+
   addReferenceBookmark(anchorId: string): EditResult {
     return JSON.parse(this.wasm.AddReferenceBookmark(this.handle, anchorId)) as EditResult;
   }
