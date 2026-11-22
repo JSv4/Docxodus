@@ -47,6 +47,9 @@ internal sealed record IrComment(IrAnchor Anchor, string Author, string? Initial
 {
     // Package-local identity joins markers to their definition, independent of XML retention.
     internal string? PackageId { get; init; }
+    internal (IrAnchor First, IrAnchor Last)? FieldMarkerParagraphs { get; init; }
+    internal (IrAnchor First, IrAnchor Last)? BodyMarkerParagraphs => Targets.Count == 0 ? FieldMarkerParagraphs
+        : (Targets[0].BlockAnchor, Targets[^1].BlockAnchor);
 
     public bool Equals(IrComment? other) => other is not null && Anchor == other.Anchor &&
         Author == other.Author && Initials == other.Initials && Date == other.Date &&

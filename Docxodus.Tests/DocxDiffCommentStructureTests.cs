@@ -457,6 +457,14 @@ public class DocxDiffCommentStructureTests
     [InlineData("reanchored-edited", true)]
     [InlineData("reanchored-mixed-reference", false)]
     [InlineData("reanchored-mixed-reference", true)]
+    [InlineData("reanchored-table", false)]
+    [InlineData("reanchored-table", true)]
+    [InlineData("reanchored-table-edited", false)]
+    [InlineData("reanchored-table-edited", true)]
+    [InlineData("reanchored-control", false)]
+    [InlineData("reanchored-control", true)]
+    [InlineData("reanchored-control-edited", false)]
+    [InlineData("reanchored-control-edited", true)]
     [InlineData("reanchored-preserved", false)]
     [InlineData("stationary", false)]
     [InlineData("stationary", true)]
@@ -469,7 +477,11 @@ public class DocxDiffCommentStructureTests
             var body = "<w:p>" + Run("Alpha ") + CommentRun(revised && shape == "rewritten" ? "zeta" : "beta", onSecond ? null : "0") +
                 Run(revised && shape == "stationary" ? " delta." : " gamma.") + "</w:p><w:p>" +
                 CommentRun("Returns", onSecond ? "0" : null) +
-                Run(revised && shape == "reanchored-edited" ? " are due on Mondays." : " are due on Fridays.") + "</w:p>";
+                Run(revised && shape.EndsWith("-edited", StringComparison.Ordinal) ? " are due on Mondays." : " are due on Fridays.") + "</w:p>";
+            if (shape.StartsWith("reanchored-table", StringComparison.Ordinal))
+                body = "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='6000'/></w:tblGrid><w:tr><w:tc>" + body + "</w:tc></w:tr></w:tbl>";
+            if (shape.StartsWith("reanchored-control", StringComparison.Ordinal))
+                body = "<w:sdt><w:sdtPr><w:tag w:val='terms'/></w:sdtPr><w:sdtContent>" + body + "</w:sdtContent></w:sdt>";
             if (shape == "reanchored-mixed-reference")
                 body = body.Replace("<w:commentReference w:id=\"0\"/></w:r><w:r>", "<w:commentReference w:id=\"0\"/>");
             if (shape == "reanchored-preserved" && revised)
@@ -483,7 +495,7 @@ public class DocxDiffCommentStructureTests
         var marked = consolidate ? DocxCompare.Consolidate(original, reviewers) : DocxCompare.Compare(original, revised, settings);
         var revisions = consolidate ? DocxDiff.GetConsolidatedRevisions(original, reviewers).Select(r => r.Text)
             : DocxDiff.GetRevisions(original, revised).Select(r => r.Text);
-        if (shape is "reanchored" or "reanchored-mixed-reference") Assert.Empty(revisions);
+        if (shape is "reanchored" or "reanchored-mixed-reference" or "reanchored-table" or "reanchored-control") Assert.Empty(revisions);
         else Assert.NotEmpty(revisions);
         if (shape.StartsWith("reanchored", StringComparison.Ordinal))
             Assert.Contains(DocxDiff.GetSemanticChanges(original, revised).Changes,
@@ -529,6 +541,57 @@ public class DocxDiffCommentStructureTests
                 Assert.Equal(BodyText(expected), BodyText(doc));
             }
         }
+    }
+
+    [Theory]
+    [InlineData("table-disjoint", false)]
+    [InlineData("table-disjoint", true)]
+    [InlineData("control-disjoint", false)]
+    [InlineData("control-disjoint", true)]
+    [InlineData("disjoint", false)]
+    [InlineData("disjoint", true)]
+    [InlineData("conflicting-deletion", false)]
+    [InlineData("conflicting-deletion", true)]
+    [InlineData("field", false)]
+    [InlineData("field", true)]
+    public void A_reanchored_base_comment_follows_the_selected_reviewer_edits(string shape, bool moverFirst)
+    {
+        bool disjoint = shape.EndsWith("disjoint", StringComparison.Ordinal);
+        string Run(string text) => "<w:r><w:t xml:space='preserve'>" + text + "</w:t></w:r>";
+        WmlDocument Form(bool move = false, bool otherEdit = false, bool expected = false)
+        {
+            bool keptMove = move && (!expected || disjoint);
+            var phrase = CommentRun("beta", keptMove ? null : "0");
+            if (shape == "field")
+                phrase = "<w:r><w:fldChar w:fldCharType='begin'/></w:r><w:r><w:instrText> REF Example </w:instrText></w:r>" +
+                    "<w:r><w:fldChar w:fldCharType='separate'/></w:r>" + phrase + "<w:r><w:fldChar w:fldCharType='end'/></w:r>";
+            var origin = "<w:p>" + Run(otherEdit && shape != "field" ? "Revised alpha " : "Original alpha ") + phrase +
+                Run(move && disjoint ? " gamma concludes." : " gamma ends.") + "</w:p>";
+            if (move && shape == "conflicting-deletion" && !expected) origin = "";
+            var target = "<w:p>" + CommentRun("Returns", keptMove ? "0" : null) +
+                Run(otherEdit && shape == "field" ? " are due on Mondays." : " are due on Fridays.") + "</w:p>";
+            var body = origin + target;
+            if (shape == "table-disjoint")
+                body = "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='6000'/></w:tblGrid><w:tr><w:tc>" + body + "</w:tc></w:tr></w:tbl>";
+            if (shape == "control-disjoint")
+                body = "<w:sdt><w:sdtPr><w:tag w:val='terms'/></w:sdtPr><w:sdtContent>" + body + "</w:sdtContent></w:sdt>";
+            return IrTestDocuments.WithComment("Cedar", "C", "2026-01-01T00:00:00Z", "Check the term.", body);
+        }
+        var original = Form();
+        var mover = new DocxDiffReviewer { Author = "Mover", Document = Form(move: true) };
+        var editor = new DocxDiffReviewer { Author = "Editor", Document = Form(otherEdit: true) };
+        var reviewers = moverFirst ? new[] { mover, editor } : new[] { editor, mover };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.BaseWins };
+        var marked = DocxCompare.Consolidate(original, reviewers, settings);
+        var accepted = RevisionProcessor.AcceptRevisions(marked);
+        var rejected = RevisionProcessor.RejectRevisions(marked);
+        var conflicts = DocxDiff.GetConflicts(original, reviewers, settings);
+        Assert.Equal(shape == "conflicting-deletion", conflicts.Any());
+        Assert.Equal(RangeCoverage(original, true), RangeCoverage(rejected, true));
+        var expected = shape == "conflicting-deletion" ? original : Form(move: true, otherEdit: true, expected: true);
+        Assert.Equal(RangeCoverage(expected, true), RangeCoverage(accepted, true));
+        foreach (var doc in new[] { marked, accepted, rejected })
+            PackageValidation.AssertValid(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
     }
 
     private static string CommentRun(string text, string? id) => id is null ? $"<w:r><w:t>{text}</w:t></w:r>"

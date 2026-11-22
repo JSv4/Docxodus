@@ -1587,15 +1587,32 @@ internal static partial class IrMarkupRenderer
 
     internal static void ApplyCommentAttachments(IrEditOp op, RenderState state, List<XElement> sink, int start)
     {
-        if (state.CommentAttachments?.For(op.LeftAnchor) is not { } placements ||
-            sink.Count != start + 1 || sink[start].Name != W.p)
-            return;
+        if (sink.Count == start + 1 && sink[start].Name == W.p)
+            ApplyParagraphCommentAttachments(sink[start], op.LeftAnchor, state);
+    }
+
+    // An unchanged container is copied as a unit. Its paragraphs correspond in source
+    // order, just as they do when carrying markers into the copy.
+    private static void ApplyCopiedCommentAttachments(XElement output, XElement? original, RenderState state)
+    {
+        if (state.CommentAttachments?.HasPlacements != true || original is null || !original.Ancestors(W.body).Any()) return;
+        var source = original.Descendants(W.p).ToList();
+        var copies = output.Descendants(W.p).ToList();
+        if (copies.Count != source.Count) return;
+        for (int i = 0; i < copies.Count; i++)
+            ApplyParagraphCommentAttachments(copies[i],
+                state.CommentAttachments.AnchorForCopy((string?)source[i].Attribute(PtOpenXml.Unid)), state);
+    }
+
+    private static void ApplyParagraphCommentAttachments(XElement paragraph, string? anchor, RenderState state)
+    {
+        if (state.CommentAttachments?.For(anchor) is not { } placements) return;
         var savedAuthor = state.AuthorOverride;
         foreach (var (id, insert, author) in placements)
         {
-            state.AuthorOverride = author ?? savedAuthor;
+            state.AuthorOverride = author ?? state.AttachmentAuthor ?? savedAuthor;
             var kind = insert ? RevKind.Ins : RevKind.Del;
-            var markers = sink[start].Descendants().Where(e => IsCommentMarker(e) &&
+            var markers = paragraph.Descendants().Where(e => IsCommentMarker(e) && e.Ancestors(W.p).FirstOrDefault() == paragraph &&
                 (string?)e.Attribute(W.id) == id && IsRunLevelCommentMarker(e)).ToList();
             foreach (var marker in markers)
                 if (CommentMarkerView(marker) is null)

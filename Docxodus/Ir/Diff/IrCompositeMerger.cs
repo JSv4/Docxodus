@@ -98,13 +98,14 @@ internal static class IrCompositeMerger
         var bookmarks = IrMarkupRenderer.PlanCompositeBookmarks(baseIr, reviewers, scripts,
             policy, settings, conflicts, ref nextConflictId);
 
+        var attachments = IrCommentAttachments.Compose(baseIr, rawScripts, reviewers, ops);
+
         // Each reviewer's own comparison rides along for the renderer: the composite ops say nothing about the
         // bookmarks and comment ranges a reviewer has between blocks (rule N3), and placing them needs that
         // reviewer's alignment with the base, in the body and in each note (issues #1149, #1175).
         return new IrCompositeScript(IrNodeList.From(ops), IrNodeList.From(conflicts), noteOps, noteIdMaps, trailingSectPr,
             IrNodeList.From(scripts.Select((script, i) => new IrReviewerComparison(script.Operations, script.NoteOps,
-                IrCommentAttachments.BaseAttachments(baseIr, rawScripts[i], reviewers.Count == 1)))), bookmarks,
-            IrCommentAttachments.Compose(baseIr, rawScripts, reviewers, ops));
+                IrCommentAttachments.BaseAttachments(baseIr, rawScripts[i], reviewers.Count == 1, i, attachments)))), bookmarks, attachments);
     }
 
     // ---- N-way note-scope merge ----
