@@ -54,12 +54,29 @@ public class IrBlockAlignerTests
         var left = FromXml(split + body);
         var right = FromXml(body + plain);
         var settings = new IrDiffSettings { MinimumAnchorWordCount = minimum };
-        foreach (var (a, b) in new[] { (left, right), (right, left), (left, FromXml(body + split)) })
+        // The exact label (same formatting on both sides) is still a move at every minimum.
+        foreach (var (a, b, moves) in new[] { (left, right, expectedMoves), (right, left, expectedMoves),
+            (left, FromXml(body + split), 1) })
         {
             var alignment = Align(a, b, settings);
-            Assert.Equal(expectedMoves, Count(alignment, IrAlignmentKind.MovedModified) + Count(alignment, IrAlignmentKind.Moved));
+            Assert.Equal(moves, Count(alignment, IrAlignmentKind.MovedModified) + Count(alignment, IrAlignmentKind.Moved));
             AssertInvariants(a, b, alignment);
         }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public void ShortExactParagraphMovesUnderAnyAnchorMinimum(int minimum)
+    {
+        string[] rest = { "Wardens record the river level at dawn.", "Readings above the mark are reported.",
+            "Boats wait at the lower pool." };
+        var left = Doc(rest.Prepend("Scope").ToArray());
+        var right = Doc(rest[0], rest[1], "Scope", rest[2]);
+        var alignment = Align(left, right, new IrDiffSettings { MinimumAnchorWordCount = minimum });
+        Assert.Equal(1, Count(alignment, IrAlignmentKind.Moved));
+        Assert.Equal(3, Count(alignment, IrAlignmentKind.Unchanged));
+        AssertInvariants(left, right, alignment);
     }
 
     [Fact]

@@ -78,10 +78,11 @@ internal static class IrBlockAligner
         //     stored fingerprint under Full). M2.2 Task 4: this is where unmodeled-rPr noise that flipped
         //     the stored fingerprint (lang/bCs/iCs/…) is reclassified Unchanged instead of FormatOnly.
         var candidates = new List<Candidate>();
+        var shortExactPairs = settings.MinimumAnchorWordCount > 0 ? new List<(int Left, int Right)>() : null;
         CollectAnchors(leftBlocks, rightBlocks, KeyAB, IrAlignmentKind.Unchanged,
-            leftMatch, rightMatch, candidates, settings, similarity);
+            leftMatch, rightMatch, candidates, settings, similarity, shortExactPairs);
         CollectAnchors(leftBlocks, rightBlocks, KeyContentOnly, IrAlignmentKind.FormatOnly,
-            leftMatch, rightMatch, candidates, settings, similarity);
+            leftMatch, rightMatch, candidates, settings, similarity, shortExactPairs);
 
         // --- Spine: longest increasing subsequence over candidates (sorted by left index) by right
         // index. On-spine candidates keep their anchor kind (Unchanged/FormatOnly); off-spine become a
@@ -198,6 +199,21 @@ internal static class IrBlockAligner
         ReleaseUnsupportedBlankPairs(leftBlocks, rightBlocks, similarity, leftKind, rightKind, leftMatch, rightMatch,
             toFreePool: false);
 
+        // A unique exact paragraph that the anchor minimum kept off the spine is still the same
+        // paragraph: when the gap fill left it deleted on one side and inserted on the other, it moved,
+        // as it would have as an off-spine anchor (#1817).
+        if (shortExactPairs is not null)
+        {
+            foreach (var (li, rj) in shortExactPairs)
+            {
+                if (leftKind[li] != IrAlignmentKind.Deleted || rightKind[rj] != IrAlignmentKind.Inserted)
+                    continue;
+                leftKind[li] = rightKind[rj] = IrAlignmentKind.Moved;
+                leftMatch[li] = rj;
+                rightMatch[rj] = li;
+            }
+        }
+
         // --- Cross-gap fuzzy moves: over the GLOBAL leftover Deleted × Inserted sets (after all gap
         // fill), re-pair similar blocks as Moved / MovedModified. Runs AFTER gap fill so it sees the
         // final Deleted/Inserted leftovers, never blocks already consumed in-place.
@@ -232,7 +248,7 @@ internal static class IrBlockAligner
         IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
         Func<IrBlock, (IrHash, IrHash)> key, IrAlignmentKind anchorKind,
         int[] leftMatch, int[] rightMatch, List<Candidate> candidates, IrDiffSettings settings,
-        IrBlockSimilarity similarity)
+        IrBlockSimilarity similarity, List<(int Left, int Right)>? shortExactPairs)
     {
         var leftByKey = BuildUniqueIndex(leftBlocks, leftMatch, key);
         var rightByKey = BuildUniqueIndex(rightBlocks, rightMatch, key);
@@ -251,11 +267,16 @@ internal static class IrBlockAligner
                 continue;
 
             // Position labels can repeat the same number on different entries after a renumbering.
-            // Leave short paragraphs for local pairing when the caller opts into a minimum.
+            // Leave short paragraphs for local pairing when the caller opts into a minimum, but remember
+            // an exact non-blank pair so a relocation can still be reported as a move.
             if (settings.MinimumAnchorWordCount > 0 && leftBlocks[i] is IrParagraph lp && rightBlocks[rj] is IrParagraph rp &&
                 (!similarity.HasAnchorWords(lp, settings.MinimumAnchorWordCount) ||
                  !similarity.HasAnchorWords(rp, settings.MinimumAnchorWordCount)))
+            {
+                if ((anchorKind == IrAlignmentKind.Unchanged || FormatEqual(lp, rp, settings)) && !similarity.IsBlankSpacer(lp))
+                    shortExactPairs?.Add((i, rj));
                 continue;
+            }
 
             // Pass B refines its content-equal pair into Unchanged (format-equal) or FormatOnly.
             var resolvedKind = anchorKind == IrAlignmentKind.FormatOnly

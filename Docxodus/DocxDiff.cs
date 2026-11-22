@@ -773,7 +773,8 @@ public sealed class DocxDiffSettings
 
     /// <summary>Minimum word tokens for a paragraph to anchor the block alignment.
     /// Zero (the default) allows short paragraphs to anchor. Set to two when stand-alone
-    /// one-word labels renumber after an entry is inserted or removed.</summary>
+    /// one-word labels renumber after an entry is inserted or removed. A shorter paragraph
+    /// that is unique in both documents and relocates unchanged is still reported as moved.</summary>
     public int MinimumAnchorWordCount
     {
         get;

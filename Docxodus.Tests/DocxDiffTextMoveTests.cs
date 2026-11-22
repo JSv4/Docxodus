@@ -65,6 +65,23 @@ public class DocxDiffTextMoveTests
         Assert.Equal(Ir.Diff.Docs.PlainText(right), Ir.Diff.Docs.PlainText(RevisionProcessor.AcceptRevisions(redline)));
     }
 
+    [Fact]
+    public void ShortHeadingMoveSurvivesTheAnchorMinimum()
+    {
+        string[] rest = { "Wardens record the river level at dawn.", "Readings above the mark are reported.",
+            "Boats wait at the lower pool." };
+        var left = IrTestDocuments.Create(rest.Prepend("Scope").ToArray());
+        var right = IrTestDocuments.Create(rest[0], rest[1], "Scope", rest[2]);
+        var redline = new WmlDocument("moved.docx", Docxodus.Internal.DocxDiffOps.Compare(
+            left.DocumentByteArray, right.DocumentByteArray, """{"minimumAnchorWordCount":2}"""));
+        var body = Body(redline.DocumentByteArray);
+        Assert.Equal("Scope", Assert.Single(body.Descendants(W.moveFrom)).Value);
+        Assert.Equal("Scope", Assert.Single(body.Descendants(W.moveTo)).Value);
+        Assert.DoesNotContain(body.Descendants(), e => (e.Name == W.ins || e.Name == W.del) && e.Elements(W.r).Any());
+        Assert.Equal(Ir.Diff.Docs.PlainText(left), Ir.Diff.Docs.PlainText(RevisionProcessor.RejectRevisions(redline)));
+        Assert.Equal(Ir.Diff.Docs.PlainText(right), Ir.Diff.Docs.PlainText(RevisionProcessor.AcceptRevisions(redline)));
+    }
+
     public static TheoryData<string, string, string, string> TextMoves => new()
     {
         { "a sentence within its paragraph", P($"{First} {Second} {Third}"), P($"{Second} {Third} {First}"), First },
