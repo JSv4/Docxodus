@@ -1696,28 +1696,57 @@ internal static class IrCompositeMerger
     // a definition in that reviewer's package. Resolve both before comparing the result.
     private static IrHash SplitMemberIdentity(XElement paragraph, IrDocument document)
     {
-        var copy = new XElement(paragraph);
-        foreach (var (source, target) in paragraph.DescendantsAndSelf().Zip(copy.DescendantsAndSelf()))
+        // Number each reachable definition in reference order. The same source note reached
+        // again keeps its number, including through a cycle.
+        var numbers = new Dictionary<(XName Kind, string Id), int>();
+        var notes = new List<(IrScope Scope, XElement Definition)>();
+        IrHash Signature(XElement source, bool definition = false)
         {
-            target.Attribute(W14.paraId)?.Remove();
-            target.Attribute(W14.textId)?.Remove();
-            if (source.Name == W.bookmarkEnd)
-                target.SetAttributeValue("bookmarkName", IrReader.BookmarkEndName(source));
-            else if (source.Name == W.footnoteReference || source.Name == W.endnoteReference)
+            var copy = new XElement(source);
+            if (definition) copy.Attribute(W.id)?.Remove();
+            foreach (var (element, target) in source.DescendantsAndSelf().Zip(copy.DescendantsAndSelf()))
             {
-                var notes = source.Name == W.footnoteReference ? document.Footnotes : document.Endnotes;
-                if ((string?)source.Attribute(W.id) is { } id && notes.Notes.TryGetValue(id, out var note))
+                target.Attribute(W14.paraId)?.Remove();
+                target.Attribute(W14.textId)?.Remove();
+                if (element.Name == W.bookmarkEnd)
+                    target.SetAttributeValue("bookmarkName", IrReader.BookmarkEndName(element));
+                if (element.Name != W.footnoteReference && element.Name != W.endnoteReference) continue;
+                if ((string?)element.Attribute(W.id) is not { } id) continue;
+                var key = (element.Name, id);
+                if (!numbers.TryGetValue(key, out var number))
                 {
-                    var contents = new XElement("note", note.Blocks.Select(b =>
-                        new XElement("block", new XAttribute("content", b.ContentHash.ToHex()),
-                            new XAttribute("format", b.FormatFingerprint.ToHex()), b.Source.Element)));
-                    contents.Descendants().Attributes(W14.paraId).Remove();
-                    contents.Descendants().Attributes(W14.textId).Remove();
-                    target.SetAttributeValue(W.id, IrHasher.RetainedMarkupHash(contents, note.Blocks.FirstOrDefault()?.Source.Element).ToHex());
+                    bool foot = element.Name == W.footnoteReference;
+                    var store = foot ? document.Footnotes : document.Endnotes;
+                    if (!store.Notes.TryGetValue(id, out var scope) || scope.PartUri is not { } uri ||
+                        !document.Sources.TryGetValue(uri, out var part)) continue;
+                    var noteName = foot ? W.footnote : W.endnote;
+                    var note = scope.Blocks.FirstOrDefault()?.Source.Element?.Ancestors(noteName).FirstOrDefault() ??
+                        part.Root?.Elements(noteName).FirstOrDefault(n => (string?)n.Attribute(W.id) == id);
+                    if (note is null) continue;
+                    number = notes.Count;
+                    numbers.Add(key, number);
+                    notes.Add((scope, note));
                 }
+                target.SetAttributeValue(W.id, number);
             }
+            return IrHasher.RetainedMarkupHash(copy, source);
         }
-        return IrHasher.RetainedMarkupHash(copy, paragraph);
+
+        var markup = Signature(paragraph);
+        var before = paragraph.ElementsBeforeSelf().Reverse().TakeWhile(IrMarkupRenderer.IsBlockLevelMarker).Reverse();
+        var after = paragraph.ElementsAfterSelf().TakeWhile(IrMarkupRenderer.IsBlockLevelMarker);
+        if (notes.Count == 0 && !before.Any() && !after.Any()) return markup;
+        var result = new System.Text.StringBuilder(markup.ToHex());
+        foreach (var marker in before) result.Append('<').Append(Signature(marker).ToHex());
+        foreach (var marker in after) result.Append('>').Append(Signature(marker).ToHex());
+        for (int i = 0; i < notes.Count; i++)
+        {
+            var (scope, definition) = notes[i];
+            result.Append('#').Append(Signature(definition, definition: true).ToHex());
+            foreach (var block in scope.Blocks)
+                result.Append(block.ContentHash.ToHex()).Append(block.FormatFingerprint.ToHex());
+        }
+        return IrHash.ComputeUtf8(result.ToString());
     }
 
     // A split produces an ordered sequence of paragraphs. Both StackAll and conflict reports

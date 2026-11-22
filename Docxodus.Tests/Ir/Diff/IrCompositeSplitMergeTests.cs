@@ -418,6 +418,109 @@ public class IrCompositeSplitMergeTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void A_stacked_split_bookmark_covers_only_its_own_member(bool splitFirst)
+    {
+        var original = Docs.Para(SplitSrc, Anchor);
+        var split = IrTestDocuments.FromBodyXml(Paragraph(TextRun(SplitA)) + "<w:bookmarkStart w:id='1' w:name='Range'/>" +
+            Paragraph(TextRun(SplitB)) + "<w:bookmarkEnd w:id='1'/>" + Paragraph(TextRun(Anchor)));
+        var splitter = ("Splitter", split);
+        var editor = ("Editor", Docs.Para(SplitSrc.Replace("bbb", "BBB"), Anchor));
+        var reviewers = splitFirst ? new[] { splitter, editor } : new[] { editor, splitter };
+        var marked = Consolidate(original, ConflictResolution.StackAll, reviewers);
+        var accepted = XDocument.Parse(Docs.MainPartXml(RevisionProcessor.AcceptRevisions(marked)));
+        var start = Assert.Single(accepted.Descendants(W.bookmarkStart));
+        Assert.Equal(new[] { SplitB }, start.ElementsAfterSelf().TakeWhile(e => e.Name != W.bookmarkEnd)
+            .Select(p => string.Concat(p.Descendants(W.t).Select(t => t.Value))));
+        Assert.Empty(XDocument.Parse(Docs.MainPartXml(RevisionProcessor.RejectRevisions(marked))).Descendants(W.bookmarkStart));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_bookmark_on_the_third_member_of_an_identical_split_keeps_its_range(bool markedFirst)
+    {
+        const string third = " iii jjj kkk lll.";
+        var original = Docs.Para(SplitSrc + third, Anchor);
+        WmlDocument Split(bool mark) => IrTestDocuments.FromBodyXml(Paragraph(TextRun(SplitA)) + Paragraph(TextRun(SplitB)) +
+            (mark ? "<w:bookmarkStart w:id='1' w:name='Range'/>" : "") + Paragraph(TextRun(third)) +
+            (mark ? "<w:bookmarkEnd w:id='1'/>" : "") + Paragraph(TextRun(Anchor)));
+        var marked = Consolidate(original, ConflictResolution.StackAll, ("First", Split(markedFirst)), ("Second", Split(!markedFirst)));
+        var accepted = XDocument.Parse(Docs.MainPartXml(RevisionProcessor.AcceptRevisions(marked)));
+        var start = Assert.Single(accepted.Descendants(W.bookmarkStart));
+        var end = Assert.Single(accepted.Descendants(W.bookmarkEnd));
+        Assert.True(XNode.DocumentOrderComparer.Compare(start, end) < 0);
+        Assert.Equal(new[] { third }, start.ElementsAfterSelf().TakeWhile(e => e != end)
+            .Select(p => string.Concat(p.Descendants(W.t).Select(t => t.Value))));
+        Assert.Empty(XDocument.Parse(Docs.MainPartXml(RevisionProcessor.RejectRevisions(marked))).Descendants(W.bookmarkStart));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Split_consensus_follows_interparagraph_ranges_and_nested_note_targets(bool nested, bool equivalent)
+    {
+        var original = Docs.Para(SplitSrc, Anchor);
+        string body = Paragraph(TextRun(SplitA)) + Paragraph(TextRun(SplitB) + "<w:r><w:footnoteReference w:id='1'/></w:r>") + Paragraph(TextRun(Anchor));
+        WmlDocument Review(bool second)
+        {
+            var source = IrTestDocuments.FromBodyXmlWithFootnote(body, "Terms.", false);
+            using var stream = new System.IO.MemoryStream();
+            stream.Write(source.DocumentByteArray);
+            using (var package = WordprocessingDocument.Open(stream, true))
+            {
+                var main = package.MainDocumentPart!;
+                var foot = main.FootnotesPart!;
+                var note = foot.GetXDocument().Descendants(W.footnote).Single(n => (string?)n.Attribute(W.id) == "1");
+                if (nested)
+                {
+                    var id = second && equivalent ? "8" : "1";
+                    note.Element(W.p)!.Add(new XElement(W.r, new XElement(W.endnoteReference, new XAttribute(W.id, id))));
+                    var ends = main.AddNewPart<EndnotesPart>();
+                    ends.PutXDocument(new XDocument(new XElement(W.endnotes, new XElement(W.endnote, new XAttribute(W.id, id),
+                        new XElement(W.p, new XElement(W.r, new XElement(W.t, second && !equivalent ? "East." : "West.")))))));
+                }
+                else
+                {
+                    var last = new XElement(W.p, new XElement(W.r, new XElement(W.t, "Rates.")));
+                    note.Add(last);
+                    if (!second || equivalent)
+                    {
+                        var id = second ? "8" : "1";
+                        last.AddBeforeSelf(new XElement(W.bookmarkStart, new XAttribute(W.id, id), new XAttribute(W.name, "Rate")));
+                        last.AddAfterSelf(new XElement(W.bookmarkEnd, new XAttribute(W.id, id)));
+                    }
+                }
+                foot.PutXDocument();
+            }
+            return new WmlDocument("review.docx", stream.ToArray());
+        }
+        var reviewers = new[] { ("A", Review(false)), ("B", Review(true)) };
+        Assert.Equal(!equivalent, Conflicts(original, ConflictResolution.StackAll, reviewers).Any());
+        var marked = Consolidate(original, ConflictResolution.StackAll, reviewers);
+        var accepted = RevisionProcessor.AcceptRevisions(marked);
+        Assert.Empty(XDocument.Parse(Docs.MainPartXml(RevisionProcessor.RejectRevisions(marked))).Descendants(W.footnoteReference));
+        using var stream = new System.IO.MemoryStream(accepted.DocumentByteArray);
+        using var package = WordprocessingDocument.Open(stream, false);
+        var main = package.MainDocumentPart!;
+        var footnotes = main.FootnotesPart!.GetXDocument().Descendants(W.footnote).ToDictionary(n => (string)n.Attribute(W.id)!);
+        var referenced = main.GetXDocument().Descendants(W.footnoteReference).Select(r => footnotes[(string)r.Attribute(W.id)!]).ToList();
+        Assert.Equal(equivalent ? 1 : 2, referenced.Count);
+        if (nested)
+        {
+            var ends = main.EndnotesPart!.GetXDocument().Descendants(W.endnote).ToDictionary(n => (string)n.Attribute(W.id)!);
+            Assert.Equal(equivalent ? new[] { "West." } : new[] { "West.", "East." }, referenced.Select(n =>
+                string.Concat(ends[(string)n.Descendants(W.endnoteReference).Single().Attribute(W.id)!].Descendants(W.t).Select(t => t.Value))));
+        }
+        else
+            Assert.Equal(equivalent ? new[] { true } : new[] { true, false },
+                referenced.Select(n => n.Elements(W.bookmarkStart).Any() && n.Elements(W.bookmarkEnd).Any()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void A_split_consensus_accounts_for_the_referenced_note(bool sameNote)
     {
         var original = Docs.Para(SplitSrc, Anchor);

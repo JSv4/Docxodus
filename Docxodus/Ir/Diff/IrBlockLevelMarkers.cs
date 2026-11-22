@@ -276,12 +276,34 @@ internal static partial class IrMarkupRenderer
                 byBaseAnchor.TryAdd(a, i);
         int? BaseIndex(string? anchor) => anchor is not null && byBaseAnchor.TryGetValue(anchor, out var i) ? i : null;
 
+        int? RightIndex(int r, int j) => reviewerOps![r][j].RightAnchor is { } right
+            ? Enumerable.Range(0, ops.Count).Cast<int?>().FirstOrDefault(i =>
+                ops[i!.Value].SourceReviewer == r && ops[i.Value].Op.RightAnchor == right)
+            : null;
+        // A marker supplied by a reviewer borders that reviewer's surviving contribution.
+        // Other reviewers can insert blocks between the same pair of base anchors.
+        var selected = new Dictionary<(int Reviewer, XElement Source), int>();
+        for (int i = 0; i < ops.Count; i++)
+        {
+            var op = ops[i];
+            if (op.SourceReviewer >= 0 && op.Op.Kind is IrEditOpKind.InsertBlock or IrEditOpKind.ModifyBlock &&
+                SourceElement(op.Op.RightAnchor, reviewerIrs[op.SourceReviewer]) is { } source)
+                selected.TryAdd((op.SourceReviewer, source), i);
+        }
+        int? ContributionBoundary(int reviewer, XElement marker)
+        {
+            bool end = marker.Name == W.bookmarkEnd || marker.Name == W.commentRangeEnd;
+            var sibling = end ? marker.PreviousNode : marker.NextNode;
+            while (sibling is not null)
+            {
+                if (sibling is XElement element && !IsBlockLevelMarker(element))
+                    return selected.TryGetValue((reviewer, element), out int index) ? index + (end ? 1 : 0) : null;
+                sibling = end ? sibling.PreviousNode : sibling.NextNode;
+            }
+            return null;
+        }
         var positions = PlanCompositeMarkers(ops.Count, baseSide, layouts,
-            (r, j) => BaseIndex(reviewerOps![r][j].LeftAnchor),
-            (r, j) => reviewerOps![r][j].RightAnchor is { } right
-                ? Enumerable.Range(0, ops.Count).Cast<int?>().FirstOrDefault(i =>
-                    ops[i!.Value].SourceReviewer == r && ops[i.Value].Op.RightAnchor == right)
-                : null, authors, state);
+            (r, j) => BaseIndex(reviewerOps![r][j].LeftAnchor), RightIndex, authors, state, ContributionBoundary);
         return positions is null ? null : new CompositeBlockMarkers(positions, starts);
     }
 
@@ -317,7 +339,7 @@ internal static partial class IrMarkupRenderer
 
     private static Dictionary<int, List<XElement>>? PlanCompositeMarkers(int count, SideMarkers? baseSide,
         IReadOnlyList<MarkerLayout?> layouts, Func<int, int, int?> baseIndex, Func<int, int, int?> rightIndex,
-        IReadOnlyList<string> authors, RenderState state)
+        IReadOnlyList<string> authors, RenderState state, Func<int, XElement, int?>? contributionBoundary = null)
     {
         var placement = new CompositeMarkerPlacement(state);
         for (int r = 0; r < layouts.Count; r++)
@@ -329,7 +351,8 @@ internal static partial class IrMarkupRenderer
             void Take(MarkerEntry entry, int position, bool beforeBase)
             {
                 if (!layout.IsShared(entry))
-                    placement.Take(entry, reviewer, position, beforeBase);
+                    placement.Take(entry, reviewer, entry.Left is null && entry.Right is { } marker
+                        ? contributionBoundary?.Invoke(reviewer, marker) ?? position : position, beforeBase);
             }
             foreach (var (g, entries) in layout.GapStart)
             {
