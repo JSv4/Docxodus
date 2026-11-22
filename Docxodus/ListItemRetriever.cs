@@ -1489,12 +1489,16 @@ namespace Docxodus
                         {
                             // Check if this starts a continuation pattern:
                             // - Current counter equals the level's start value (first item at this level)
-                            // - Start value equals parent level's counter + 1 (continues the sequence)
+                            // - An actual parent sequence has advanced past its starting value.
+                            //   Adjacent starting values alone describe a normal nested list.
+                            // - Start value equals the parent counter + 1 (continues the sequence)
                             // - Level 0 is defined (a continuation renders with its format)
                             int? startValue = IntValue(lvlDef.Elements(W.start).Attributes(W.val).FirstOrDefault());
-                            if (startValue != null && listItemInfo.Lvl(0) != null &&
-                                levelNumbers[ilvl] == startValue &&
-                                startValue == levelNumbers[ilvl - 1] + 1)
+                            if (startValue != null && levelNumbers[ilvl] == startValue &&
+                                startValue == levelNumbers[ilvl - 1] + 1 &&
+                                listItemInfoInEffect != null &&
+                                levelNumbers[ilvl - 1] > listItemInfoInEffect.Start(ilvl - 1, true, out _) &&
+                                listItemInfo.Lvl(0) != null)
                             {
                                 isContinuation = true;
                             }

@@ -167,7 +167,8 @@ int levelNumber = levelNumbers[indentationLevel];
 **Detection criteria**:
 A paragraph at `ilvl > 0` is in a "continuation pattern" when:
 1. It's the first paragraph at this level in the current sequence, AND
-2. The level's `start` value equals the parent level's counter + 1 (continues the sequence)
+2. An actual parent item has counted beyond its effective start. An implicit parent, or a first parent starting at 7 followed by a child starting at 8, still uses the child's declared label (for example, `7.8`).
+3. The level's `start` value equals the parent level's counter + 1 (continues the sequence)
 
 OR it inherits continuation status from a previous paragraph at the same level.
 
@@ -182,14 +183,7 @@ When a continuation pattern is detected, the converter uses level 0's properties
 1. **`Docxodus/ListItemRetriever.cs`**:
    - Added `ContinuationInfo` annotation class to track continuation state per paragraph
    - Added `GetEffectiveLevel()` helper method that returns 0 for continuation patterns
-   - In `InitializeListItemRetriever`, after calculating `levelNumbers`:
-     ```csharp
-     // Detection logic
-     if (levelNumbers[ilvl] == startValue && startValue == levelNumbers[ilvl - 1] + 1)
-     {
-         isContinuation = true;
-     }
-     ```
+   - Records whether each paragraph continues an established sequence when resolving its counters.
    - In `RetrieveListItem`, uses level 0's format string with current level's counter
 
 2. **`Docxodus/FormattingAssembler.cs`**:

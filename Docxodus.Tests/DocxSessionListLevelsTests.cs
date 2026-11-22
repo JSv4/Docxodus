@@ -52,6 +52,35 @@ public class DocxSessionListLevelsTests
         return s;
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void NestedStartsKeepTheirParentPrefix(bool implicitParent, bool legal)
+    {
+        var names = implicitParent ? new[] { "Oak", "Pine" }
+            : new[] { "Grove", "Oak", "Pine", "Meadow", "Elm" };
+        var (session, anchors) = Open(names);
+        using (session)
+        {
+            Assert.True(session.ApplyListFormatRange(anchors[0], anchors[^1], ListFormat.Decimal).Success);
+            foreach (var tree in names.Where(name => name is "Oak" or "Pine" or "Elm"))
+                Assert.True(session.SetListLevel(AnchorOf(session, tree), 1).Success);
+            Assert.True(session.SetListLevels(AnchorOf(session, names[0]), new[]
+            {
+                new ListLevelSpec { Level = 0, Start = 7, Text = "%1." },
+                new ListLevelSpec { Level = 1, Start = 8, Text = "%1.%2", Legal = legal },
+            }).Success);
+
+            using var reopened = new DocxSession(session.Save());
+            var ids = names.Select(name => AnchorOf(reopened, name)).ToArray();
+            var metadata = reopened.GetBlockMetadatas(ids);
+            Assert.Equal(implicitParent ? new[] { "7.8", "7.9" } : new[] { "7.", "7.8", "7.9", "8.", "8.8" },
+                ids.Select(id => metadata[id]!.List!.GeneratedLabel));
+        }
+    }
+
     [Fact]
     public void LL001_GetListLevels_ReadsNineLevels_AndNullOffList()
     {
