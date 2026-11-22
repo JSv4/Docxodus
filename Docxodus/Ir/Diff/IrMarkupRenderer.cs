@@ -5547,11 +5547,11 @@ internal static partial class IrMarkupRenderer
         IReadOnlyList<(int Reviewer, XElement Source, string Author)> reviewers, IrDocument baseIr, XElement? baseBlock,
         RenderState state, bool baseCopy = true)
     {
-        if (baseCopy && baseBlock is not null && reviewers.Any(r => r.Source.Descendants().Any(e =>
+        if (baseBlock is not null && reviewers.Any(r => r.Source.Descendants().Any(e =>
             IrReader.IsRangeAnnotation(e) || e.Name == W.commentReference)))
             foreach (var (source, copy) in baseBlock.DescendantsAndSelf(W.p).Zip(emitted.DescendantsAndSelf(W.p)))
                 if (source.Annotation<IrSourceContent>() is { } content && content.Entries.Any(e => e.Source.Name != W.t) &&
-                    CopyBoundaries.Bind(source, copy) is { } boundaries)
+                    (baseCopy ? CopyBoundaries.Bind(source, copy) : CopyBoundaries.BindOriginalView(source, copy, content)) is { } boundaries)
                     copy.AddAnnotation(boundaries);
         CarryReviewerComments(new[] { emitted }, reviewers.Select(r => (r.Reviewer, r.Source)), baseBlock, state, originalView: true,
             baseCopy);
@@ -5695,7 +5695,7 @@ internal static partial class IrMarkupRenderer
 
     // Coordinates come from the reader. A source copy may gain revision wrappers and split runs
     // as reviewers contribute markers, so retain the physical leaves and update just the split.
-    private sealed class CopyBoundaries(XElement paragraph, List<(XElement Leaf, int Start, int End)> leaves)
+    private sealed class CopyBoundaries(XElement paragraph, List<(XElement Leaf, int Start, int End)> leaves, bool originalView = false)
     {
         private readonly Dictionary<int, XElement> _lastAt = new();
 
@@ -5719,6 +5719,64 @@ internal static partial class IrMarkupRenderer
             return copies.MoveNext() ? null : new(copy, leaves);
         }
 
+        // An edited copy can split a text leaf into several runs, insert text, or turn it into
+        // delText. Bind its original view to the reader's coordinates, including each atomic
+        // carrier's width. A surviving leaf then places the marker inside its actual container.
+        internal static CopyBoundaries? BindOriginalView(XElement source, XElement copy, IrSourceContent content)
+        {
+            var widths = content.PlacementWidths();
+            var atoms = new Dictionary<int, (XName Name, int Width)>();
+            var names = new HashSet<XName>();
+            var originalText = new System.Text.StringBuilder();
+            int length = 0;
+            foreach (var element in source.Descendants())
+            {
+                if (!widths.TryGetValue(element, out int width)) continue;
+                if (element.Name == W.t) originalText.Append(element.Value);
+                else
+                {
+                    atoms.Add(length, (element.Name, width));
+                    names.Add(element.Name);
+                }
+                length += width;
+            }
+
+            IEnumerable<XElement> OriginalLeaves(XElement container)
+            {
+                foreach (var child in container.Elements())
+                {
+                    if (child.Name == W.ins || child.Name == W.moveTo || child.Name == W.p ||
+                        child.Name == W.pPr || child.Name == W.rPr || child.Name == W.sdtPr) continue;
+                    if (child.Name == W.t || child.Name == W.delText || names.Contains(child.Name)) yield return child;
+                    else foreach (var leaf in OriginalLeaves(child)) yield return leaf;
+                }
+            }
+
+            var leaves = new List<(XElement, int, int)>();
+            int offset = 0, matchedAtoms = 0, textOffset = 0;
+            string text = originalText.ToString();
+            foreach (var leaf in OriginalLeaves(copy))
+            {
+                int width;
+                if (leaf.Name == W.t || leaf.Name == W.delText)
+                {
+                    string value = leaf.Value;
+                    if (!text.AsSpan(textOffset).StartsWith(value.AsSpan(), StringComparison.Ordinal)) return null;
+                    width = value.Length;
+                    textOffset += width;
+                }
+                else
+                {
+                    if (!atoms.TryGetValue(offset, out var atom) || atom.Name != leaf.Name) return null;
+                    width = atom.Width;
+                    matchedAtoms++;
+                }
+                if (width > 0) leaves.Add((leaf, offset, offset + width));
+                offset += width;
+            }
+            return offset == length && matchedAtoms == atoms.Count && textOffset == text.Length ? new(copy, leaves, originalView: true) : null;
+        }
+
         internal void Insert(int offset, List<XElement> markers, Func<int>? nextId)
         {
             if (_lastAt.TryGetValue(offset, out var previous) && previous.Parent is not null)
@@ -5733,7 +5791,16 @@ internal static partial class IrMarkupRenderer
                 int index = leaves.FindLastIndex(l => l.Start < offset || start && l.Start == offset);
                 if (index < 0) index = 0;
                 var (leaf, first, end) = leaves[index];
-                if (InsertAtSourceLeaf(leaf, offset - first, end - first, markers, nextId) is { } suffix)
+                if (originalView && leaf.Ancestors(W.del).Any())
+                {
+                    // An endpoint in removed content uses the existing replacement affinity. That
+                    // routine takes a text offset, excluding atomic carriers in this original view.
+                    int textOffset = leaves.Take(index).Where(l => l.Leaf.Name == W.t || l.Leaf.Name == W.delText)
+                        .Sum(l => l.End - l.Start);
+                    if (leaf.Name == W.t || leaf.Name == W.delText) textOffset += offset - first;
+                    foreach (var marker in markers) InsertAtTextOffset(paragraph, marker, textOffset, true, nextId);
+                }
+                else if (InsertAtSourceLeaf(leaf, offset - first, end - first, markers, nextId) is { } suffix)
                 {
                     leaves[index] = (leaf, first, offset);
                     leaves.Insert(index + 1, (suffix, offset, end));

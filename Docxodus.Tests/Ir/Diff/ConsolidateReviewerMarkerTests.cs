@@ -390,10 +390,6 @@ public class ConsolidateReviewerMarkerTests
         }));
         var marked = comment ? CommentDoc(body) : Doc(body);
         var reviewers = new[] { new DocxDiffReviewer { Author = "B", Document = marked } };
-        static string[] Leaves(WmlDocument file) => Body(file).Descendants(W + "sdtContent").Single().Descendants()
-            .Where(e => e.Name == W + "t" || e.Name == W + "tab" || e.Name == W + "bookmarkStart" || e.Name == W + "bookmarkEnd" ||
-                e.Name == W + "commentRangeStart" || e.Name == W + "commentRangeEnd" || e.Name == W + "commentReference")
-            .Select(e => e.Name == W + "t" ? e.Value : e.Name.LocalName).ToArray();
         Assert.Empty(DocxDiff.GetRevisions(original, marked));
         Assert.Empty(DocxDiff.GetConsolidatedRevisions(original, reviewers));
         Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
@@ -402,10 +398,72 @@ public class ConsolidateReviewerMarkerTests
         {
             var accepted = RevisionProcessor.AcceptRevisions(raw);
             var rejected = RevisionProcessor.RejectRevisions(raw);
-            Assert.Equal(Leaves(marked), Leaves(raw));
-            Assert.Equal(Leaves(marked), Leaves(accepted));
-            Assert.Equal(Leaves(original), Leaves(rejected));
+            Assert.Equal(MixedControlLeaves(marked), MixedControlLeaves(raw));
+            Assert.Equal(MixedControlLeaves(marked), MixedControlLeaves(accepted));
+            Assert.Equal(MixedControlLeaves(original), MixedControlLeaves(rejected));
             AssertValid(raw, accepted, rejected);
+        }
+    }
+
+    private static string[] MixedControlLeaves(WmlDocument file) => Body(file).Descendants(W + "sdtContent").Single().Descendants()
+        .Where(e => e.Name == W + "t" || e.Name == W + "tab" || e.Name == W + "bookmarkStart" || e.Name == W + "bookmarkEnd" ||
+            e.Name == W + "commentRangeStart" || e.Name == W + "commentRangeEnd" || e.Name == W + "commentReference")
+        .Select(e => e.Name == W + "t" ? e.Value : e.Name.LocalName).ToArray();
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    public void A_carried_range_keeps_its_side_of_a_tab_beside_another_reviewers_edit(bool comment, bool formatOnly, bool editBefore)
+    {
+        const string mixed = "<w:r><w:t>Alpha</w:t><w:tab/><w:t>beta</w:t></w:r>";
+        string marked = (comment ? Commented("Alpha") : Marked("Alpha")) + "<w:r><w:tab/><w:t>beta</w:t></w:r>";
+        string Paragraph(string content, bool edited) => P(edited && editBefore ? "The new catalogue now lists " : "The catalogue lists ",
+            "<w:sdt><w:sdtPr><w:alias w:val='Term'/></w:sdtPr><w:sdtContent>" + content + "</w:sdtContent></w:sdt>",
+            edited && formatOnly ? "<w:r><w:rPr><w:b/></w:rPr><w:t xml:space='preserve'> on the old shelf.</w:t></w:r>"
+            : edited && !editBefore ? " on the new shelf." : " on the old shelf.") + P("Returns are due on Fridays.");
+        var original = Doc(Paragraph(mixed, false));
+        var editor = Doc(Paragraph(mixed, true));
+        var reviewer = comment ? CommentDoc(Paragraph(marked, false)) : Doc(Paragraph(marked, false));
+        foreach (var editorFirst in new[] { false, true })
+        {
+            var reviewers = InOrder(editorFirst, editor, reviewer);
+            var raw = DocxCompare.Consolidate(original, reviewers);
+            var accepted = RevisionProcessor.AcceptRevisions(raw);
+            var rejected = RevisionProcessor.RejectRevisions(raw);
+            Assert.Equal(MixedControlLeaves(reviewer), MixedControlLeaves(raw));
+            Assert.Equal(MixedControlLeaves(reviewer), MixedControlLeaves(accepted));
+            Assert.Equal(MixedControlLeaves(original), MixedControlLeaves(rejected));
+            Assert.Equal(string.Concat(Body(editor).Descendants(W + "t").Select(e => e.Value)),
+                string.Concat(Body(accepted).Descendants(W + "t").Select(e => e.Value)));
+            Assert.Equal(formatOnly, Body(accepted).Descendants(W + "b").Any());
+            Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
+            Assert.All(DocxDiff.GetConsolidatedRevisions(original, reviewers), r => Assert.Equal("Reviewer A", r.Author));
+            if (comment) Assert.Equal(CommentTexts(reviewer), CommentTexts(accepted));
+            AssertValid(raw, accepted, rejected);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_range_on_replaced_text_keeps_its_affinity_after_a_tab(bool comment)
+    {
+        const string prefix = "<w:r><w:t>Index</w:t><w:tab/></w:r>";
+        WmlDocument Make(string word, bool mark) => mark && comment
+            ? CommentDoc(P(prefix, "The shelf is ", Commented(word), " today."))
+            : Doc(P(prefix, "The shelf is ", mark ? Marked(word) : Run(word), " today."));
+        var original = Make("closed", false);
+        var editor = Make("open", false);
+        var reviewer = Make("closed", true);
+        foreach (var editorFirst in new[] { false, true })
+        {
+            var reviewers = InOrder(editorFirst, editor, reviewer);
+            var accepted = AssertMerged(original, Make("open", true), ConflictResolution.StackAll, reviewers);
+            Assert.Single(Body(accepted).Descendants(W + "tab"));
         }
     }
 
