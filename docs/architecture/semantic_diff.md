@@ -115,6 +115,26 @@ the normalization domain, for example:
 Consumers must branch on `schema` and `schemaVersion`. New schema versions may
 append families, but v1 names will not be repurposed.
 
+### Table content controls
+
+Suppose a table has two rows labeled “Dock” and “Crane”. When the revised document
+wraps the existing “Crane” row in a content control, look for this combination of
+fields in a `changes` entry.
+
+```json
+{
+  "operation": "modify",
+  "family": "content_control",
+  "path": "table.content_controls"
+}
+```
+
+The anchors identify the table on each side. The `before` and `after` values are
+digests of its row and cell control layout, using the `docxodus-ir-table-controls-v1`
+profile. Editing “Crane” to “Tower crane” inside the existing control produces
+`text` changes. Both that edit and inserting a plain row beside the control
+leave the control layout unchanged, so the report omits `table.content_controls`.
+
 ## Determinism and suppression
 
 The existing IR edit script remains the alignment and move-detection authority.

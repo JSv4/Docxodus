@@ -58,6 +58,7 @@ public sealed class DocxDiffComparison
     private readonly Lazy<(WmlDocument Left, WmlDocument Right)> _preflighted;
     private readonly Lazy<(IrDocument Left, IrDocument Right)> _ir;
     private readonly Lazy<IrBlockAlignment> _alignment;
+    private readonly Lazy<IrPreservedSources?> _preservedSources;
     private readonly Lazy<IrEditScript> _markupBuild;
     private readonly Lazy<(IrEditScript Data, IrEditScript? Markup)> _scripts;
     private readonly Lazy<WmlDocument> _redline;
@@ -117,6 +118,18 @@ public sealed class DocxDiffComparison
         {
             var (irLeft, irRight) = _ir.Value;
             return IrBlockAligner.Align(irLeft, irRight, DataSettings());
+        }, LazyThreadSafetyMode.ExecutionAndPublication);
+
+        // With the inputs' own revisions kept, the redline replaces whole each kept block whose revision holds
+        // tracked changes; the header and footer section map counts both copies of such a block's section break
+        // (issue #1809).
+        _preservedSources = new(() =>
+        {
+            if (!_settings.PreserveInputRevisions)
+                return null;
+            var (left, right) = _preflighted.Value;
+            var (irLeft, irRight) = _ir.Value;
+            return IrPreservedSources.Read(irLeft, irRight, left, right);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
         // The fused MARKUP build, before relocation pairing (only built when the redline fuses runs).
@@ -265,15 +278,16 @@ public sealed class DocxDiffComparison
             script = FinalizeStories(IrRelocationPairer.Apply(_markupBuild.Value, irLeft, irRight, diff), diff);
         else
             script = _scripts.Value.Markup ?? FinalizeStories(IrRelocationPairer.Apply(_markupBuild.Value, irLeft, irRight, diff), diff);
-        return IrMarkupRenderer.Render(script, left, right, diff, irLeft, irRight);
+        return IrMarkupRenderer.Render(script, left, right, diff, irLeft, irRight, _preservedSources.Value);
     }
 
     private IrDiffSettings DataSettings() => _settings.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
 
     private IrEditScript FinalizeStories(IrEditScript script, IrDiffSettings settings)
     {
+        if (!settings.CompareHeadersFooters) return script;
         var (left, right) = _ir.Value;
-        return IrEditScriptBuilder.FinalizeHeaderFooterOps(script, left, right, settings, _alignment.Value);
+        return IrEditScriptBuilder.FinalizeHeaderFooterOps(script, left, right, settings, _preservedSources.Value?.ReplacementAnchors);
     }
 
     /// <summary>

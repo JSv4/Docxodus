@@ -187,7 +187,7 @@ internal static class IrCompositeScriptJson
         // Move fields belong ONLY to MoveBlock/MoveModifyBlock per the IrEditOp field-presence contract
         // (IrEditScript.cs). The composite merger lowers reviewer moves to Insert/Delete and RETAINS the
         // MoveGroupId/IsMoveSource marker on a lowered move-source DeleteBlock for its internal
-        // contested-relocation detection (IrCompositeMerger.LowerStructuralOps); that marker is stripped
+        // contested-relocation detection (IrCompositeMerger); that marker is stripped
         // before emission (IrCompositeMerger.EmitOp), so a Delete/Insert reaching here should already be
         // clean. This kind gate is the belt-and-suspenders second line of defence: only Move* kinds ever
         // serialize move fields, so no lowering can leak them into the public edit-script JSON.
@@ -263,6 +263,8 @@ internal static class IrCompositeScriptJson
         foreach (var rowOp in diff.RowOps)
             WriteRowOp(writer, rowOp);
         writer.WriteEndArray();
+        if (diff.ReplaceWhole)
+            writer.WriteBoolean("replaceWhole", true);
         writer.WriteEndObject();
     }
 

@@ -182,6 +182,8 @@ internal static class IrReader
         // Each paragraph finishes itself (BuildParagraph), so any range still open at end-of-body has
         // its provisional spans buffered but never committed — an orphan start, discarded (totality).
 
+        if (retain) bodyCtx.RelResolver.RetainReferencedTokens(mainXDoc);
+
         // 5. Anchor index over ALL scopes' blocks (rows/cells are positional, not blocks). Collision
         // checking spans scopes, and IndexBlock throws on any duplicate kind:scope:unid string.
         // INVARIANT: collision-safety depends on every scope emitting a unique scope-name prefix.
@@ -469,6 +471,18 @@ internal static class IrReader
         private readonly Dictionary<string, (IrAnchor Block, int Offset)> _danglingRefs =
             new(StringComparer.Ordinal);
 
+        // Field markers have a physical paragraph even when their character offsets are unmodeled.
+        private Dictionary<string, (IrAnchor First, IrAnchor Last)>? _fieldMarkers;
+        public void FieldMarker(string id)
+        {
+            _fieldMarkers ??= new(StringComparer.Ordinal);
+            var first = _fieldMarkers.TryGetValue(id, out var existing) ? existing.First : _currentBlock;
+            _fieldMarkers[id] = (first, _currentBlock);
+        }
+
+        public (IrAnchor First, IrAnchor Last)? FieldParagraphs(string id) =>
+            _fieldMarkers is not null && _fieldMarkers.TryGetValue(id, out var range) ? range : null;
+
         private IrAnchor _currentBlock;
         private int _charOffset;
 
@@ -689,6 +703,22 @@ internal static class IrReader
             yield return main.WordprocessingCommentsPart;
     }
 
+    /// <summary>Resolve an end marker through its start in the same source part.</summary>
+    internal static string BookmarkEndName(XElement marker)
+    {
+        var id = (string?)marker.Attribute(W + "id") ?? string.Empty;
+        var names = marker.Document is { } document
+            ? BookmarkNamesById.GetValue(document, d => d.Descendants(W + "bookmarkStart")
+                .Where(s => s.Attribute(W + "id") is not null && s.Attribute(W + "name") is not null)
+                .GroupBy(s => (string)s.Attribute(W + "id")!)
+                .ToDictionary(g => g.Key, g => (string)g.First().Attribute(W + "name")!, StringComparer.Ordinal))
+            : null;
+        return names?.GetValueOrDefault(id) ?? "#" + id;
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<XDocument, Dictionary<string, string>>
+        BookmarkNamesById = new();
+
     // --- block dispatch ---------------------------------------------------
 
     /// <summary>
@@ -900,7 +930,7 @@ internal static class IrReader
         // Inline SDT/smartTag carriers are intentionally transparent to the modeled inline stream, but their
         // wrapper topology cannot be reconstructed safely by a token-level redline. Keep a separate canonical
         // envelope digest so the edit builder can lower a carrier change to a reversible whole paragraph pair.
-        var inlineEnvelopeDigest = InlineEnvelopeDigestFor(p, processed, ctx);
+        var inlineEnvelopeDigest = InlineEnvelopeDigestFor(p, processed, ctx, out var physicalTextboxes);
 
         // A non-hyperlink field's code and begin-state are deliberately transparent to content/token alignment:
         // the cached result is what is visible. Keep their independent structural carrier digest so a same-result
@@ -923,6 +953,7 @@ internal static class IrReader
             Format = paraFormat,
             List = listInfo,
             Inlines = IrNodeList.From(processed),
+            PhysicalTextboxes = physicalTextboxes,
             ProjectedInlines = !ctx.ProjectCustomXml && p.Descendants(W + "customXml").Any()
                 ? IrNodeList.From(WalkInlines(p.Elements().Where(c => c.Name != W + "pPr"),
                     ctx.WithoutComments(projectCustomXml: true))) : null,
@@ -953,26 +984,99 @@ internal static class IrReader
     /// but a wrapper-only change there must still prevent the outer source drawing from aligning Equal.
     /// </summary>
     private static IrHash InlineEnvelopeDigestFor(
-        XElement paragraph, IReadOnlyList<IrInline> inlines, ReadContext ctx)
+        XElement paragraph, IReadOnlyList<IrInline> inlines, ReadContext ctx, out IrParagraphTextboxes textboxes)
     {
-        var envelopes = paragraph.Descendants()
-            .Where(element => IsInlineEnvelope(element) &&
-                IsOutermostInlineEnvelope(paragraph, element))
-            .ToList();
-
         var stream = new XElement("inlineEnvelopes");
-        foreach (var envelope in envelopes)
+        textboxes = default;
+        foreach (var element in paragraph.Descendants())
         {
-            stream.Add(new XElement("carrier",
-                new XAttribute("path", InlineElementPath(paragraph, envelope)),
-                new XElement(envelope)));
+            if (IsInlineEnvelope(element) && IsOutermostInlineEnvelope(paragraph, element))
+                stream.Add(new XElement("carrier",
+                    new XAttribute("path", InlineElementPath(paragraph, element)), new XElement(element)));
+            if (element.Name != WTxbxContent) continue;
+            var ancestors = element.Ancestors().TakeWhile(a => a != paragraph);
+            if (ancestors.Any(a => a.Name == WTxbxContent)) continue;
+            var (markers, field) = ScanWrapperContent(element.Elements());
+            textboxes = new(textboxes.Count + 1, textboxes.HasBlockMarkers || markers,
+                textboxes.HasSpanningField || field,
+                textboxes.HasCarrierRelationships || ancestors.Attributes().Any(a => a.Name.Namespace == R));
         }
         AppendTextboxGraphCarrierEntries(paragraph, ctx, stream);
         AppendTextboxInlineEnvelopeEntries(inlines, "", stream);
         if (!stream.Elements().Any())
             return default;
-        return IrHasher.CanonicalHash(stream, ctx.RelResolver);
+        return IrHasher.CanonicalHash(stream, ctx.RelResolver, canonical =>
+        {
+            foreach (var carrier in canonical.Elements("carrier").Elements())
+                NormalizeEnvelopeAnnotations(carrier);
+        });
     }
+
+    // Work on the hash's canonical copy, where transient run identifiers and revision-session
+    // attributes have already been removed. Keep opaque descendant markup untouched.
+    private static void NormalizeEnvelopeAnnotations(XElement container)
+    {
+        // An endpoint may divide a run between any two supported children. Make that physical
+        // division immaterial, retaining each child's order and the run properties it inherits.
+        foreach (var run in container.Elements(W + "r").Where(IsPlainTextRun).ToList())
+        {
+            var payload = run.Elements().Where(e => e.Name != W + "rPr" && e.Name != W + "commentReference").ToList();
+            if (payload.Count > 1)
+                run.ReplaceWith(payload.Select(e => new XElement(run.Name, run.Attributes(), run.Element(W + "rPr"), e)).ToArray());
+        }
+        XElement? firstRun = null;
+        System.Text.StringBuilder? joined = null;
+        void Flush()
+        {
+            if (firstRun?.Element(W + "t") is { } text)
+            {
+                if (joined is not null) text.Value = joined.ToString();
+                text.SetAttributeValue(XNamespace.Xml + "space", XmlUtil.GetXmlSpaceAttribute(text.Value)?.Value);
+            }
+            firstRun = null;
+            joined = null;
+        }
+        foreach (var child in container.Elements().ToList())
+        {
+            if (IsRangeAnnotation(child) || IsAnnotationReferenceRun(child))
+            {
+                child.Remove();
+                continue;
+            }
+            if (child.Name == W + "r")
+            {
+                child.Elements(W + "commentReference").Remove();
+                if (child.Element(W + "t") is { } text && child.Elements().All(e => e == text || e.Name == W + "rPr") &&
+                    text.Attributes().All(a => a.Name == XNamespace.Xml + "space"))
+                {
+                    if (firstRun is not null && WordprocessingMLUtil.CanCoalesceAdjacent(firstRun, child) &&
+                        firstRun.Attributes().Select(a => (a.Name, a.Value)).SequenceEqual(child.Attributes().Select(a => (a.Name, a.Value))))
+                    {
+                        joined ??= new System.Text.StringBuilder(firstRun.Element(W + "t")!.Value);
+                        joined.Append(text.Value);
+                        child.Remove();
+                        continue;
+                    }
+                    Flush();
+                    firstRun = child;
+                    continue;
+                }
+            }
+            Flush();
+            if (child.Name == W + "sdtContent" || IsInlineEnvelope(child) || child.Name == W + "hyperlink" ||
+                child.Name == W + "fldSimple" || child.Name == W + "ins" || child.Name == W + "del")
+                NormalizeEnvelopeAnnotations(child);
+        }
+        Flush();
+    }
+
+    internal static bool IsRangeAnnotation(XElement element) =>
+        element.Name == W + "bookmarkStart" || element.Name == W + "bookmarkEnd" ||
+        element.Name == W + "commentRangeStart" || element.Name == W + "commentRangeEnd";
+
+    private static bool IsAnnotationReferenceRun(XElement element) =>
+        element.Name == W + "r" && element.Element(W + "commentReference") is not null &&
+        element.Elements().All(e => e.Name == W + "rPr" || e.Name == W + "commentReference");
 
     private static bool IsOutermostInlineEnvelope(XElement paragraph, XElement envelope) =>
         envelope.Ancestors(W + "p").FirstOrDefault() == paragraph &&
@@ -1293,10 +1397,10 @@ internal static class IrReader
     private static readonly HashSet<XName> PlainRunChildNames = new()
     {
         W + "rPr", W + "t", W + "tab", W + "br", W + "cr", W + "noBreakHyphen",
-        W + "softHyphen", W + "sym", W + "lastRenderedPageBreak",
+        W + "softHyphen", W + "sym", W + "lastRenderedPageBreak", W + "commentReference",
     };
 
-    private static bool IsPlainTextRun(XElement element) =>
+    internal static bool IsPlainTextRun(XElement element) =>
         element.Name == W + "r" &&
         element.Elements().All(child => PlainRunChildNames.Contains(child.Name));
 
@@ -1306,6 +1410,8 @@ internal static class IrReader
         bool previousWasPlainRun = false;
         foreach (var sibling in element.Parent!.Elements())
         {
+            if (IsRangeAnnotation(sibling) || IsAnnotationReferenceRun(sibling) || sibling.Name == W + "commentReference")
+                continue;
             bool plain = IsPlainTextRun(sibling);
             if (!(plain && previousWasPlainRun)) position++;
             previousWasPlainRun = plain;
@@ -1460,9 +1566,13 @@ internal static class IrReader
         /// </summary>
         private void HandleCommentRangeMarker(XElement marker)
         {
-            if (_ctx.CommentTracker is null || _fieldDepth > 0)
-                return;
+            if (_ctx.CommentTracker is null) return;
             var id = (string?)marker.Attribute(W + "id") ?? "";
+            if (_fieldDepth > 0)
+            {
+                _ctx.CommentTracker.FieldMarker(id);
+                return;
+            }
             if (marker.Name == W + "commentRangeStart")
                 _ctx.CommentTracker.OpenRange(id);
             else
@@ -1493,8 +1603,9 @@ internal static class IrReader
                 }
                 if (child.Name == W + "commentReference")
                 {
-                    if (_ctx.CommentTracker is not null && _fieldDepth == 0)
-                        _ctx.CommentTracker.Reference((string?)child.Attribute(W + "id") ?? "");
+                    var id = (string?)child.Attribute(W + "id") ?? "";
+                    if (_fieldDepth == 0) _ctx.CommentTracker?.Reference(id);
+                    else _ctx.CommentTracker?.FieldMarker(id);
                     continue; // never emitted; never hashed.
                 }
                 if (_fieldDepth > 0)
@@ -2858,11 +2969,27 @@ internal static class IrReader
         // those rows, but its anchor index (Descendants) keeps them — and the IR must not lose the
         // row's content. Unwrap table-level SDTs to their w:tr children, flag the delivered rows
         // FromTableSdt, and let the emitter narrow back to the oracle's direct-row view for parity.
-        foreach (var (tr, fromSdt) in TableChildren(tbl, W + "tr"))
+        // The table-level controls that deliver no row sit before the row that follows them (issue #1810).
+        var order = ReadTableOrder(tbl, W + "tr", ctx, out var sourceRows);
+        var controlsBefore = EmptyControlDigests(order);
+        List<string>? instances = null;
+        int precedingEmptyControls = 0;
+        foreach (var tr in sourceRows)
         {
             var (row, cellFingerprintsForRow) = BuildRow(tr, ctx);
+            int index = rows.Count;
+            bool fromSdt = tr.Parent != tbl;
+            var rowControls = RowControlDigest(order, index, row.ChildOrder);
+            var before = controlsBefore?.GetValueOrDefault(index) ?? default;
+            precedingEmptyControls += before.TopLevelCount;
+            if (fromSdt || rowControls != default || before.Digest != default || precedingEmptyControls != 0)
+                row = row with { FromTableSdt = fromSdt, ControlDigest = rowControls, ControlsBeforeDigest = before.Digest,
+                    PrecedingEmptyControls = precedingEmptyControls };
             if (fromSdt)
-                row = row with { FromTableSdt = true };
+                (instances ??= Enumerable.Repeat("", index).ToList()).Add(string.Join(",",
+                    order!.EnclosingControls(index).Select(c => c.Sibling)));
+            else
+                instances?.Add("");
             rows.Add(row);
             rowHashes.Add(row.ContentHash);
             cellFingerprints.AddRange(cellFingerprintsForRow);
@@ -2894,6 +3021,23 @@ internal static class IrReader
             fpBuilder.AppendHash(fp);
         var formatFingerprint = fpBuilder.Build();
 
+        var trailingControls = controlsBefore?.GetValueOrDefault(rows.Count).Digest ?? default;
+        IrHash controlDigest = default;
+        if (tbl.Element(W + "sdt") is not null || rows.Any(r => r.ControlDigest != default))
+        {
+            var controls = new IrContentHashBuilder();
+            for (int i = 0; i < rows.Count; i++)
+            {
+                controls.AppendStructure(IrContentHashBuilder.StructureRow);
+                controls.AppendHash(rows[i].ControlsBeforeDigest);
+                controls.AppendHash(rows[i].ControlDigest);
+                if (instances is not null && i < instances.Count)
+                    controls.AppendText(instances[i]);
+            }
+            controls.AppendHash(trailingControls);
+            controlDigest = controls.Build();
+        }
+
         return new IrTable
         {
             Anchor = AnchorFor(IrAnchorKind.Tbl, tbl, ctx),
@@ -2903,7 +3047,143 @@ internal static class IrReader
             ContentHash = contentHash,
             FormatFingerprint = formatFingerprint,
             Source = ctx.Provenance(tbl),
+            ControlDigest = controlDigest,
+            TrailingControlsDigest = trailingControls,
+            Controls = order?.Summary ?? default,
+            ChildOrder = order,
         };
+    }
+
+    /// <summary>A content control's identity without its content: its attributes, <c>w:sdtPr</c> and
+    /// <c>w:sdtEndPr</c>, as <see cref="IrSdtBlock.ShellDigest"/> is a block wrapper's. The redline rebuilds a copy of
+    /// a table's or row's control from the same parts (issue #1810).</summary>
+    internal static IrHash ControlShellDigest(XElement sdt) => IrHasher.CanonicalHash(
+        new XElement(sdt.Name, sdt.Attributes(), sdt.Elements().Where(e => e.Name == W + "sdtPr" || e.Name == W + "sdtEndPr")));
+
+    /// <summary>Whether a control delivers a <paramref name="childName"/> (<c>w:tr</c> or <c>w:tc</c>).</summary>
+    internal static bool DeliversAny(XElement sdt, XName childName)
+    {
+        foreach (var _ in UnwrapSdtChildren(sdt, childName))
+            return true;
+        return false;
+    }
+
+    // Ordinary tables need only the existing flat rows and cells. For the other containers, one
+    // bounded walk records both their members and everything interleaved with those members.
+    private static IrTableOrder? ReadTableOrder(XElement container, XName memberName, ReadContext ctx,
+        out IEnumerable<XElement> members)
+    {
+        bool seenMember = false;
+        bool table = memberName == W + "tr";
+        foreach (var child in container.Elements())
+        {
+            if (child.Name == memberName)
+                seenMember = true;
+            else if (seenMember || !(table
+                ? child.Name == W + "tblPr" || child.Name == W + "tblGrid"
+                : child.Name == W + "trPr" || child.Name == W + "tblPrEx"))
+                return ReadInterleavedTableOrder(container, memberName, ctx, out members);
+        }
+        members = container.Elements(memberName);
+        return null;
+    }
+
+    private static IrTableOrder ReadInterleavedTableOrder(XElement container, XName memberName, ReadContext ctx,
+        out IEnumerable<XElement> members)
+    {
+        var entries = new List<IrTableChild>();
+        var memberEntries = new List<int>();
+        var sourceMembers = new List<XElement>();
+        var summary = IrContainerControls.None;
+        bool ReadChildren(XElement parent, int parentIndex, int depth)
+        {
+            bool membersOnly = true;
+            int sibling = 0;
+            foreach (var child in parent.Elements())
+            {
+                int index = entries.Count;
+                int first = sourceMembers.Count;
+                entries.Add(default);
+                IrHash digest = default;
+                if (child.Name == memberName)
+                {
+                    sourceMembers.Add(child);
+                    memberEntries.Add(index);
+                }
+                else if (child.Name == W + "sdt")
+                {
+                    bool only = depth < MaxSdtDepth && child.Element(W + "sdtContent") is { } content &&
+                        ReadChildren(content, index, depth + 1);
+                    only &= child.Elements().All(e => e.Name == W + "sdtPr" || e.Name == W + "sdtEndPr" || e.Name == W + "sdtContent");
+                    membersOnly &= only;
+                    if (sourceMembers.Count == first)
+                        digest = IrHasher.CanonicalHash(child);
+                    else
+                    {
+                        digest = ControlShellDigest(child);
+                        if (parentIndex < 0)
+                            summary |= IrContainerControls.Control | (only ? default : IrContainerControls.MixedControlContent);
+                    }
+                }
+                else
+                {
+                    membersOnly = false;
+                    if (parentIndex < 0 && (child.Name == W + "bookmarkStart" || child.Name == W + "bookmarkEnd" ||
+                        child.Name == W + "commentRangeStart" || child.Name == W + "commentRangeEnd"))
+                        summary |= IrContainerControls.Marker;
+                }
+                entries[index] = new IrTableChild(child.Name, parentIndex, sibling++, first,
+                    sourceMembers.Count - first, entries.Count, digest, ctx.Provenance(child));
+            }
+            return membersOnly && sibling > 0;
+        }
+        ReadChildren(container, -1, 0);
+        members = sourceMembers;
+        return new IrTableOrder(IrNodeList.From(entries), IrNodeList.From(memberEntries), summary);
+    }
+
+    private static Dictionary<int, (IrHash Digest, int TopLevelCount)>? EmptyControlDigests(IrTableOrder? order)
+    {
+        if (order is null)
+            return null;
+        Dictionary<int, (IrHash, int)>? boundaries = null;
+        foreach (var group in order.EmptyControls.GroupBy(c => c.FirstMember))
+        {
+            var builder = new IrContentHashBuilder();
+            int topLevelCount = 0;
+            foreach (var control in group)
+            {
+                if (control.Parent < 0) topLevelCount++;
+                foreach (var parent in order.EnclosingControls(control).Reverse())
+                {
+                    builder.AppendStructure(IrContentHashBuilder.StructureSdt);
+                    builder.AppendHash(parent.Digest);
+                    builder.AppendText(parent.Sibling.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+                builder.AppendHash(control.Digest);
+            }
+            (boundaries ??= new())[group.Key] = (builder.Build(), topLevelCount);
+        }
+        return boundaries;
+    }
+
+    private static IrHash RowControlDigest(IrTableOrder? table, int rowIndex, IrTableOrder? cells)
+    {
+        bool wrapped = table is not null && table.Children[table.Members[rowIndex]].Parent >= 0;
+        bool own = cells?.Children.Any(c => c.Name == W + "sdt") == true;
+        if (!wrapped && !own)
+            return default;
+        var builder = new IrContentHashBuilder();
+        if (wrapped)
+            foreach (var control in table!.EnclosingControls(rowIndex).Reverse())
+            {
+                builder.AppendStructure(IrContentHashBuilder.StructureSdt);
+                builder.AppendHash(control.Digest);
+            }
+        builder.AppendStructure(IrContentHashBuilder.StructureRow);
+        if (own)
+            cells!.AppendControlLayout(builder, static (b, _) => b.AppendStructure(IrContentHashBuilder.StructureCell));
+        return builder.Build();
     }
 
     private static (IrRow Row, List<IrHash> CellFingerprints) BuildRow(XElement tr, ReadContext ctx)
@@ -2920,10 +3200,11 @@ internal static class IrReader
         // the ContentHash), so we unwrap row-level SDTs to their w:tc children here, reusing the
         // established SDT-unwrap discipline + depth cap. Each SDT-delivered cell is flagged
         // FromRowSdt so the markdown emitter can mirror the oracle's narrower view for byte parity.
-        foreach (var (tc, fromSdt) in TableChildren(tr, W + "tc"))
+        var order = ReadTableOrder(tr, W + "tc", ctx, out var sourceCells);
+        foreach (var tc in sourceCells)
         {
             var (cell, fingerprints) = BuildCell(tc, ctx);
-            if (fromSdt)
+            if (tc.Parent != tr)
                 cell = cell with { FromRowSdt = true };
             cells.Add(cell);
             cellFingerprints.AddRange(fingerprints);
@@ -2948,6 +3229,9 @@ internal static class IrReader
         // Row-level table property exceptions (w:tblPrEx), tracked independently of w:trPr.
         var trPrExDigest = ShellChildrenDigest(tr.Elements(W + "tblPrEx"));
 
+        // The writers may bind an edit script to a separately read snapshot. Its retained row
+        // carries that snapshot's ordered children, just as a paragraph carries its source runs.
+        if (ctx.RetainSources && order is not null) tr.AddAnnotation(order);
         var row = new IrRow(AnchorFor(IrAnchorKind.Tr, tr, ctx), IrNodeList.From(cells), rowBuilder.Build())
         {
             Source = ctx.Provenance(tr),
@@ -2956,6 +3240,8 @@ internal static class IrReader
             TrPrDigest = trPrDigest,
             TrPrShellDigest = trPrShellDigest,
             TrPrExDigest = trPrExDigest,
+            Controls = order?.Summary ?? default,
+            ChildOrder = order,
         };
         return (row, cellFingerprints);
     }
@@ -2980,7 +3266,7 @@ internal static class IrReader
     /// Beyond the cap, deeper targets are simply not surfaced (the same bound the block walker uses),
     /// preserving totality against adversarial nesting.
     /// </summary>
-    private static IEnumerable<XElement> UnwrapSdtChildren(XElement sdt, XName targetName, int depth)
+    internal static IEnumerable<XElement> UnwrapSdtChildren(XElement sdt, XName targetName, int depth = 0)
     {
         if (depth >= MaxSdtDepth)
             yield break;
@@ -3299,7 +3585,11 @@ internal static class IrReader
             }
 
             if (retain)
-                sources[part.Uri] = part.GetXDocument();
+            {
+                var source = part.GetXDocument();
+                sources[part.Uri] = source;
+                ctx.RelResolver.RetainReferencedTokens(source);
+            }
             return new IrNoteStore(notes, noteUnids);
         }
         catch (Exception e) when (IsTolerableRegistryException(e))
@@ -3355,7 +3645,11 @@ internal static class IrReader
                 var targets = tracker.TargetsFor(commentId);
 
                 comments.Add(new IrComment(anchor, author, initials, date,
-                    IrNodeList.From(blocks), IrNodeList.From(targets)));
+                    IrNodeList.From(blocks), IrNodeList.From(targets))
+                {
+                    PackageId = commentId,
+                    FieldMarkerParagraphs = tracker.FieldParagraphs(commentId),
+                });
             }
 
             if (retain)

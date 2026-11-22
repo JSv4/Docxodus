@@ -1842,36 +1842,25 @@ internal static class IrRevisionRenderer
         }
     }
 
-    /// <summary>Concatenated raw text of a row resolved by anchor (its cells' paragraphs).</summary>
-    private static string RowText(string? anchor, IrDocument doc, IrDiffSettings settings)
+    /// <summary>Rows belong to their table. The reader indexes every table, including tables in
+    /// cells, controls and other stories, so both revision lists resolve rows from the same inventory.</summary>
+    internal static string RowText(string? anchor, IrDocument doc, IrDiffSettings settings)
     {
-        if (anchor is null || !doc.AnchorIndex.TryGetValue(anchor, out var block))
+        if (anchor is null)
+            return string.Empty;
+        foreach (var block in doc.AnchorIndex.Values)
         {
-            // Rows are not indexed as IrBlock; resolve them by scanning the document's tables.
-            return anchor is null ? string.Empty : RowTextByScan(anchor, doc, settings);
+            if (block is not IrTable table)
+                continue;
+            foreach (var row in table.Rows)
+            {
+                if (row.Anchor.ToString() != anchor)
+                    continue;
+                var sb = new StringBuilder();
+                AppendRowText(sb, row, settings);
+                return sb.ToString();
+            }
         }
-        return BlockTextOf(block, settings);
-    }
-
-    /// <summary>
-    /// Resolve a row anchor by scanning the body's tables (rows are not in <see cref="IrDocument.AnchorIndex"/>,
-    /// which holds blocks). Deterministic document-order scan; returns empty if not found.
-    /// </summary>
-    private static string RowTextByScan(string anchor, IrDocument doc, IrDiffSettings settings)
-    {
-        if (RowTextInBlocks(anchor, doc.Body.Blocks, settings) is { } bodyText)
-            return bodyText;
-        // Note scopes (M2.4 Task 1): a footnote/endnote may contain a table whose rows are not block-indexed.
-        foreach (var scope in doc.Footnotes.Notes.Values)
-            if (RowTextInBlocks(anchor, scope.Blocks, settings) is { } t)
-                return t;
-        foreach (var scope in doc.Endnotes.Notes.Values)
-            if (RowTextInBlocks(anchor, scope.Blocks, settings) is { } t)
-                return t;
-        // Header/footer scopes (2026-07-03 campaign): a story may contain a table too.
-        foreach (var hf in doc.Headers.Concat(doc.Footers))
-            if (RowTextInBlocks(anchor, hf.Scope.Blocks, settings) is { } t)
-                return t;
         return string.Empty;
     }
 
@@ -1926,26 +1915,6 @@ internal static class IrRevisionRenderer
         foreach (var block in cell.Blocks)
             sb.Append(BlockTextOf(block, settings));
         return sb.ToString();
-    }
-
-    private static string? RowTextInBlocks(string anchor, IrNodeList<IrBlock> blocks, IrDiffSettings settings)
-    {
-        foreach (var block in blocks)
-        {
-            if (block is IrTable table)
-            {
-                foreach (var row in table.Rows)
-                {
-                    if (row.Anchor.ToString() == anchor)
-                    {
-                        var sb = new StringBuilder();
-                        AppendRowText(sb, row, settings);
-                        return sb.ToString();
-                    }
-                }
-            }
-        }
-        return null;
     }
 
     private static void AppendRowText(StringBuilder sb, IrRow row, IrDiffSettings settings)

@@ -73,21 +73,24 @@ internal static class IrEditScriptBuilder
         var bodyOps = ProjectAlignment(left.Body.Blocks, alignment, settings, allowCrossParagraph: true,
             fusedAnchors: settings.CrossParagraphTokenDiff ? null : markupFusedAnchors);
         var noteOps = BuildNoteOps(left, right, settings, KeptNoteReferences(left, right, bodyOps, settings));
-        var headerFooterOps = BuildHeaderFooterOps(left, right, settings, alignment, bodyOps);
+        var headerFooterOps = BuildHeaderFooterOps(left, right, settings, bodyOps);
         return UniqueMoveGroupIds.Apply(new IrEditScript(IrNodeList.From(bodyOps),
             noteOps.Count == 0 ? null : IrNodeList.From(noteOps),
-            headerFooterOps));
+            headerFooterOps) { CommentAttachments = IrCommentAttachments.Plan(left, right, bodyOps) });
     }
 
-    // Relocation pairing runs after Build and can turn an ordinary deletion into a gap barrier.
-    // Reproject only the stories; body/note move ids already participate in the paired scripts.
+    // Relocation pairing runs after Build and can turn an ordinary deletion into a gap barrier, and a redline that
+    // keeps the revision's own tracked changes replaces some kept blocks whole (preservedReplacements, the right
+    // anchors from the original input pairings). Reproject only the stories; body/note move ids
+    // already participate in the paired scripts.
     internal static IrEditScript FinalizeHeaderFooterOps(
-        IrEditScript script, IrDocument left, IrDocument right, IrDiffSettings settings, IrBlockAlignment alignment)
+        IrEditScript script, IrDocument left, IrDocument right, IrDiffSettings settings,
+        IReadOnlySet<string>? preservedReplacements = null)
     {
-        if (!settings.CompareHeadersFooters || !script.Operations.Any(op =>
+        if (!settings.CompareHeadersFooters || preservedReplacements is not { Count: > 0 } && !script.Operations.Any(op =>
                 op.RelocationGroupId is not null && op.Kind is IrEditOpKind.InsertBlock or IrEditOpKind.DeleteBlock))
             return script;
-        var stories = BuildHeaderFooterOps(left, right, settings, alignment, script.Operations);
+        var stories = BuildHeaderFooterOps(left, right, settings, script.Operations, preservedReplacements);
         return script with { HeaderFooterOps = UniqueMoveGroupIds.Headers(stories, IrRelocationPairer.MaxMoveGroupId(script) + 1) };
     }
 
@@ -164,13 +167,13 @@ internal static class IrEditScriptBuilder
         private IrTableDiff Table(IrTableDiff table)
         {
             var rows = new Dictionary<int, int>();
-            return new IrTableDiff(IrNodeList.From(table.RowOps.Select(row => row with
+            return table with { RowOps = IrNodeList.From(table.RowOps.Select(row => row with
             {
                 MoveGroupId = row.MoveGroupId is { } id ? Fresh(rows, id) : null,
                 CellOps = row.CellOps is { } cells
                     ? IrNodeList.From(cells.Select(c => c.BlockOps is { } ops ? c with { BlockOps = Scope(ops) } : c))
                     : null,
-            })));
+            })) };
         }
     }
 
@@ -202,13 +205,13 @@ internal static class IrEditScriptBuilder
     /// ascending, kind Default&lt;First&lt;Even), then footers.</para>
     /// </summary>
     private static IrNodeList<IrHeaderFooterDiff>? BuildHeaderFooterOps(
-        IrDocument left, IrDocument right, IrDiffSettings settings, IrBlockAlignment alignment,
-        IEnumerable<IrEditOp> bodyOps)
+        IrDocument left, IrDocument right, IrDiffSettings settings, IReadOnlyList<IrEditOp> bodyOps,
+        IReadOnlySet<string>? preservedReplacements = null)
     {
         if (!settings.CompareHeadersFooters)
             return null;
 
-        var sections = MatchSectionBoundaries(left, right, alignment, bodyOps);
+        var sections = MatchSectionBoundaries(left, right, bodyOps, preservedReplacements, settings.RenderMoves);
         var diffs = new List<IrHeaderFooterDiff>();
         BuildOneHeaderFooterScope(left, right, left.Headers, right.Headers, isHeader: true, settings, diffs, sections);
         BuildOneHeaderFooterScope(left, right, left.Footers, right.Footers, isHeader: false, settings, diffs, sections);
@@ -217,9 +220,11 @@ internal static class IrEditScriptBuilder
 
     // Boundary carriers delimit physical review sections. Any retained content before a new
     // boundary still belongs to its source section; a review section that holds content from one
-    // side only (wholly inserted or wholly deleted) has no story from the other.
+    // side only (wholly inserted or wholly deleted) has no story from the other. The map walks the
+    // body ops in the order the redline draws their paragraphs (issue #1809): a moved paragraph's source
+    // where it was, each member of a split or merge, and a replacement gap insertion-first.
     private static List<(int Left, int Right)>? MatchSectionBoundaries(
-        IrDocument left, IrDocument right, IrBlockAlignment alignment, IEnumerable<IrEditOp> bodyOps)
+        IrDocument left, IrDocument right, IReadOnlyList<IrEditOp> bodyOps, IReadOnlySet<string>? preservedReplacements, bool renderMoves)
     {
         Dictionary<string, (int Section, bool Ends)> SourceSections(IrDocument document)
         {
@@ -236,8 +241,8 @@ internal static class IrEditScriptBuilder
         var leftSections = SourceSections(left);
         var rightSections = SourceSections(right);
         int leftCount = leftSections.Values.Count(s => s.Ends), rightCount = rightSections.Values.Count(s => s.Ends);
-        // Nested carriers are not entries of this alignment. Preserve their existing grid instead
-        // of projecting a partial inventory (and silently dropping later stories).
+        // Nested carriers are not body ops. Preserve their existing grid instead of projecting a partial
+        // inventory (and silently dropping later stories).
         bool Complete(IrDocument document, int count) => document.Body.PartUri is not { } uri ||
             !document.Sources.TryGetValue(uri, out var source) || source.Root is null ||
             Internal.BlockMetadataOps.SectionBreaks(source.Root).Count(s => s.Parent?.Name == W.pPr) == count;
@@ -245,72 +250,101 @@ internal static class IrEditScriptBuilder
             return null;
         var sections = new List<(int, int)>();
         int currentLeft = -1, currentRight = -1, seenLeft = 0, seenRight = 0;
-        foreach (var entry in RenderedGapOrder(alignment, bodyOps))
+
+        // One drawn paragraph: the left and right blocks whose content it holds. leftBreak/rightBreak false: it holds
+        // that block's content but not its break (a split member before the last holds a slice of the original).
+        // copies: a kept paragraph drawn as its deleted copy, then its inserted copy, each with its own break.
+        bool Draw(string? leftAnchor, string? rightAnchor, bool leftBreak = true, bool rightBreak = true, bool copies = false)
         {
-            bool hasLeft = leftSections.TryGetValue(entry.Left?.Anchor.ToString() ?? "", out var l);
-            bool hasRight = rightSections.TryGetValue(entry.Right?.Anchor.ToString() ?? "", out var r);
+            (int Section, bool Ends) l = default, r = default;
+            bool hasLeft = leftAnchor is not null && leftSections.TryGetValue(leftAnchor, out l);
+            bool hasRight = rightAnchor is not null && rightSections.TryGetValue(rightAnchor, out r);
+            bool leftEnds = l.Ends && leftBreak, rightEnds = r.Ends && rightBreak;
+            int rightBefore = currentRight;
             if (hasLeft) currentLeft = l.Section;
             if (hasRight) currentRight = r.Section;
-            if (entry.MultiBlocks is { Count: > 0 } members)
+            if (!leftEnds && !rightEnds)
+                return true;
+            // A break change the redline does not draw as two copies still needs the existing grid; the projection
+            // covers inserted and deleted boundaries, alone or mixed.
+            if (hasLeft && hasRight && leftBreak && rightBreak && l.Ends != r.Ends && !copies)
+                return false;
+            if (copies && leftEnds)
             {
-                string last = members[members.Count - 1].Anchor.ToString();
-                if (entry.Kind == IrAlignmentKind.Merge) currentLeft = leftSections[last].Section;
-                if (entry.Kind == IrAlignmentKind.Split) currentRight = rightSections[last].Section;
+                // The original's break ends the review section before the revision's copy, which opens the next one.
+                // When the revision's copy has a break too, that section holds only the copy, and it pairs the
+                // original section the paragraph came from, so an unchanged story is not drawn as inserted.
+                sections.Add((currentLeft, rightBefore));
+                seenLeft++;
+                currentLeft = rightEnds ? l.Section : -1;
+                if (!rightEnds)
+                    return true;
             }
-            if (!l.Ends && !r.Ends)
-                continue;
-            // Moved boundaries and changed retained carriers still need the existing grid; the
-            // projection covers inserted and deleted boundaries, alone or mixed.
-            if (entry.Kind is IrAlignmentKind.Moved or IrAlignmentKind.MovedModified ||
-                hasLeft && hasRight && l.Ends != r.Ends)
-                return null;
+            else if (leftEnds)
+                seenLeft++;
             sections.Add((currentLeft, currentRight));
             currentLeft = currentRight = -1;
-            if (l.Ends) seenLeft++;
-            if (r.Ends) seenRight++;
+            if (rightEnds) seenRight++;
+            return true;
+        }
+
+        bool DrawOp(IrEditOp op)
+        {
+            switch (op.Kind)
+            {
+                case IrEditOpKind.ModifyBlock:
+                    return Draw(op.LeftAnchor, op.RightAnchor, copies: IrBodyPlacement.RequiresCopies(op, left, right, preservedReplacements));
+                case IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock or IrEditOpKind.InsertBlock or IrEditOpKind.DeleteBlock:
+                    // A move's source is drawn where it was and its destination where it goes.
+                    return Draw(op.LeftAnchor, op.RightAnchor);
+                case IrEditOpKind.SplitBlock or IrEditOpKind.MergeBlock when op.SplitMergeAnchors is { Count: > 0 } members:
+                    for (int i = 0; i < members.Count; i++)
+                    {
+                        var member = IrBodyPlacement.Member(op, i);
+                        if (!Draw(member.Left, member.Right, member.LeftMark, member.RightMark))
+                            return false;
+                    }
+                    return true;
+                case IrEditOpKind.CrossParagraphRunBlock when op.CrossParagraphCells is { } cells:
+                    foreach (var cell in cells)
+                        if (!Draw(cell.LeftAnchor, cell.RightAnchor))
+                            return false;
+                    return true;
+                default:
+                    return Draw(op.LeftAnchor, op.RightAnchor);
+            }
+        }
+
+        foreach (var step in IrBodyPlacement.Steps(bodyOps, renderMoves))
+        {
+            if (!step.IsGap)
+            {
+                if (!DrawOp(bodyOps[step.Start])) return null;
+                continue;
+            }
+            // When the gap replaces its section ends one for one, the inserted copy owns the
+            // story comparison and the deleted copy retains the original story on reject. With
+            // an extra break on either side, ordinal pairs are ambiguous. Keep the assignments
+            // from the paragraphs drawn in each section.
+            int first = sections.Count;
+            foreach (var op in step.Side(bodyOps, IrEditOpKind.InsertBlock))
+                if (!DrawOp(op)) return null;
+            int firstDeleted = sections.Count;
+            foreach (var op in step.Side(bodyOps, IrEditOpKind.DeleteBlock))
+                if (!DrawOp(op)) return null;
+            int insertedEnds = firstDeleted - first;
+            if (insertedEnds != sections.Count - firstDeleted) continue;
+            for (int i = 0; i < insertedEnds; i++)
+            {
+                int original = sections[firstDeleted + i].Item1;
+                sections[first + i] = (original, sections[first + i].Item2);
+                sections[firstDeleted + i] = (original, -1);
+            }
         }
         if (seenLeft != leftCount || seenRight != rightCount)
             return null;
         sections.Add((leftCount, rightCount));
         return sections;
-    }
-
-    // RenderBlockOpsWordShaped emits ordinary replacement gaps insertion-first. Named moves,
-    // paired relocations and all two-sided ops flush the gap, including move sources that have
-    // no separate alignment entry. Use the projected operations to locate those exact barriers.
-    private static IEnumerable<IrAlignedBlock> RenderedGapOrder(
-        IrBlockAlignment alignment, IEnumerable<IrEditOp> bodyOps)
-    {
-        var gaps = new Dictionary<(bool Insert, string Anchor), int>();
-        int gap = 0;
-        foreach (var op in bodyOps)
-        {
-            if (op.RelocationGroupId is null && op.Kind is IrEditOpKind.InsertBlock or IrEditOpKind.DeleteBlock)
-            {
-                bool insert = op.Kind == IrEditOpKind.InsertBlock;
-                var anchor = insert ? op.RightAnchor : op.LeftAnchor;
-                if (anchor is not null) gaps[(insert, anchor)] = gap;
-            }
-            else gap++;
-        }
-        var entries = alignment.Entries.ToArray();
-        var groups = new Dictionary<int, List<int>>();
-        for (int i = 0; i < entries.Length; i++)
-        {
-            var entry = entries[i];
-            if (entry.Kind is not (IrAlignmentKind.Inserted or IrAlignmentKind.Deleted)) continue;
-            bool insert = entry.Kind == IrAlignmentKind.Inserted;
-            string anchor = (insert ? entry.Right : entry.Left)!.Anchor.ToString();
-            if (!gaps.TryGetValue((insert, anchor), out int id)) continue;
-            if (!groups.TryGetValue(id, out var indices)) groups[id] = indices = new List<int>();
-            indices.Add(i);
-        }
-        foreach (var indices in groups.Values)
-        {
-            var ordered = indices.Select(i => entries[i]).OrderBy(e => e.Kind == IrAlignmentKind.Inserted ? 0 : 1).ToArray();
-            for (int i = 0; i < indices.Count; i++) entries[indices[i]] = ordered[i];
-        }
-        return entries;
     }
 
     private static readonly IrHeaderFooterKind[] HeaderFooterKinds =
@@ -363,6 +397,7 @@ internal static class IrEditScriptBuilder
         var plansByPair = new Dictionary<(Uri? Left, Uri? Right), HeaderFooterPairPlan>();
         var plansByCell = new Dictionary<(int Section, IrHeaderFooterKind Kind), HeaderFooterPairPlan>();
         var originalOnly = new List<(int Section, IrHeaderFooterKind Kind, IrHeaderFooter Story)>();
+        var revisedOnly = new List<(int Section, IrHeaderFooterKind Kind, IrHeaderFooter Story)>();
         for (int s = 0; s < sectionCount; s++)
         {
             foreach (var kind in HeaderFooterKinds)
@@ -374,6 +409,11 @@ internal static class IrEditScriptBuilder
                 if (sections is not null && sections[s].Right < 0)
                 {
                     originalOnly.Add((s, kind, leftStory!));
+                    continue;
+                }
+                if (sections is not null && sections[s].Left < 0)
+                {
+                    revisedOnly.Add((s, kind, rightStory!));
                     continue;
                 }
 
@@ -397,6 +437,28 @@ internal static class IrEditScriptBuilder
             var plan = plans.FirstOrDefault(p => p.LeftPartUri == story.Scope.PartUri);
             if (plan is null)
                 plans.Add(plan = new HeaderFooterPairPlan(story, null) { KeepsLeft = true });
+            plan.Cells.Add((s, kind));
+            plansByCell.Add((s, kind), plan);
+        }
+
+        // Symmetrically, a review section holding only revised content disappears on reject, so its story need only
+        // accept to the revision's: it shares the output of any pair that already holds that revised story, else it
+        // is the revision's story inserted, as before (issue #1805 review).
+        foreach (var (s, kind, story) in revisedOnly)
+        {
+            HeaderFooterPairPlan? plan = null;
+            foreach (var candidate in plans)
+                if (!candidate.KeepsLeft && candidate.RightPartUri == story.Scope.PartUri)
+                {
+                    plan = candidate;
+                    break;
+                }
+            if (plan is null && !plansByPair.TryGetValue((null, story.Scope.PartUri), out plan))
+            {
+                plan = new HeaderFooterPairPlan(null, story);
+                plansByPair.Add((null, story.Scope.PartUri), plan);
+                plans.Add(plan);
+            }
             plan.Cells.Add((s, kind));
             plansByCell.Add((s, kind), plan);
         }
@@ -430,7 +492,11 @@ internal static class IrEditScriptBuilder
         // This produces the crucial clone→primary rejoin record with empty Ops when needed. The plan is made against
         // the original's references, which a section break both documents share keeps in the review document (the
         // renderer restores them over the revision's); a changed story is bound where its timeline starts as well.
-        bool changedSectionOwnership = sections is not null && sections.Any(pair => pair.Left != pair.Right);
+        // A section of the redline that holds only one document's content, or one more section than either document has
+        // (a paragraph replaced whole writes its break twice, and the revision's copy names the revision's own
+        // relationship ids, which can name other stories in the output: #1809 review), binds every section.
+        bool changedSectionOwnership = sections is not null && (sections.Any(pair => pair.Left != pair.Right) ||
+            sections.Count != SectionCount(leftDocument) || sections.Count != SectionCount(rightDocument));
         foreach (var kind in HeaderFooterKinds)
         {
             object? previousOutput = null;
@@ -1265,10 +1331,20 @@ internal static class IrEditScriptBuilder
                 {
                     var lp = (IrParagraph)entry.Left!;
                     var members = entry.MultiBlocks!.Cast<IrParagraph>().ToList();
-                    bool structural = HasFieldOrInlineCarrier(lp) || members.Any(HasFieldOrInlineCarrier);
+                    // The last member keeps the original's paragraph mark, which cannot gain or lose a section
+                    // break in place (issue #1809), as for a kept paragraph (StructuralCarrierDiffers).
+                    bool structural = HasFieldOrInlineCarrier(lp) || members.Any(HasFieldOrInlineCarrier) ||
+                        SectionBreakDiffers(lp, members[members.Count - 1]);
                     var diffs = structural ? null : IrSplitSegmenter.ComputeSegmentDiffs(lp, members, settings, singularIsLeft: true);
                     if (structural || SplitMergeSplitsSourceCarrier(lp, members, diffs!, settings))
                     {
+                        if (settings.KeepSplitContributions)
+                        {
+                            ops.Add(new IrEditOp(IrEditOpKind.SplitBlock, lp.Anchor.ToString(), null, null, null, null,
+                                SplitMergeAnchors: IrNodeList.From(members.Select(m => m.Anchor.ToString())),
+                                RequiresWholeParagraphReplace: true));
+                            break;
+                        }
                         // A split has no one-to-one paragraph shell in which to place an atomic inline carrier
                         // or a non-tokenizable field carrier. Lower it to the existing whole-block pair.
                         ops.Add(new IrEditOp(IrEditOpKind.DeleteBlock,
@@ -1289,7 +1365,8 @@ internal static class IrEditScriptBuilder
                 {
                     var rp = (IrParagraph)entry.Right!;
                     var members = entry.MultiBlocks!.Cast<IrParagraph>().ToList();
-                    bool structural = HasFieldOrInlineCarrier(rp) || members.Any(HasFieldOrInlineCarrier);
+                    bool structural = HasFieldOrInlineCarrier(rp) || members.Any(HasFieldOrInlineCarrier) ||
+                        SectionBreakDiffers(members[members.Count - 1], rp);
                     var sliced = structural ? null : IrSplitSegmenter.ComputeSegmentDiffs(rp, members, settings, singularIsLeft: false);
                     if (structural || SplitMergeSplitsSourceCarrier(rp, members, sliced!, settings))
                     {
@@ -1954,23 +2031,29 @@ internal static class IrEditScriptBuilder
     /// Structural carrier facts stay outside visible-content identity. Descend through equal containers so
     /// textbox geometry changes are still compared, without making stable textbox shells unsliceable.
     /// A section boundary's presence cannot be archived in pPrChange or sectPrChange; replace its carrier.
+    /// A table's content controls are carriers too (issue #1810): a table whose controls alone change is diffed.
     /// </summary>
     internal static bool StructuralCarrierDiffers(IrBlock left, IrBlock right)
     {
         if (left is IrParagraph lp && right is IrParagraph rp)
-            return (lp.InlineSectionBreakAnchor is null) != (rp.InlineSectionBreakAnchor is null) ||
+            return SectionBreakDiffers(lp, rp) ||
                 lp.InlineEnvelopeDigest != rp.InlineEnvelopeDigest ||
                 lp.FieldEnvelopeDigest != rp.FieldEnvelopeDigest ||
                 ((ContainsTextbox(lp.Inlines) || ContainsTextbox(rp.Inlines)) &&
                  TextboxCarriersDiffer(CollectTextboxes(lp.Inlines), CollectTextboxes(rp.Inlines)));
         if (left is IrTable lt && right is IrTable rt)
         {
+            if (lt.ControlDigest != rt.ControlDigest) return true;
             for (int i = 0; i < Math.Min(lt.Rows.Count, rt.Rows.Count); i++)
                 if (RowCarriersDiffer(lt.Rows[i], rt.Rows[i])) return true;
             return false;
         }
         return left is IrSdtBlock ls && right is IrSdtBlock rs && BlockCarriersDiffer(ls.Blocks, rs.Blocks);
     }
+
+    /// <summary>Whether one paragraph's mark carries a section break and the other's does not.</summary>
+    private static bool SectionBreakDiffers(IrParagraph left, IrParagraph right) =>
+        (left.InlineSectionBreakAnchor is null) != (right.InlineSectionBreakAnchor is null);
 
     internal static bool RowCarriersDiffer(IrRow left, IrRow right)
     {
@@ -1991,13 +2074,10 @@ internal static class IrEditScriptBuilder
     /// cell's content hash covers its text and not its paragraphs' formatting, so without this the table, row
     /// and cell gates treat such a cell as unchanged and copy the revised one untracked. Paragraphs compare by the
     /// aligner's own format rule, so the comparison policy and tracking settings apply as they do in the body.
-    /// A table with a row or cell delivered by a content control, and such a row or cell, are never flagged: the
-    /// modified-table renderer does not rebuild those controls yet (issue #1804), so a formatting change there stays
-    /// untracked, as before, unless the table is compared row by row for another change.
     /// </summary>
     internal static bool CellFormattingDiffers(IrBlock left, IrBlock right, IrDiffSettings settings)
     {
-        if (left is not IrTable lt || right is not IrTable rt || HasContentControlRow(lt) || HasContentControlRow(rt))
+        if (left is not IrTable lt || right is not IrTable rt)
             return false;
         for (int i = 0; i < Math.Min(lt.Rows.Count, rt.Rows.Count); i++)
             if (CellFormattingDiffers(lt.Rows[i], rt.Rows[i], settings)) return true;
@@ -2006,7 +2086,6 @@ internal static class IrEditScriptBuilder
 
     internal static bool CellFormattingDiffers(IrRow left, IrRow right, IrDiffSettings settings)
     {
-        if (FromContentControl(left) || FromContentControl(right)) return false;
         for (int i = 0; i < Math.Min(left.Cells.Count, right.Cells.Count); i++)
             if (CellFormattingDiffers(left.Cells[i], right.Cells[i], settings)) return true;
         return false;
@@ -2015,7 +2094,7 @@ internal static class IrEditScriptBuilder
     internal static bool CellFormattingDiffers(IrCell left, IrCell right, IrDiffSettings settings)
     {
         // Equal stored fingerprints are format-equal, as in the aligner's first anchor pass.
-        if (left.FromRowSdt || right.FromRowSdt || left.FormatFingerprint.Equals(right.FormatFingerprint)) return false;
+        if (left.FormatFingerprint.Equals(right.FormatFingerprint)) return false;
         for (int i = 0; i < Math.Min(left.Blocks.Count, right.Blocks.Count); i++)
         {
             // A nested table's stored fingerprint also holds what the policy ignores in its cells, so compare the
@@ -2033,21 +2112,6 @@ internal static class IrEditScriptBuilder
         if (!left.TblPrDigest.Equals(right.TblPrDigest) || !left.TblGridDigest.Equals(right.TblGridDigest)) return true;
         for (int i = 0; i < Math.Min(left.Rows.Count, right.Rows.Count); i++)
             if (!left.Rows[i].TrPrDigest.Equals(right.Rows[i].TrPrDigest)) return true;
-        return false;
-    }
-
-    private static bool HasContentControlRow(IrTable table)
-    {
-        for (int i = 0; i < table.Rows.Count; i++)
-            if (FromContentControl(table.Rows[i])) return true;
-        return false;
-    }
-
-    private static bool FromContentControl(IrRow row)
-    {
-        if (row.FromTableSdt) return true;
-        for (int i = 0; i < row.Cells.Count; i++)
-            if (row.Cells[i].FromRowSdt) return true;
         return false;
     }
 

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 #nullable enable
 
 using Docxodus.Ir;
@@ -25,7 +26,11 @@ internal sealed record IrSourceRightAnchor(int Reviewer, string Anchor,
 
 /// <summary>A reviewer's equal block carrying markers omitted from IR content equality. The renderer
 /// reconciles its comments and bookmarks against the emitted base copy.</summary>
-internal sealed record IrEqualReviewerMarkers(int Reviewer, string Anchor, string Author);
+internal sealed record IrEqualReviewerMarkers(int Reviewer, string Anchor, string Author,
+    IrNodeList<IrMarkerPlacement>? ReplacementPositions = null);
+
+/// <summary>A reviewer's marker in paragraph source order and its accepted-side character position.</summary>
+internal readonly record struct IrMarkerPlacement(int Ordinal, int Offset);
 
 /// <summary>A contributing reviewer's row/cell pairings, retained to place markers between rows and cells.</summary>
 internal sealed record IrReviewerTable(int Reviewer, string Author, IrTableDiff Diff);
@@ -101,7 +106,8 @@ internal sealed record IrAuthoredRowOp(
     IrNodeList<IrAuthoredCellOp>? ComposedCells,
     string? RightRowAnchor = null,
     IrComposedShellRef? TrPr = null,
-    IrComposedShellRef? TblPrEx = null);
+    IrComposedShellRef? TblPrEx = null,
+    IrNodeList<IrEqualReviewerMarkers>? EqualReviewerMarkers = null);
 
 /// <summary>
 /// The per-element ATTRIBUTION of ONE composed block-format shell (Consolidate B2): which reviewer's
@@ -158,7 +164,8 @@ internal sealed record IrCompositeOp(
     IrComposedTableShell? TableShell = null,
     IrNodeList<IrEqualReviewerMarkers>? EqualReviewerMarkers = null,
     IrNodeList<IrReviewerTable>? ReviewerTables = null,
-    IrNodeList<IrCompositeOp>? AuthoredWrapperOps = null);
+    IrNodeList<IrCompositeOp>? AuthoredWrapperOps = null,
+    IrComposedTableControls? ControlPlacement = null);
 
 /// <summary>
 /// One reviewer's competing result for a conflicted span. <see cref="Author"/> is the reviewer
@@ -229,8 +236,10 @@ internal sealed record IrCompositeScript(
     IrNodeList<IrReviewerNoteIdMap>? NoteIdMaps = null,
     IrComposedShellRef? TrailingSectPr = null,
     IrNodeList<IrReviewerComparison>? ReviewerComparisons = null,
-    IrMarkupRenderer.CompositeBookmarkPlan? Bookmarks = null);
+    IrMarkupRenderer.CompositeBookmarkPlan? Bookmarks = null,
+    IrCommentAttachments? CommentAttachments = null);
 
 /// <summary>The parts of one reviewer's own two-way comparison with the base that the composite renderer reads
 /// (<see cref="IrCompositeScript.ReviewerComparisons"/>): the body ops and the note diffs.</summary>
-internal sealed record IrReviewerComparison(IrNodeList<IrEditOp> Operations, IrNodeList<IrNoteDiff>? NoteOps);
+internal sealed record IrReviewerComparison(IrNodeList<IrEditOp> Operations, IrNodeList<IrNoteDiff>? NoteOps,
+    IReadOnlyDictionary<string, bool>? BaseCommentAnchors = null);
