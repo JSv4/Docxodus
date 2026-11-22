@@ -2312,7 +2312,12 @@ internal static partial class IrMarkupRenderer
         PlaceExtrasBefore(int.MaxValue);
 
         if (leftTbl.Elements().Any(IsBlockLevelMarker) || rightTbl.Elements().Any(IsBlockLevelMarker))
-            ReconcileTableStreamMarkers(newTbl, rowSources, state);
+        {
+            if (extras.Count > 0)
+                foreach (var (left, right) in TopLevelRowlessControls(leftIrTable!).Zip(extras).Reverse())
+                    rowSources.Insert(right.Before, (left.Element, right.Element));
+            ReconcileTableStreamMarkers(newTbl, rowSources, state, extras.Count > 0);
+        }
         RewrapInControls(newTbl, W.tr, rowControls, state);
         sink.Add(newTbl);
         return true;
@@ -3262,7 +3267,7 @@ internal static partial class IrMarkupRenderer
                      IrCompositeMerger.RowIndex(reviewerIrs[rowOp.SourceReviewer]).TryGetValue(insertedAnchor, out var inserted))
             {
                 while (extrasPlaced < extras.Count && extras[extrasPlaced].RowsBefore == boundary &&
-                       extras[extrasPlaced].Element.Name == W.sdt && emptyControlsPlaced < inserted.PrecedingEmptyControls)
+                       emptyControlsPlaced < inserted.PrecedingEmptyControls)
                     PlaceNextExtra();
             }
             switch (rowOp.Kind)
@@ -3301,7 +3306,7 @@ internal static partial class IrMarkupRenderer
         }
         PlaceExtrasBefore(int.MaxValue);
 
-        ReconcileComposedTableMarkers(newTbl, op, baseRowsByAnchor, baseCellsByAnchor, reviewerIrs, state);
+        ReconcileComposedTableMarkers(newTbl, op, baseTblBlock, baseRowsByAnchor, baseCellsByAnchor, reviewerIrs, state);
 
         // The rows and cells were built bare; their content controls go back around them last, once the markers among
         // them are placed (issue #1810). The merger composed the table only because this layout exists.
