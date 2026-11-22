@@ -1131,6 +1131,57 @@ stdio host and the MCP consolidate form.
 
 ---
 
+## Consolidate: two reviewers editing different words of one quantity (#1843)
+
+### The corner case
+
+Consolidation finds conflicts on base tokens. If one reviewer changes the first word of a quantity
+and another adds words after it, the two edits touch different tokens. Both are kept, and accepting
+everything gives a quantity neither reviewer wrote. The desktop word processor's own document-combining
+feature does the same.
+
+### Minimal reproducer
+
+Single-paragraph documents, one plain run each:
+
+```text
+base        Crates hold six dozen samples.
+Reviewer A  Crates hold nine dozen samples.
+Reviewer B  Crates hold six dozen extra samples.
+```
+
+### Behavior table
+
+The desktop word processor (build 16.0.20326) combined the copies in both reviewer orders and two ways:
+the base with one copy and then the result with the other, and each copy's own comparison
+against the base combined with the other's. Each way gave the same revisions and accepted text.
+
+| Case | Docxodus, every policy (default word boundaries) | Docxodus, `wordSeparators: ".;!?"` | Desktop word processor (build 16.0.20326) |
+| --- | --- | --- | --- |
+| A: six → nine; B: adds "extra" | no conflict; accepted "nine dozen extra" | conflict; base wins: "six dozen" | no conflict marker; accepted "nine dozen extra" |
+| A: one hundred → one hundred and twenty; B: one → three | no conflict; "three hundred and twenty" | conflict; base wins | no conflict marker; "three hundred and twenty" |
+| Both replace "six" ("nine", "ten") | one conflict; `BaseWins` "six", `FirstReviewerWins` the first reviewer's word, `StackAll` both words in reviewer order | conflict | both insertions kept, the later-combined reviewer's word first ("tennine" with A combined first), one deletion, no conflict marker |
+| Edits in different sentences of one paragraph | no conflict; both kept | no conflict; both kept | both kept |
+
+LibreOffice Writer was not available on the capture machine.
+
+### Analysis
+
+On disjoint edits, the default matches the reference application, so it stays. A caller who needs a
+plain-text quantity reviewed as a whole can widen the token with a punctuation-only separator set, as
+`python/README.md` shows, and then gets a conflict that the reference application never reports.
+On an overlapping replacement, Docxodus is stricter on purpose: it records the conflict and
+applies the chosen policy. `StackAll` comes closest to the reference application, writing both
+words in reviewer order rather than putting the later-combined reviewer's word first.
+
+### Relevant code and tests
+
+- `Docxodus/DocxDiffConsolidate.cs` — `ConflictResolution`.
+- `Docxodus.Tests/DocxDiffOpsConsolidateTests.cs` —
+  `Word_boundaries_determine_whether_two_edits_compete` pins the first row through the JSON facade.
+
+---
+
 ## `*PrChange` inners are CT_*Base: rejecting a property change must NOT drop what lives outside it
 
 **Discovered:** 2026-07-03, block-format-change family.
