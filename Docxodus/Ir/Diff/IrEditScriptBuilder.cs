@@ -205,13 +205,13 @@ internal static class IrEditScriptBuilder
     /// ascending, kind Default&lt;First&lt;Even), then footers.</para>
     /// </summary>
     private static IrNodeList<IrHeaderFooterDiff>? BuildHeaderFooterOps(
-        IrDocument left, IrDocument right, IrDiffSettings settings, IEnumerable<IrEditOp> bodyOps,
+        IrDocument left, IrDocument right, IrDiffSettings settings, IReadOnlyList<IrEditOp> bodyOps,
         IReadOnlySet<string>? preservedReplacements = null)
     {
         if (!settings.CompareHeadersFooters)
             return null;
 
-        var sections = MatchSectionBoundaries(left, right, bodyOps, preservedReplacements);
+        var sections = MatchSectionBoundaries(left, right, bodyOps, preservedReplacements, settings.RenderMoves);
         var diffs = new List<IrHeaderFooterDiff>();
         BuildOneHeaderFooterScope(left, right, left.Headers, right.Headers, isHeader: true, settings, diffs, sections);
         BuildOneHeaderFooterScope(left, right, left.Footers, right.Footers, isHeader: false, settings, diffs, sections);
@@ -224,7 +224,7 @@ internal static class IrEditScriptBuilder
     // body ops in the order the redline draws their paragraphs (issue #1809): a moved paragraph's source
     // where it was, each member of a split or merge, and a replacement gap insertion-first.
     private static List<(int Left, int Right)>? MatchSectionBoundaries(
-        IrDocument left, IrDocument right, IEnumerable<IrEditOp> bodyOps, IReadOnlySet<string>? preservedReplacements)
+        IrDocument left, IrDocument right, IReadOnlyList<IrEditOp> bodyOps, IReadOnlySet<string>? preservedReplacements, bool renderMoves)
     {
         Dictionary<string, (int Section, bool Ends)> SourceSections(IrDocument document)
         {
@@ -297,18 +297,14 @@ internal static class IrEditScriptBuilder
                 case IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock or IrEditOpKind.InsertBlock or IrEditOpKind.DeleteBlock:
                     // A move's source is drawn where it was and its destination where it goes.
                     return Draw(op.LeftAnchor, op.RightAnchor);
-                case IrEditOpKind.SplitBlock when op.SplitMergeAnchors is { Count: > 0 } members:
-                    // Each member holds a slice of the original paragraph; only the last keeps its paragraph mark.
+                case IrEditOpKind.SplitBlock or IrEditOpKind.MergeBlock when op.SplitMergeAnchors is { Count: > 0 } members:
                     for (int i = 0; i < members.Count; i++)
-                        if (!Draw(op.LeftAnchor, members[i], leftBreak: i == members.Count - 1))
+                    {
+                        var member = IrBodyPlacement.Member(op, i);
+                        if (!Draw(member.Left, member.Right, member.LeftMark, member.RightMark))
                             return false;
+                    }
                     return true;
-                case IrEditOpKind.MergeBlock when op.SplitMergeAnchors is { Count: > 0 } members:
-                    // Each member before the last keeps its own paragraph mark, deleted, as a deleted paragraph does.
-                    for (int i = 0; i < members.Count - 1; i++)
-                        if (!Draw(members[i], null))
-                            return false;
-                    return Draw(members[members.Count - 1], op.RightAnchor);
                 case IrEditOpKind.CrossParagraphRunBlock when op.CrossParagraphCells is { } cells:
                     foreach (var cell in cells)
                         if (!Draw(cell.LeftAnchor, cell.RightAnchor))
@@ -319,23 +315,23 @@ internal static class IrEditScriptBuilder
             }
         }
 
-        // RenderBlockOpsWordShaped draws an ordinary replacement gap insertion-first; named moves, paired relocations
-        // and every other op flush it.
-        var gap = new List<IrEditOp>();
-        bool FlushGap()
+        foreach (var step in IrBodyPlacement.Steps(bodyOps, renderMoves))
         {
+            if (!step.IsGap)
+            {
+                if (!DrawOp(bodyOps[step.Start])) return null;
+                continue;
+            }
             // Both copies of a replaced section end remain in the marked document. Match the
             // source boundaries within this replacement gap in order. The inserted copy owns the
             // story comparison, while the deleted copy only needs the original story on reject.
             // Unmatched endings keep their existing visibility for actual section additions/removals.
             int first = sections.Count;
-            foreach (var op in gap)
-                if (op.Kind == IrEditOpKind.InsertBlock && !DrawOp(op))
-                    return false;
+            foreach (var op in step.Side(bodyOps, IrEditOpKind.InsertBlock))
+                if (!DrawOp(op)) return null;
             int firstDeleted = sections.Count;
-            foreach (var op in gap)
-                if (op.Kind == IrEditOpKind.DeleteBlock && !DrawOp(op))
-                    return false;
+            foreach (var op in step.Side(bodyOps, IrEditOpKind.DeleteBlock))
+                if (!DrawOp(op)) return null;
             int pairs = Math.Min(firstDeleted - first, sections.Count - firstDeleted);
             for (int i = 0; i < pairs; i++)
             {
@@ -343,17 +339,8 @@ internal static class IrEditScriptBuilder
                 sections[first + i] = (original, sections[first + i].Item2);
                 sections[firstDeleted + i] = (original, -1);
             }
-            gap.Clear();
-            return true;
         }
-        foreach (var op in bodyOps)
-        {
-            if (op.RelocationGroupId is null && op.Kind is IrEditOpKind.InsertBlock or IrEditOpKind.DeleteBlock)
-                gap.Add(op);
-            else if (!FlushGap() || !DrawOp(op))
-                return null;
-        }
-        if (!FlushGap() || seenLeft != leftCount || seenRight != rightCount)
+        if (seenLeft != leftCount || seenRight != rightCount)
             return null;
         sections.Add((leftCount, rightCount));
         return sections;
@@ -1363,6 +1350,13 @@ internal static class IrEditScriptBuilder
                     var diffs = structural ? null : IrSplitSegmenter.ComputeSegmentDiffs(lp, members, settings, singularIsLeft: true);
                     if (structural || SplitMergeSplitsSourceCarrier(lp, members, diffs!, settings))
                     {
+                        if (settings.KeepSplitContributions)
+                        {
+                            ops.Add(new IrEditOp(IrEditOpKind.SplitBlock, lp.Anchor.ToString(), null, null, null, null,
+                                SplitMergeAnchors: IrNodeList.From(members.Select(m => m.Anchor.ToString())),
+                                RequiresWholeParagraphReplace: true));
+                            break;
+                        }
                         // A split has no one-to-one paragraph shell in which to place an atomic inline carrier
                         // or a non-tokenizable field carrier. Lower it to the existing whole-block pair.
                         ops.Add(new IrEditOp(IrEditOpKind.DeleteBlock,

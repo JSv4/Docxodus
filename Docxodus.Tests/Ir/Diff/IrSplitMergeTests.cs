@@ -55,6 +55,21 @@ public class IrSplitMergeTests
         }));
 
     [Fact]
+    public void Named_relocations_delimit_a_replacement_gap_only_when_drawn_as_moves()
+    {
+        var insert = new IrEditOp(IrEditOpKind.InsertBlock, null, "insert", null, null, null);
+        var delete = new IrEditOp(IrEditOpKind.DeleteBlock, "delete", null, null, null, null);
+        var relocation = insert with { RightAnchor = "relocated", RelocationGroupId = 1 };
+        var ops = new[] { delete, relocation, insert };
+
+        Assert.Equal(new[] { new IrBodyStep(0, 1, true), new IrBodyStep(1, 2, false),
+            new IrBodyStep(2, 3, true) }, IrBodyPlacement.Steps(ops, renderMoves: true));
+        var gap = Assert.Single(IrBodyPlacement.Steps(ops, renderMoves: false));
+        Assert.Equal(new[] { relocation, insert }, gap.Side(ops, IrEditOpKind.InsertBlock));
+        Assert.Equal(new[] { delete }, gap.Side(ops, IrEditOpKind.DeleteBlock));
+    }
+
+    [Fact]
     public void Split_op_json_round_trips_and_is_deterministic()
     {
         var script = new IrEditScript(IrNodeList.From(new List<IrEditOp> { SplitOp() }));
