@@ -231,6 +231,7 @@ internal static class IrTableControlPlanner
             }
         }
         var chains = new IrTableControlId[rows.Count][];
+        int[]? precedingControls = null;
         var authors = new Dictionary<IrTableControlId, string>();
         var surviving = new HashSet<IrTableControlId>();
         var cells = new Dictionary<string, (int Row, IrControlLayout Layout)>(StringComparer.Ordinal);
@@ -242,6 +243,8 @@ internal static class IrTableControlPlanner
                 int reviewer = row.SourceReviewer;
                 if (!tables.TryGetValue(reviewer, out var table) || row.RightRowAnchor is not { } anchor ||
                     !reviewRows[reviewer].TryGetValue(anchor, out var ordinal)) return null;
+                if (table.Rows[ordinal].PrecedingEmptyControls > 0)
+                    (precedingControls ??= new int[rows.Count])[i] = table.Rows[ordinal].PrecedingEmptyControls;
                 var chain = Chain(table.ChildOrder, ordinal, reviewer);
                 for (int j = 0; j < chain.Length; j++)
                     if (baseForReviewer.TryGetValue(reviewer, out var pairs) && pairs.TryGetValue(chain[j].Entry, out int shared))
@@ -284,13 +287,41 @@ internal static class IrTableControlPlanner
         foreach (var shared in surviving) authors.Remove(shared);
         List<int>? order = null;
         if (!StayTogether(chains))
-        {
             order = KeepInsertsTogether(rows, chains);
+        if (precedingControls is not null)
+            OrderInsertsAtEmptyControls(rows, precedingControls, ref order);
+        if (order is not null)
+        {
             chains = order.Select(i => chains[i]).ToArray();
             if (!StayTogether(chains)) return null;
         }
         var layout = chains.Any(c => c.Length > 0) ? new IrControlLayout(chains, authors.Keys.ToHashSet(), Authors: authors) : null;
         return new IrComposedTableControls(layout, cells, order, tables.ToDictionary(t => t.Key, t => t.Value.Anchor.ToString()));
+    }
+
+    // Within a base gap, each retained rowless control divides insertions on its two sides.
+    // A stable sort preserves the control-chain and reviewer order within each such interval.
+    private static void OrderInsertsAtEmptyControls(IReadOnlyList<IrAuthoredRowOp> rows, int[] preceding,
+        ref List<int>? order)
+    {
+        for (int i = 0; i < rows.Count;)
+        {
+            if (rows[i].Kind != IrRowOpKind.InsertRow) { i++; continue; }
+            int end = i + 1;
+            bool inverted = false;
+            while (end < rows.Count && rows[end].Kind == IrRowOpKind.InsertRow)
+            {
+                if (preceding[order?[end - 1] ?? end - 1] > preceding[order?[end] ?? end]) inverted = true;
+                end++;
+            }
+            if (inverted)
+            {
+                order ??= Enumerable.Range(0, rows.Count).ToList();
+                var sorted = order.GetRange(i, end - i).OrderBy(index => preceding[index]).ToArray();
+                for (int j = i; j < end; j++) order[j] = sorted[j - i];
+            }
+            i = end;
+        }
     }
 
     /// <summary>

@@ -362,6 +362,326 @@ public class DocxDiffCommentStructureTests
         Assert.Equal(RangeCoverage(original, true), RangeCoverage(rejected, true));
     }
 
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public void Moving_a_paragraph_keeps_a_valid_comment_in_each_view(bool consolidate, bool commentMoves)
+    {
+        string Paragraph(string prefix, string term, string suffix, bool commented) =>
+            "<w:p><w:r><w:t xml:space=\"preserve\">" + prefix + "</w:t></w:r>" + CommentRun(term, commented ? "0" : null)
+            + "<w:r><w:t xml:space=\"preserve\">" + suffix + "</w:t></w:r></w:p>";
+        var notice = Paragraph("Each tenant must give ", "sixty days", " of written notice before moving out of the building.", commentMoves);
+        var inspection = Paragraph("The landlord inspects every unit within ", "two weeks", " of the tenant leaving it.", !commentMoves);
+        var deposits = "<w:p><w:r><w:t>Deposits are returned by bank transfer once the inspection report is signed.</w:t></w:r></w:p>";
+        WmlDocument Document(string body) => IrTestDocuments.WithComment(
+            "Cedar", "C", "2026-01-01T00:00:00Z", "Check the deadline.", body);
+        var original = Document(notice + inspection + deposits);
+        var revised = Document(inspection + deposits + notice);
+        var reviewers = new[] { new DocxDiffReviewer { Document = revised, Author = "Reviewer" } };
+        var marked = consolidate ? DocxCompare.Consolidate(original, reviewers) : DocxCompare.Compare(original, revised);
+        var revisions = consolidate ? DocxDiff.GetConsolidatedRevisions(original, reviewers).Select(r => r.Type)
+            : DocxDiff.GetRevisions(original, revised).Select(r => r.Type);
+        Assert.Contains(DocxDiffRevisionType.Moved, revisions);
+        Assert.Empty(SchemaErrors(marked));
+
+        using var stream = new MemoryStream(marked.DocumentByteArray);
+        using var package = WordprocessingDocument.Open(stream, false);
+        var main = package.MainDocumentPart!;
+        var paragraphs = main.GetXDocument().Descendants(W.p).Where(p => p.Descendants(W.commentReference).Any()).ToList();
+        Assert.Equal(commentMoves ? 2 : 1, paragraphs.Count);
+        if (commentMoves)
+        {
+            Assert.Single(paragraphs, p => p.Descendants(W.moveFrom).Any());
+            Assert.Single(paragraphs, p => p.Descendants(W.moveTo).Any());
+        }
+        var ids = paragraphs.Select(p => (string)Assert.Single(p.Descendants(W.commentReference)).Attribute(W.id)!).ToArray();
+        Assert.Equal(ids.Length, ids.Distinct().Count());
+        Assert.Equal(ids.OrderBy(id => id), main.WordprocessingCommentsPart!.GetXDocument()
+            .Descendants(W.comment).Select(c => (string)c.Attribute(W.id)!).OrderBy(id => id));
+        foreach (var p in paragraphs)
+        {
+            var markers = p.Descendants().Where(e => e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference).ToArray();
+            Assert.Equal(new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference }, markers.Select(m => m.Name));
+            Assert.Single(markers.Select(m => (string)m.Attribute(W.id)!).Distinct());
+            var covered = p.Descendants().SkipWhile(e => e != markers[0]).TakeWhile(e => e != markers[1]);
+            Assert.Equal(commentMoves ? "sixty days" : "two weeks", string.Concat(covered.Where(e => e.Name == W.t || e.Name == W.delText).Select(e => e.Value)));
+        }
+        foreach (var (resolved, expected) in new[] {
+            (RevisionProcessor.AcceptRevisions(marked), revised), (RevisionProcessor.RejectRevisions(marked), original) })
+        {
+            Assert.Empty(SchemaErrors(resolved));
+            Assert.Single(CommentStructure(resolved).RangeStartIds);
+            Assert.Equal(AnchorProjection(expected), AnchorProjection(resolved));
+            Assert.Equal(RangeCoverage(expected, true), RangeCoverage(resolved, true));
+            Assert.Equal(BodyText(expected), BodyText(resolved));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_move_that_carries_only_the_start_of_a_comment_keeps_the_other_end(bool consolidate)
+    {
+        const string moving = "<w:p><w:commentRangeStart w:id=\"0\"/>"
+            + "<w:r><w:t>Each tenant must give sixty days of written notice before leaving the building.</w:t></w:r></w:p>";
+        const string spine = "<w:p><w:r><w:t>The landlord inspects every unit within two weeks of the tenant leaving it.</w:t></w:r></w:p>"
+            + "<w:p><w:r><w:t>Deposits are returned by bank transfer after the inspection report is signed.</w:t></w:r></w:p>";
+        const string end = "<w:p><w:r><w:t>End of the tenancy.</w:t></w:r><w:commentRangeEnd w:id=\"0\"/>"
+            + "<w:r><w:commentReference w:id=\"0\"/></w:r></w:p>";
+        WmlDocument Document(string body) => IrTestDocuments.WithComment(
+            "Cedar", "C", "2026-01-01T00:00:00Z", "Check the deadline.", body);
+        var original = Document(moving + spine + end);
+        var revised = Document(spine + moving + end);
+        var marked = consolidate
+            ? DocxCompare.Consolidate(original, new[] { new DocxDiffReviewer { Author = "Reviewer", Document = revised } })
+            : DocxCompare.Compare(original, revised);
+        Assert.Empty(SchemaErrors(marked));
+        foreach (var (resolved, expected) in new[] {
+            (RevisionProcessor.AcceptRevisions(marked), revised), (RevisionProcessor.RejectRevisions(marked), original) })
+        {
+            Assert.Empty(SchemaErrors(resolved));
+            Assert.Equal(RangeCoverage(expected, true), RangeCoverage(resolved, true));
+            Assert.Equal(AnchorProjection(expected), AnchorProjection(resolved));
+            Assert.Equal(BodyText(expected), BodyText(resolved));
+        }
+    }
+
+    [Theory]
+    [InlineData("rewritten", false)]
+    [InlineData("rewritten", true)]
+    [InlineData("reanchored", false)]
+    [InlineData("reanchored", true)]
+    [InlineData("reanchored-edited", false)]
+    [InlineData("reanchored-edited", true)]
+    [InlineData("reanchored-mixed-reference", false)]
+    [InlineData("reanchored-mixed-reference", true)]
+    [InlineData("reanchored-table", false)]
+    [InlineData("reanchored-table", true)]
+    [InlineData("reanchored-table-edited", false)]
+    [InlineData("reanchored-table-edited", true)]
+    [InlineData("reanchored-control", false)]
+    [InlineData("reanchored-control", true)]
+    [InlineData("reanchored-control-edited", false)]
+    [InlineData("reanchored-control-edited", true)]
+    [InlineData("reanchored-preserved", false)]
+    [InlineData("stationary", false)]
+    [InlineData("stationary", true)]
+    public void A_comments_reference_follows_its_range_in_both_views(string shape, bool consolidate)
+    {
+        static string Run(string text) => $"<w:r><w:t xml:space='preserve'>{text}</w:t></w:r>";
+        WmlDocument Document(bool revised)
+        {
+            bool onSecond = revised && shape.StartsWith("reanchored", StringComparison.Ordinal);
+            var body = "<w:p>" + Run("Alpha ") + CommentRun(revised && shape == "rewritten" ? "zeta" : "beta", onSecond ? null : "0") +
+                Run(revised && shape == "stationary" ? " delta." : " gamma.") + "</w:p><w:p>" +
+                CommentRun("Returns", onSecond ? "0" : null) +
+                Run(revised && shape.EndsWith("-edited", StringComparison.Ordinal) ? " are due on Mondays." : " are due on Fridays.") + "</w:p>";
+            if (shape.StartsWith("reanchored-table", StringComparison.Ordinal))
+                body = "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='6000'/></w:tblGrid><w:tr><w:tc>" + body + "</w:tc></w:tr></w:tbl>";
+            if (shape.StartsWith("reanchored-control", StringComparison.Ordinal))
+                body = "<w:sdt><w:sdtPr><w:tag w:val='terms'/></w:sdtPr><w:sdtContent>" + body + "</w:sdtContent></w:sdt>";
+            if (shape == "reanchored-mixed-reference")
+                body = body.Replace("<w:commentReference w:id=\"0\"/></w:r><w:r>", "<w:commentReference w:id=\"0\"/>");
+            if (shape == "reanchored-preserved" && revised)
+                body += "<w:p><w:ins w:id='72' w:author='Earlier'>" + Run("Pending note.") + "</w:ins></w:p>";
+            return IrTestDocuments.WithComment("Cedar", "C", "2026-01-01T00:00:00Z", "Check the term.", body);
+        }
+        var original = Document(false);
+        var revised = Document(true);
+        var reviewers = new[] { new DocxDiffReviewer { Document = revised, Author = "Reviewer" } };
+        var settings = new DocxDiffSettings { PreserveInputRevisions = shape == "reanchored-preserved" };
+        var marked = consolidate ? DocxCompare.Consolidate(original, reviewers) : DocxCompare.Compare(original, revised, settings);
+        var revisions = consolidate ? DocxDiff.GetConsolidatedRevisions(original, reviewers).Select(r => r.Text)
+            : DocxDiff.GetRevisions(original, revised).Select(r => r.Text);
+        if (shape is "reanchored" or "reanchored-mixed-reference" or "reanchored-table" or "reanchored-control") Assert.Empty(revisions);
+        else Assert.NotEmpty(revisions);
+        if (shape.StartsWith("reanchored", StringComparison.Ordinal))
+            Assert.Contains(DocxDiff.GetSemanticChanges(original, revised).Changes,
+                change => change.Family == Docxodus.Verification.SemanticChangeFamily.Comment);
+        if (shape == "reanchored-preserved")
+        {
+            using var session = new DocxSession(marked.DocumentByteArray);
+            foreach (var revision in session.ListRevisions().Where(r => r.Author != "Earlier").ToList())
+                Assert.True(session.AcceptRevision(revision.Id).Success);
+            Assert.Equal("Earlier", Assert.Single(session.ListRevisions()).Author);
+            Assert.Equal(RangeCoverage(revised, true), RangeCoverage(new WmlDocument("selective.docx", session.Save()), true));
+        }
+        foreach (var (doc, expected) in new[] { (marked, (WmlDocument?)null),
+            (RevisionProcessor.RejectRevisions(marked), original), (RevisionProcessor.AcceptRevisions(marked), revised) })
+        {
+            Assert.Empty(SchemaErrors(doc));
+            using var stream = new MemoryStream(doc.DocumentByteArray);
+            using var package = WordprocessingDocument.Open(stream, false);
+            var main = package.MainDocumentPart!;
+            var markers = main.GetXDocument().Descendants().Where(e =>
+                e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference)
+                .GroupBy(e => (string)e.Attribute(W.id)!).ToList();
+            Assert.NotEmpty(markers);
+            if (expected is null && shape.StartsWith("reanchored", StringComparison.Ordinal))
+            {
+                Assert.Equal(2, markers.Count);
+                if (consolidate)
+                    Assert.All(markers.SelectMany(g => g), marker => Assert.Equal("Reviewer",
+                        (string?)marker.Ancestors().First(a => a.Name == W.ins || a.Name == W.del).Attribute(W.author)));
+                if (shape == "reanchored-preserved")
+                    Assert.Contains(main.GetXDocument().Descendants(W.ins), e => (string?)e.Attribute(W.author) == "Earlier");
+            }
+            foreach (var comment in markers)
+            {
+                Assert.Equal(new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference }, comment.Select(m => m.Name));
+                Assert.Single(main.WordprocessingCommentsPart!.GetXDocument().Root!.Elements(W.comment),
+                    c => (string?)c.Attribute(W.id) == comment.Key);
+            }
+            if (expected is not null)
+            {
+                Assert.Single(markers);
+                Assert.Equal(RangeCoverage(expected, true), RangeCoverage(doc, true));
+                Assert.Equal(BodyText(expected), BodyText(doc));
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("table-disjoint", false)]
+    [InlineData("table-disjoint", true)]
+    [InlineData("control-disjoint", false)]
+    [InlineData("control-disjoint", true)]
+    [InlineData("disjoint", false)]
+    [InlineData("disjoint", true)]
+    [InlineData("conflicting-deletion", false)]
+    [InlineData("conflicting-deletion", true)]
+    [InlineData("field", false)]
+    [InlineData("field", true)]
+    public void A_reanchored_base_comment_follows_the_selected_reviewer_edits(string shape, bool moverFirst)
+    {
+        bool disjoint = shape.EndsWith("disjoint", StringComparison.Ordinal);
+        string Run(string text) => "<w:r><w:t xml:space='preserve'>" + text + "</w:t></w:r>";
+        WmlDocument Form(bool move = false, bool otherEdit = false, bool expected = false)
+        {
+            bool keptMove = move && (!expected || disjoint);
+            var phrase = CommentRun("beta", keptMove ? null : "0");
+            if (shape == "field")
+                phrase = "<w:r><w:fldChar w:fldCharType='begin'/></w:r><w:r><w:instrText> REF Example </w:instrText></w:r>" +
+                    "<w:r><w:fldChar w:fldCharType='separate'/></w:r>" + phrase + "<w:r><w:fldChar w:fldCharType='end'/></w:r>";
+            var origin = "<w:p>" + Run(otherEdit && shape != "field" ? "Revised alpha " : "Original alpha ") + phrase +
+                Run(move && disjoint ? " gamma concludes." : " gamma ends.") + "</w:p>";
+            if (move && shape == "conflicting-deletion" && !expected) origin = "";
+            var target = "<w:p>" + CommentRun("Returns", keptMove ? "0" : null) +
+                Run(otherEdit && shape == "field" ? " are due on Mondays." : " are due on Fridays.") + "</w:p>";
+            var body = origin + target;
+            if (shape == "table-disjoint")
+                body = "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='6000'/></w:tblGrid><w:tr><w:tc>" + body + "</w:tc></w:tr></w:tbl>";
+            if (shape == "control-disjoint")
+                body = "<w:sdt><w:sdtPr><w:tag w:val='terms'/></w:sdtPr><w:sdtContent>" + body + "</w:sdtContent></w:sdt>";
+            return IrTestDocuments.WithComment("Cedar", "C", "2026-01-01T00:00:00Z", "Check the term.", body);
+        }
+        var original = Form();
+        var mover = new DocxDiffReviewer { Author = "Mover", Document = Form(move: true) };
+        var editor = new DocxDiffReviewer { Author = "Editor", Document = Form(otherEdit: true) };
+        var reviewers = moverFirst ? new[] { mover, editor } : new[] { editor, mover };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.BaseWins };
+        var marked = DocxCompare.Consolidate(original, reviewers, settings);
+        var accepted = RevisionProcessor.AcceptRevisions(marked);
+        var rejected = RevisionProcessor.RejectRevisions(marked);
+        var conflicts = DocxDiff.GetConflicts(original, reviewers, settings);
+        Assert.Equal(shape == "conflicting-deletion", conflicts.Any());
+        Assert.Equal(RangeCoverage(original, true), RangeCoverage(rejected, true));
+        var expected = shape == "conflicting-deletion" ? original : Form(move: true, otherEdit: true, expected: true);
+        Assert.Equal(RangeCoverage(expected, true), RangeCoverage(accepted, true));
+        foreach (var doc in new[] { marked, accepted, rejected })
+            PackageValidation.AssertValid(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
+    }
+
+    [Theory]
+    [InlineData("format", false, null)]
+    [InlineData("format", true, null)]
+    [InlineData("equal-row", false, null)]
+    [InlineData("equal-row", true, null)]
+    [InlineData("deleted-row", false, null)]
+    [InlineData("deleted-row", true, null)]
+    [InlineData("deleted-cell", false, null)]
+    [InlineData("deleted-cell", true, null)]
+    [InlineData("deleted-row", true, true)]
+    [InlineData("deleted-row", true, false)]
+    [InlineData("deleted-cell", true, true)]
+    [InlineData("deleted-cell", true, false)]
+    public void A_comment_can_leave_a_copied_or_deleted_container_paragraph(string shape, bool consolidate, bool? moverFirst)
+    {
+        WmlDocument Form(bool revised, bool outsideEdit = false)
+        {
+            string P(string text) => "<w:p>" + text + "</w:p>";
+            string Cell(string paragraphs) => "<w:tc>" + paragraphs + "</w:tc>";
+            string Row(string cells) => "<w:tr>" + cells + "</w:tr>";
+            var origin = P((revised && shape == "format" ? "<w:pPr><w:jc w:val='center'/></w:pPr>" : "") +
+                CommentRun("Original term.", revised ? null : "0"));
+            var target = P(CommentRun("Destination", revised ? "0" : null) +
+                CommentRun(revised && moverFirst is null ? " on Mondays." : " on Fridays.", null));
+            string contents = shape switch
+            {
+                "format" => origin + target,
+                "deleted-cell" => Row((revised ? "" : Cell(origin)) + Cell(P(CommentRun("Stable cell.", null)))) + Row(Cell(target)),
+                "deleted-row" => (revised ? "" : Row(Cell(origin))) + Row(Cell(target)),
+                _ => Row(Cell(origin)) + Row(Cell(target))
+            };
+            if (shape != "format")
+                contents = "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='3000'/>" +
+                    (shape == "deleted-cell" ? "<w:gridCol w:w='3000'/>" : "") + "</w:tblGrid>" + contents + "</w:tbl>";
+            if (moverFirst is not null) contents += P(CommentRun(outsideEdit ? "Edited closing." : "Original closing.", null));
+            return IrTestDocuments.WithComment("Cedar", "C", "2026-01-01T00:00:00Z", "Check the term.", contents);
+        }
+        var original = Form(false);
+        var revised = Form(true);
+        var mover = new DocxDiffReviewer { Author = "Mover", Document = revised };
+        var reviewers = new[] { mover };
+        if (moverFirst is { } first)
+        {
+            var editor = new DocxDiffReviewer { Author = "Editor", Document = Form(false, true) };
+            reviewers = first ? new[] { mover, editor } : new[] { editor, mover };
+            Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
+        }
+        var marked = consolidate ? DocxCompare.Consolidate(original, reviewers) : DocxCompare.Compare(original, revised);
+        var accepted = RevisionProcessor.AcceptRevisions(marked);
+        var rejected = RevisionProcessor.RejectRevisions(marked);
+        Assert.Equal(RangeCoverage(original, true), RangeCoverage(rejected, true));
+        Assert.Equal(RangeCoverage(revised, true), RangeCoverage(accepted, true));
+        if (moverFirst is not null) Assert.Equal(BodyText(Form(true, true)), BodyText(accepted));
+        foreach (var doc in new[] { marked, accepted, rejected })
+            PackageValidation.AssertValid(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
+    }
+
+    [Theory]
+    [InlineData(ConflictResolution.BaseWins, true)]
+    [InlineData(ConflictResolution.BaseWins, false)]
+    [InlineData(ConflictResolution.FirstReviewerWins, true)]
+    [InlineData(ConflictResolution.FirstReviewerWins, false)]
+    [InlineData(ConflictResolution.StackAll, true)]
+    [InlineData(ConflictResolution.StackAll, false)]
+    public void Competing_reattachments_have_one_accepted_destination(ConflictResolution policy, bool firstToNorth)
+    {
+        WmlDocument Form(int destination, bool northEdit, bool southEdit) => IrTestDocuments.WithComment(
+            "Cedar", "C", "2026-01-01T00:00:00Z", "Check the term.",
+            "<w:p>" + CommentRun(northEdit ? "Early alpha " : "Original alpha ", null) + CommentRun("beta", destination == 0 ? "0" : null) +
+            CommentRun(southEdit ? " gamma concludes." : " gamma ends.", null) + "</w:p>" +
+            "<w:p>" + CommentRun("North.", destination == 1 ? "0" : null) + "</w:p>" +
+            "<w:p>" + CommentRun("South.", destination == 2 ? "0" : null) + "</w:p>");
+        var original = Form(0, false, false);
+        var north = new DocxDiffReviewer { Author = "North reviewer", Document = Form(1, true, false) };
+        var south = new DocxDiffReviewer { Author = "South reviewer", Document = Form(2, false, true) };
+        var reviewers = firstToNorth ? new[] { north, south } : new[] { south, north };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+        var marked = DocxCompare.Consolidate(original, reviewers, settings);
+        var accepted = RevisionProcessor.AcceptRevisions(marked);
+        var rejected = RevisionProcessor.RejectRevisions(marked);
+        Assert.Equal(RangeCoverage(original, true), RangeCoverage(rejected, true));
+        var expected = Form(policy == ConflictResolution.BaseWins ? 0 : firstToNorth ? 1 : 2, true, true);
+        Assert.Equal(RangeCoverage(expected, true), RangeCoverage(accepted, true));
+        Assert.Single(DocxDiff.GetConflicts(original, reviewers, settings));
+        foreach (var doc in new[] { marked, accepted, rejected })
+            PackageValidation.AssertValid(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
+    }
+
     private static string CommentRun(string text, string? id) => id is null ? $"<w:r><w:t>{text}</w:t></w:r>"
         : $"<w:commentRangeStart w:id=\"{id}\"/><w:r><w:t>{text}</w:t></w:r>"
             + $"<w:commentRangeEnd w:id=\"{id}\"/><w:r><w:commentReference w:id=\"{id}\"/></w:r>";
