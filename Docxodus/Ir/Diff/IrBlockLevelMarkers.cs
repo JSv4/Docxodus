@@ -404,7 +404,7 @@ internal static partial class IrMarkupRenderer
         IrTable original, IrTable revised, IrTableControlPlan plan)
     {
         if (original.ChildOrder is not { } left || revised.ChildOrder is not { } right) return;
-        foreach (var (a, b) in left.EmptyControls.Zip(right.EmptyControls).Reverse())
+        foreach (var (a, b) in left.EmptyControls.Where(c => c.Parent < 0).Zip(right.EmptyControls.Where(c => c.Parent < 0)).Reverse())
             pairs.Insert(plan.EmptyControlPositions[b.FirstMember], (a.Source.Element, b.Source.Element));
     }
 

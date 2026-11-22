@@ -3064,6 +3064,7 @@ internal static class IrReader
                 {
                     builder.AppendStructure(IrContentHashBuilder.StructureSdt);
                     builder.AppendHash(parent.Digest);
+                    builder.AppendText(parent.Sibling.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 }
                 builder.AppendHash(control.Digest);
             }
