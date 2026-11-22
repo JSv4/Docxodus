@@ -5557,6 +5557,12 @@ internal static partial class IrMarkupRenderer
         IReadOnlyList<(int Reviewer, XElement Source, string Author)> reviewers, IrDocument baseIr, XElement? baseBlock,
         RenderState state, bool baseCopy = true)
     {
+        if (baseCopy && baseBlock is not null && reviewers.Any(r => r.Source.Descendants().Any(e =>
+            IrReader.IsRangeAnnotation(e) || e.Name == W.commentReference)))
+            foreach (var (source, copy) in baseBlock.DescendantsAndSelf(W.p).Zip(emitted.DescendantsAndSelf(W.p)))
+                if (source.Annotation<IrSourceContent>() is { } content && content.Entries.Any(e => e.Source.Name != W.t) &&
+                    CopyBoundaries.Bind(source, copy) is { } boundaries)
+                    copy.AddAnnotation(boundaries);
         CarryReviewerComments(new[] { emitted }, reviewers.Select(r => (r.Reviewer, r.Source)), baseBlock, state, originalView: true,
             baseCopy);
         CarryReviewerOnlyBookmarks(emitted, reviewers, baseIr, state);
@@ -5604,10 +5610,13 @@ internal static partial class IrMarkupRenderer
                     state.ReviewerBookmarkNamesById[reviewer.Reviewer] = startNames;
                 }
                 state.AuthorOverride = reviewer.Author;
+                var physical = reviewerParagraph.Annotation<IrSourceContent>() is null ? null : targets[i].Annotation<CopyBoundaries>();
+                var widths = physical is null ? null : reviewerParagraph.Annotation<IrSourceContent>()!.PlacementWidths();
                 int offset = 0;
                 foreach (var child in reviewerParagraph.Descendants())
                 {
-                    if ((child.Name == W.bookmarkStart || child.Name == W.bookmarkEnd) && IsRunLevelBookmark(child))
+                    if ((child.Name == W.bookmarkStart || child.Name == W.bookmarkEnd) && IsRunLevelBookmark(child) &&
+                        (widths is null || child.Ancestors(W.p).FirstOrDefault() == reviewerParagraph))
                     {
                         var name = child.Name == W.bookmarkStart
                             ? (string?)child.Attribute(W.name)
@@ -5618,11 +5627,12 @@ internal static partial class IrMarkupRenderer
                             && state.CompositeBookmarks?.Allows(reviewer.Reviewer, child) != false && carried.Add((targets[i], key)))
                         {
                             var marker = StripUnids(new XElement(child));
-                            InsertAtTextOffset(targets[i], marker, offset, originalView: true, state.NextId);
+                            if (physical is null) InsertAtTextOffset(targets[i], marker, offset, originalView: true, state.NextId);
+                            else physical.Insert(offset, new() { marker }, state.NextId);
                             WrapMarkerInRevision(marker, RevKind.Ins, state);
                         }
                     }
-                    if (child.Name == W.t) offset += child.Value.Length;
+                    offset += widths?.GetValueOrDefault(child) ?? (child.Name == W.t ? child.Value.Length : 0);
                 }
             }
         }
@@ -5688,35 +5698,62 @@ internal static partial class IrMarkupRenderer
     /// boundary are inserted together in source order, including the endpoints of a collapsed range.</summary>
     private static void PlaceOnCopy(XElement source, XElement copy, Dictionary<int, List<XElement>> insertions)
     {
-        if (insertions.Count == 0 || source.Annotation<IrSourceContent>() is not { } content) return;
-        var widths = content.PlacementWidths();
-        var leaves = new List<(XElement Copy, int Start, int End)>();
-        int end = 0;
-        // Source and copy are still identical trees. Only the reader decides which leaves belong
-        // to the paragraph; an embedded textbox, for example, has its own text stream.
-        foreach (var (original, cloned) in source.Descendants().Zip(copy.Descendants()))
-            if (widths.TryGetValue(original, out int width))
-            {
-                leaves.Add((cloned, end, end + width));
-                end += width;
-            }
-        if (leaves.Count == 0)
-        {
-            foreach (var group in insertions.OrderBy(p => p.Key)) copy.Add(group.Value);
-            return;
-        }
-        // Work backwards so splitting one text leaf never invalidates a smaller pending offset.
-        int index = leaves.Count - 1;
+        if (insertions.Count == 0 || CopyBoundaries.Bind(source, copy) is not { } positions) return;
         foreach (var (offset, revisions) in insertions.OrderByDescending(p => p.Key))
+            positions.Insert(offset, revisions, null);
+    }
+
+    // Coordinates come from the reader. A source copy may gain revision wrappers and split runs
+    // as reviewers contribute markers, so retain the physical leaves and update just the split.
+    private sealed class CopyBoundaries(XElement paragraph, List<(XElement Leaf, int Start, int End)> leaves)
+    {
+        private readonly Dictionary<int, XElement> _lastAt = new();
+
+        internal static CopyBoundaries? Bind(XElement source, XElement copy)
         {
-            bool hasStart = revisions.Any(r => r.Element(W.bookmarkStart) is not null || r.Element(W.commentRangeStart) is not null);
-            while (index > 0 && (offset < leaves[index].Start || offset == leaves[index].Start && !hasStart)) index--;
-            var (leaf, start, limit) = leaves[index];
-            InsertAtSourceLeaf(leaf, offset - start, limit - start, revisions);
+            if (source.Annotation<IrSourceContent>() is not { } content) return null;
+            var widths = content.PlacementWidths();
+            var names = widths.Keys.Select(e => e.Name).ToHashSet();
+            var originals = source.Descendants().Where(e => names.Contains(e.Name));
+            using var copies = copy.Descendants().Where(e => names.Contains(e.Name)).GetEnumerator();
+            var leaves = new List<(XElement, int, int)>();
+            int offset = 0;
+            foreach (var element in originals)
+            {
+                if (!copies.MoveNext() || copies.Current.Name != element.Name ||
+                    element.Name == W.t && copies.Current.Value != element.Value) return null;
+                if (!widths.TryGetValue(element, out int width)) continue;
+                leaves.Add((copies.Current, offset, offset + width));
+                offset += width;
+            }
+            return copies.MoveNext() ? null : new(copy, leaves);
+        }
+
+        internal void Insert(int offset, List<XElement> markers, Func<int>? nextId)
+        {
+            if (_lastAt.TryGetValue(offset, out var previous) && previous.Parent is not null)
+            {
+                while (previous.Parent is { } wrapper && (wrapper.Name == W.ins || wrapper.Name == W.del)) previous = wrapper;
+                previous.AddAfterSelf(markers);
+            }
+            else if (leaves.Count == 0) paragraph.Add(markers);
+            else
+            {
+                bool start = markers.Any(m => m.DescendantsAndSelf().Any(e => e.Name == W.bookmarkStart || e.Name == W.commentRangeStart));
+                int index = leaves.FindLastIndex(l => l.Start < offset || start && l.Start == offset);
+                if (index < 0) index = 0;
+                var (leaf, first, end) = leaves[index];
+                if (InsertAtSourceLeaf(leaf, offset - first, end - first, markers, nextId) is { } suffix)
+                {
+                    leaves[index] = (leaf, first, offset);
+                    leaves.Insert(index + 1, (suffix, offset, end));
+                }
+            }
+            _lastAt[offset] = markers[^1];
         }
     }
 
-    private static void InsertAtSourceLeaf(XElement leaf, int at, int width, IEnumerable<XElement> revisions, Func<int>? nextId = null)
+    private static XElement? InsertAtSourceLeaf(XElement leaf, int at, int width, IEnumerable<XElement> revisions, Func<int>? nextId = null)
     {
         var run = leaf.Parent!;
         bool afterLeaf = at >= width;
@@ -5725,12 +5762,13 @@ internal static partial class IrMarkupRenderer
             // A paragraph-level atomic carrier (such as AlternateContent) stays intact.
             if (afterLeaf) leaf.AddAfterSelf(revisions);
             else leaf.AddBeforeSelf(revisions);
-            return;
+            return null;
         }
         var tail = leaf.ElementsAfterSelf().ToList();
+        XElement? suffix = null;
         if (at > 0 && !afterLeaf && leaf.Name == W.t)
         {
-            var suffix = new XElement(leaf);
+            suffix = new XElement(leaf);
             suffix.Value = leaf.Value[at..];
             leaf.Value = leaf.Value[..at];
             foreach (var t in new[] { leaf, suffix }) t.SetAttributeValue(XNamespace.Xml + "space", "preserve");
@@ -5754,6 +5792,7 @@ internal static partial class IrMarkupRenderer
             }
             run.AddAfterSelf(revisions, rest);
         }
+        return suffix;
     }
 
     // An annotation placed on the fresh copy already carries its own reviewer's insertion.
@@ -5791,8 +5830,10 @@ internal static partial class IrMarkupRenderer
         static string OriginalView(XElement element) => element.Name == W.ins ? ""
             : element.Name == W.t || element.Name == W.delText ? element.Value
             : string.Concat(element.Elements().Select(OriginalView));
-        List<(XElement Element, int Offset)> Markers(XElement paragraph)
+        List<(XElement Element, int Offset)> Markers(XElement paragraph, bool physical)
         {
+            if (physical) return IrReplacementAnnotations.Markers(paragraph).Where(m => IsCommentMarker(m.Element) &&
+                m.Element.Attribute(W.id) is not null).ToList();
             int offset = 0;
             var markers = new List<(XElement, int)>();
             foreach (var element in paragraph.Descendants())
@@ -5813,17 +5854,6 @@ internal static partial class IrMarkupRenderer
         for (int i = 0; i < originals.Count; i++)
         {
             var original = originals[i];
-            var baseMarkers = baseParagraphs is null ? null : Markers(baseParagraphs[i])
-                .Select(m => (m.Element.Name, (string?)m.Element.Attribute(W.id), m.Offset)).ToHashSet();
-            // A base marker at its base place stays among the positions: it is not added, but orders the markers beside it.
-            var positions = Markers(original)
-                .Select(m => (m.Element, m.Offset,
-                    Base: baseMarkers?.Contains((m.Element.Name, (string?)m.Element.Attribute(W.id), m.Offset)) == true))
-                .Where(m => m.Base || notCarried is null || !notCarried((string)m.Element.Attribute(W.id)!)).ToList();
-            if (positions.Count == 0)
-                continue;
-            if (positions.All(p => p.Base))
-                continue;
             // Preserved input revisions can give an otherwise equal block a different emitted text shape.
             var text = Text(original);
             var candidates = copies.Select(c => c[i])
@@ -5833,8 +5863,20 @@ internal static partial class IrMarkupRenderer
             if (target is null && originalView &&
                 (target = candidates.FirstOrDefault(p => OriginalView(p).Equals(text, StringComparison.Ordinal))) is not null)
                 inOriginalView = true;
-            if (target is not null)
-                CarryCommentMarkers(target, positions, inOriginalView, nextId);
+            if (target is null) continue;
+            var physical = original.Annotation<IrSourceContent>() is null ? null : target.Annotation<CopyBoundaries>();
+            var baseMarkers = baseParagraphs is null ? null : Markers(baseParagraphs[i], physical is not null)
+                .Select(m => (m.Element.Name, (string?)m.Element.Attribute(W.id), m.Offset)).ToHashSet();
+            // A base marker at its base place stays among the positions: it is not added, but orders the markers beside it.
+            var positions = Markers(original, physical is not null)
+                .Select(m => (m.Element, m.Offset,
+                    Base: baseMarkers?.Contains((m.Element.Name, (string?)m.Element.Attribute(W.id), m.Offset)) == true))
+                .Where(m => m.Base || notCarried is null || !notCarried((string)m.Element.Attribute(W.id)!)).ToList();
+            if (positions.Count == 0)
+                continue;
+            if (positions.All(p => p.Base))
+                continue;
+            CarryCommentMarkers(target, positions, inOriginalView, nextId, physical);
         }
     }
 
@@ -5842,7 +5884,7 @@ internal static partial class IrMarkupRenderer
         element.Name == W.commentRangeEnd || element.Name == W.commentReference;
 
     private static void CarryCommentMarkers(XElement emitted, IEnumerable<(XElement Element, int Offset, bool Base)> positions,
-        bool originalView = false, Func<int>? nextId = null)
+        bool originalView = false, Func<int>? nextId = null, CopyBoundaries? physical = null)
     {
         var markers = emitted.Descendants().Where(IsCommentMarker)
             .GroupBy(m => (m.Name, (string?)m.Attribute(W.id))).ToDictionary(g => g.Key, g => g.First());
@@ -5863,6 +5905,8 @@ internal static partial class IrMarkupRenderer
                     ? new XElement(W.r, element.Parent?.Element(W.rPr), marker) : marker;
                 if (previous is not null && previousOffset == offset)
                     previous.AddAfterSelf(content);
+                else if (physical is not null)
+                    physical.Insert(offset, new() { content }, nextId);
                 else
                     InsertAtTextOffset(emitted, content, offset, originalView, nextId);
                 markers.Add((element.Name, id), marker);

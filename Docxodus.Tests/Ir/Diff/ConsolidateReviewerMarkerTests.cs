@@ -367,6 +367,48 @@ public class ConsolidateReviewerMarkerTests
         from editorFirst in new[] { true, false }
         select new object[] { policy, editorFirst };
 
+    [Theory]
+    [InlineData("before", false)]
+    [InlineData("around", false)]
+    [InlineData("after", false)]
+    [InlineData("before", true)]
+    [InlineData("around", true)]
+    [InlineData("after", true)]
+    public void An_annotation_only_range_keeps_its_side_of_a_tab_in_a_mixed_run(string extent, bool comment)
+    {
+        string start = comment ? "<w:commentRangeStart w:id='0'/>" : "<w:bookmarkStart w:id='8' w:name='Shelf'/>";
+        string end = comment ? "<w:commentRangeEnd w:id='0'/><w:r><w:commentReference w:id='0'/></w:r>" : "<w:bookmarkEnd w:id='8'/>";
+        const string tab = "<w:r><w:tab/></w:r>";
+        string Wrap(string payload) => "<w:sdt><w:sdtPr><w:alias w:val='Term'/></w:sdtPr><w:sdtContent>" +
+            payload + "</w:sdtContent></w:sdt>";
+        var original = Doc(P(Wrap("<w:r><w:t>Alpha</w:t><w:tab/><w:t>beta</w:t></w:r>")));
+        string body = P(Wrap(extent switch
+        {
+            "before" => start + Run("Alpha") + end + tab + Run("beta"),
+            "around" => Run("Alpha") + start + tab + end + Run("beta"),
+            _ => Run("Alpha") + tab + start + Run("beta") + end,
+        }));
+        var marked = comment ? CommentDoc(body) : Doc(body);
+        var reviewers = new[] { new DocxDiffReviewer { Author = "B", Document = marked } };
+        static string[] Leaves(WmlDocument file) => Body(file).Descendants(W + "sdtContent").Single().Descendants()
+            .Where(e => e.Name == W + "t" || e.Name == W + "tab" || e.Name == W + "bookmarkStart" || e.Name == W + "bookmarkEnd" ||
+                e.Name == W + "commentRangeStart" || e.Name == W + "commentRangeEnd" || e.Name == W + "commentReference")
+            .Select(e => e.Name == W + "t" ? e.Value : e.Name.LocalName).ToArray();
+        Assert.Empty(DocxDiff.GetRevisions(original, marked));
+        Assert.Empty(DocxDiff.GetConsolidatedRevisions(original, reviewers));
+        Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
+        Assert.Contains(DocxDiff.GetSemanticChanges(original, marked).Changes, c => c.Family == (comment ? SemanticChangeFamily.Comment : SemanticChangeFamily.Bookmark));
+        foreach (var raw in new[] { DocxCompare.Compare(original, marked), DocxCompare.Consolidate(original, reviewers) })
+        {
+            var accepted = RevisionProcessor.AcceptRevisions(raw);
+            var rejected = RevisionProcessor.RejectRevisions(raw);
+            Assert.Equal(Leaves(marked), Leaves(raw));
+            Assert.Equal(Leaves(marked), Leaves(accepted));
+            Assert.Equal(Leaves(original), Leaves(rejected));
+            AssertValid(raw, accepted, rejected);
+        }
+    }
+
     /// <summary>Consolidate the base with <paramref name="reviewers"/> under <paramref name="policy"/>: accepting gives
     /// <paramref name="expected"/>, rejecting the base, nothing is recorded as a conflict and every view is valid.</summary>
     private static WmlDocument AssertMerged(WmlDocument original, WmlDocument expected, ConflictResolution policy,
