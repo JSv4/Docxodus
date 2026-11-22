@@ -3509,6 +3509,8 @@ export interface UpdateFieldsOptions {
   range?: DocumentRange;
   /** The page each paragraph is on (keyed by anchor id or unid), for contents entries and PAGEREF. */
   pages?: Record<string, string>;
+  /** Only tables of contents (Word's Update Table). */
+  tablesOfContentsOnly?: boolean;
 }
 
 export interface CrossReferenceOptions {

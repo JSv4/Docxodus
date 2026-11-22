@@ -1061,7 +1061,11 @@ internal static class DocxSessionOps
                     pages[entry.Name] = entry.Value.ValueKind == System.Text.Json.JsonValueKind.Number
                         ? entry.Value.GetRawText() : entry.Value.GetString() ?? "";
             }
-            options = new UpdateFieldsOptions { Range = range, Pages = pages };
+            options = new UpdateFieldsOptions
+            {
+                Range = range, Pages = pages,
+                TablesOfContentsOnly = root.TryGetProperty("tablesOfContentsOnly", out var only) && only.ValueKind == System.Text.Json.JsonValueKind.True,
+            };
         }
         return DocxSessionJson.Serialize(SessionRegistry.Get(handle).UpdateFields(options));
     }

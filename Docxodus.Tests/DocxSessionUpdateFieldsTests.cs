@@ -186,6 +186,27 @@ public class DocxSessionUpdateFieldsTests
     }
 
     [Fact]
+    public void UF007_TablesOfContentsOnly_LeavesOtherFields()
+    {
+        var (session, _) = WithContents();
+        using var _s = session;
+        var paragraphs = BodyParagraphs(session);
+        var last = paragraphs[^1];
+        Assert.True(session.AddBookmark("target", DocumentRange.In(last, new CharSpan(0, 2))).Success);
+        Assert.True(session.InsertCrossReference(last, 0, "target", new CrossReferenceOptions { PageNumber = true, CachedPage = "8" }).Success);
+        Assert.True(session.UpdateFields(new UpdateFieldsOptions
+        {
+            TablesOfContentsOnly = true,
+            Pages = new Dictionary<string, string> { [last] = "3" },
+        }).Success);
+        var body = Body(session);
+        Assert.Equal("8", body.Descendants(W + "fldSimple").Single().Value);
+        Assert.Contains(body.Descendants(W + "p"), p => (string?)p.Element(W + "pPr")?.Element(W + "pStyle")?.Attribute(W + "val") == "TOC1");
+        // (part of an update: the document still asks Word for the rest)
+        Assert.True(AsksForUpdate(session));
+    }
+
+    [Fact]
     public void UF006_RefusedWhileChangesAreTracked()
     {
         using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(),

@@ -25,6 +25,9 @@ public sealed record UpdateFieldsOptions
     /// <c>PAGEREF</c> fields. The session has no page layout of its own. A paragraph missing from
     /// the map leaves a <c>PAGEREF</c> as it was and gives a contents entry page <c>1</c>.</summary>
     public IReadOnlyDictionary<string, string>? Pages { get; init; }
+
+    /// <summary>Only tables of contents (Word's Update Table); other fields are left as they are.</summary>
+    public bool TablesOfContentsOnly { get; init; }
 }
 
 public sealed partial class DocxSession
@@ -82,6 +85,7 @@ public sealed partial class DocxSession
                 RebuildTableOfContents(toc, PageOf);
             }
             InvalidateProjectionCache();
+            if (o.TablesOfContentsOnly) return new EditResult { Success = true };
 
             // 2. SEQ numbers, counted over the whole body even when only part is updated.
             var counters = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
