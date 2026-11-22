@@ -6550,7 +6550,7 @@ parsed at the host's offset, an explicit offset, or a `DateTimeOffset` from a C#
 Fix: `DocxSession.SetContentControlDate` writes the value's own calendar day, the one its default
 display text shows, as `yyyy-MM-ddT00:00:00Z`, and `DocxSessionOps.SetContentControlDate` parses an
 input without an offset as UTC so the host's time zone no longer matters. The default display text is
-still `yyyy-MM-dd` rather than the control's own format; that is tracked in a follow-up issue, because
+still `yyyy-MM-dd` rather than the control's own format; that is tracked in #1851, because
 the browser build has no localized month names. Tests: `ContentControlDateTests`.
 
 ## Raised inline text boxes can paint above the body margin
