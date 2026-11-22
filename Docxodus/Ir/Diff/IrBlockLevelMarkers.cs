@@ -494,11 +494,13 @@ internal static partial class IrMarkupRenderer
         if (op.AuthoredRows is not { } rows || op.ReviewerTables is not { } tables)
             return;
         XElement? RightRow(int reviewer, string? anchor) => anchor is null ? null : FindRowSource(reviewerIrs[reviewer], anchor);
+        IrTable? RevisedTable(int reviewer) => op.ControlPlacement is { } placement &&
+            placement.TableAnchors.TryGetValue(reviewer, out var anchor) ? ResolveBlock(anchor, reviewerIrs[reviewer]) as IrTable : null;
         var outputBaseRows = rows.Select(r => baseRows.GetValueOrDefault(r.BaseRowAnchor ?? "")).ToList();
         var outputRight = rows.Select(r => (r.SourceReviewer, r.Kind == IrRowOpKind.InsertRow
             ? RightRow(r.SourceReviewer, r.RightRowAnchor) : null)).ToList();
         var controls = emitted.Element(W.sdt) is not null && (original.Source.Element!.Elements().Any(IsBlockLevelMarker) ||
-            tables.Any(t => t.RevisedTable?.Source.Element?.Elements().Any(IsBlockLevelMarker) == true))
+            tables.Any(t => RevisedTable(t.Reviewer)?.Source.Element?.Elements().Any(IsBlockLevelMarker) == true))
             ? TopLevelRowlessControls(original).ToList() : null;
         if (controls is { Count: > 0 })
             foreach (var (left, placed) in controls.Zip(TopLevelRowlessControls(emitted)).Reverse())
@@ -516,7 +518,7 @@ internal static partial class IrMarkupRenderer
                 r.Kind == IrRowOpKind.MovedRow && r.IsMoveSource != true ? null : baseRows.GetValueOrDefault(r.LeftRowAnchor ?? ""),
                 r.Kind == IrRowOpKind.MovedRow && r.IsMoveSource == true ? null : RightRow(t.Reviewer, r.RightRowAnchor)))
                 .ToList();
-            if (plan is not null && t.RevisedTable is { } revised)
+            if (plan is not null && RevisedTable(t.Reviewer) is { } revised)
             {
                 foreach (var (left, right) in controls!.Zip(TopLevelRowlessControls(revised)).Reverse())
                     pairs.Insert(plan.EmptyControlPositions[right.Before], (left.Element, right.Element));
