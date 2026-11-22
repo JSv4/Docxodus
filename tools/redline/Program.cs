@@ -213,7 +213,7 @@ class Program
         Console.WriteLine("  --case-insensitive                 Ignore case differences");
         Console.WriteLine("  --detect-moves                     Enable move detection");
         Console.WriteLine("  --move-similarity-threshold=<val>  Jaccard threshold for move matching (default: 0.8)");
-        Console.WriteLine("  --minimum-anchor-word-count=<val>  Min words for a paragraph anchor (default: 0)");
+        Console.WriteLine("  --minimum-anchor-word-count=<val>  Words a paragraph needs to line the documents up (default: 0; use 2 when each entry starts with a one-word number label)");
         Console.WriteLine("  --move-minimum-word-count=<val>    Min words for move detection (default: 3)");
         Console.WriteLine("  --no-detect-format-changes         Disable formatting change detection");
         Console.WriteLine("  --no-conflate-spaces               Distinguish breaking/non-breaking spaces");
