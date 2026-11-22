@@ -50,7 +50,7 @@ public sealed partial class DocxSession
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (_trackedChanges == TrackedChangeMode.RenderInline)
-            return TrackedStructureUnsupported("UpdateFields", null);
+            return TrackedStructureUnsupported("UpdateFields", "");
         var o = options ?? new UpdateFieldsOptions();
         var main = _doc!.MainDocumentPart;
         var body = main?.GetXDocument().Root?.Element(W.body);
