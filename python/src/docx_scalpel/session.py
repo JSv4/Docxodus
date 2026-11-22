@@ -130,6 +130,9 @@ from .types import (
     TableInsertOptions,
     TableMetadataResult,
     TableRowOptions,
+    TablePropertiesOp,
+    CellPropertiesOp,
+    TablePropertiesInfo,
 )
 
 __all__ = [
@@ -2639,6 +2642,30 @@ class DocxSession:
             "heightTwips": options.height_twips,
             "heightRule": options.height_rule,
         }))
+
+    def set_table_properties(self, cell_anchor_id: str, op: TablePropertiesOp) -> EditResult:
+        """Word's Table Properties for the table containing the cell (or ``tbl``) anchor: its
+        preferred width, alignment, indent, default cell margins and alt text. One undo step."""
+        return EditResult._from_wire(self._call("set_table_properties", {
+            "cellAnchorId": cell_anchor_id, "op": op.to_wire(),
+        }))
+
+    def set_cell_properties(
+        self, cell_anchor_id: str, op: CellPropertiesOp, scope: str | None = None,
+    ) -> EditResult:
+        """The vertical alignment of the anchor's cell, or with ``scope`` ``"row"``,
+        ``"column"`` or ``"table"`` of every cell there (a merged cell covering the column
+        included). ``scope`` omitted takes ``"cell"``. One undo step."""
+        args: dict[str, Any] = {"cellAnchorId": cell_anchor_id, "op": op.to_wire()}
+        if scope is not None:
+            args["scope"] = scope
+        return EditResult._from_wire(self._call("set_cell_properties", args))
+
+    def get_table_properties(self, cell_anchor_id: str) -> TablePropertiesInfo | None:
+        """The Table Properties dialog's values for the cell's table, row and cell; None when
+        the anchor is not in a table."""
+        result = self._call("get_table_properties", {"cellAnchorId": cell_anchor_id})
+        return TablePropertiesInfo._from_wire(result) if result is not None else None
 
     def replace_cell_content(self, cell_anchor_id: str, markdown: str) -> EditResult:
         """Replace content of the canonical ``tc`` anchor. Legacy paragraph-in-cell anchors
