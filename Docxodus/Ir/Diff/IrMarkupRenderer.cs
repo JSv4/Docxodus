@@ -826,22 +826,22 @@ internal static partial class IrMarkupRenderer
     /// package supplies its own clones). A no-op when there are no media-bearing clones or no right main part.
     /// </summary>
     internal static void ImportRightSourcedMedia(
-        IReadOnlyList<XElement> rightClones, MainDocumentPart main, MainDocumentPart? rightMain,
+        IReadOnlyList<XElement> rightClones, OpenXmlPart outputPart, OpenXmlPart? sourcePart,
         OpenXmlMemoryStreamDocument leftStreamDoc, OpenXmlMemoryStreamDocument rightStreamDoc)
     {
-        if (rightMain == null || rightClones.Count == 0)
+        if (sourcePart == null || rightClones.Count == 0)
             return;
 
         // (1) Import hyperlink/external relationships (e.g. w:hyperlink/@r:id targets) the right clones reference
         // but the left package lacks — these are NOT parts, so the part-copy path below skips them; recreate them
         // with the SAME id where free so the cloned r:id resolves.
-        ImportHyperlinkAndExternalRelationships(rightClones.ToList(), main, rightMain);
+        ImportHyperlinkAndExternalRelationships(rightClones, outputPart, sourcePart);
 
         // (2) Import media PARTS (image embeds, diagram data) and remap their r:ids in place, using the stream
         // documents' own packages directly (the wrapper's package is the authoritative writable one — not the
         // reflection-based OpenXmlPackage.GetPackage()).
-        var leftPkgPart = leftStreamDoc.GetPackage().GetPart(main.Uri);
-        var rightPkgPart = rightStreamDoc.GetPackage().GetPart(rightMain.Uri);
+        var leftPkgPart = leftStreamDoc.GetPackage().GetPart(outputPart.Uri);
+        var rightPkgPart = rightStreamDoc.GetPackage().GetPart(sourcePart.Uri);
         // skipHeaderFooterReferences: a right-cloned Equal block can carry an inner w:sectPr whose
         // w:headerReference/w:footerReference r:ids would otherwise drag the RIGHT's header/footer parts in
         // as P<guid> duplicates. Those scopes are not diffed; the LEFT package's parts (same r:ids — shared
@@ -3196,15 +3196,17 @@ internal static partial class IrMarkupRenderer
                 state.IndexEditedMoves(blockOps.Select(block => block.Op));
                 for (int b = 0; b < blockOps.Count; b++)
                 {
-                    if (cellMarkers?.GetValueOrDefault(b) is { } before)
+                    if (cellMarkers?.Before(b) is { } before)
                         cellSink.AddRange(before);
                     var block = blockOps[b];
                     if (equalMarkers?[block.Op.LeftAnchor].ToList() is { Count: > 0 } markers)
                         block = block with { EqualReviewerMarkers = IrNodeList.From(
                             (block.EqualReviewerMarkers ?? IrNodeList.Empty<IrEqualReviewerMarkers>()).Concat(markers)) };
+                    int firstOutput = cellSink.Count;
                     renderOneCompositeBlock(block, baseIr, reviewerIrs, state, cellSink);
+                    cellMarkers?.PlaceInside(b, firstOutput, cellSink);
                 }
-                if (cellMarkers?.GetValueOrDefault(blockOps.Count) is { } trailing)
+                if (cellMarkers?.Before(blockOps.Count) is { } trailing)
                     cellSink.AddRange(trailing);
                 if (!cellSink.Any(IsBlockContent))
                 {
@@ -3521,20 +3523,8 @@ internal static partial class IrMarkupRenderer
         RenderState state, int clonesBefore, OpenXmlPart outputPart, OpenXmlPart? rightPart,
         OpenXmlMemoryStreamDocument leftStreamDoc, OpenXmlMemoryStreamDocument rightStreamDoc)
     {
-        if (rightPart is null)
-            return;
-        var noteClones = state.RightSourcedClones.Skip(clonesBefore).ToList();
-        if (noteClones.Count == 0)
-            return;
-
-        ImportHyperlinkAndExternalRelationships(noteClones, outputPart, rightPart);
-
-        var outPkgPart = leftStreamDoc.GetPackage().GetPart(outputPart.Uri);
-        var rightPkgPart = rightStreamDoc.GetPackage().GetPart(rightPart.Uri);
-        foreach (var clone in noteClones)
-            PackageMerge.MoveRelatedPartsToDestination(
-                rightPkgPart, outPkgPart, clone, skipDanglingRelationships: true,
-                skipHeaderFooterReferences: true);
+        ImportRightSourcedMedia(state.RightSourcedClones.Skip(clonesBefore).ToList(),
+            outputPart, rightPart, leftStreamDoc, rightStreamDoc);
     }
 
     // ----------------------------------------------------------------- header/footer story markup (2026-07-03)
@@ -9017,7 +9007,7 @@ internal static partial class IrMarkupRenderer
     /// when that id is free in the left part (the common case — ids rarely collide across the two documents).
     /// </summary>
     private static void ImportHyperlinkAndExternalRelationships(
-        List<XElement> rightClones, OpenXmlPart leftMain, OpenXmlPart rightMain)
+        IReadOnlyList<XElement> rightClones, OpenXmlPart leftMain, OpenXmlPart rightMain)
     {
         var leftHyper = leftMain.HyperlinkRelationships.ToDictionary(r => r.Id, StringComparer.Ordinal);
         var leftExternalIds = new HashSet<string>(leftMain.ExternalRelationships.Select(r => r.Id), StringComparer.Ordinal);
@@ -11281,7 +11271,7 @@ internal static partial class IrMarkupRenderer
     /// <summary>Rewrite every <c>@r:id</c> (any relationship-namespace attribute) on the right clones that
     /// currently reads <paramref name="oldId"/> to <paramref name="newId"/>, so the remapped relationship
     /// resolves. Scoped to the relationship namespace so only true r:id references are touched.</summary>
-    private static void RewriteReferenceId(List<XElement> rightClones, string oldId, string newId)
+    private static void RewriteReferenceId(IReadOnlyList<XElement> rightClones, string oldId, string newId)
     {
         foreach (var clone in rightClones)
             foreach (var attr in clone.DescendantsAndSelf().Attributes().Where(a => a.Name.Namespace == R.r))
