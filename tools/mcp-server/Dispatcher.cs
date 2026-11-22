@@ -1731,10 +1731,12 @@ internal static partial class Dispatcher
                 break;
             case ("docxodus_table", "set_properties"):
                 RequireStrings(args, "cellAnchorId");
+                _ = DocxSessionJson.ParseTablePropertiesOp(RawObject(args, "op"));
                 break;
             case ("docxodus_table", "set_cell_properties"):
                 RequireStrings(args, "cellAnchorId");
                 ValidateOptionalEnum(args, "scope", "cell", "row", "column", "table");
+                _ = DocxSessionJson.ParseCellPropertiesOp(RawObject(args, "op"));
                 break;
             case ("docxodus_table", "get_properties"):
                 RequireStrings(args, "cellAnchorId");
