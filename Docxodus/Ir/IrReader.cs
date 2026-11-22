@@ -994,6 +994,14 @@ internal static class IrReader
     // attributes have already been removed. Keep opaque descendant markup untouched.
     private static void NormalizeEnvelopeAnnotations(XElement container)
     {
+        // An endpoint may divide a run between any two supported children. Make that physical
+        // division immaterial, retaining each child's order and the run properties it inherits.
+        foreach (var run in container.Elements(W + "r").Where(IsPlainTextRun).ToList())
+        {
+            var payload = run.Elements().Where(e => e.Name != W + "rPr" && e.Name != W + "commentReference").ToList();
+            if (payload.Count > 1)
+                run.ReplaceWith(payload.Select(e => new XElement(run.Name, run.Attributes(), run.Element(W + "rPr"), e)).ToArray());
+        }
         XElement? firstRun = null;
         System.Text.StringBuilder? joined = null;
         void Flush()
@@ -1370,7 +1378,7 @@ internal static class IrReader
         W + "softHyphen", W + "sym", W + "lastRenderedPageBreak", W + "commentReference",
     };
 
-    private static bool IsPlainTextRun(XElement element) =>
+    internal static bool IsPlainTextRun(XElement element) =>
         element.Name == W + "r" &&
         element.Elements().All(child => PlainRunChildNames.Contains(child.Name));
 

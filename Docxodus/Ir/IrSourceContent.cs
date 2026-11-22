@@ -11,12 +11,12 @@ namespace Docxodus.Ir;
 /// </summary>
 internal sealed record IrSourceContent(IReadOnlyList<IrSourceContent.Entry> Entries)
 {
-    internal Dictionary<XElement, int> TextWidths()
+    internal Dictionary<XElement, int> PlacementWidths()
     {
         var widths = new Dictionary<XElement, int>();
         foreach (var entry in Entries)
-            if (entry.TextLength > 0)
-                widths[entry.Source] = widths.GetValueOrDefault(entry.Source) + entry.TextLength;
+            if (entry.TextLength > 0 || entry.Atomic)
+                widths[entry.Source] = widths.GetValueOrDefault(entry.Source) + entry.TextLength + (entry.Atomic ? 1 : 0);
         return widths;
     }
 

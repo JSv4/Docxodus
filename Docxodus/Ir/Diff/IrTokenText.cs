@@ -1,11 +1,28 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Docxodus.Ir.Diff;
 
 /// <summary>Character coordinates and exact source text for aligned token spans.</summary>
 internal static class IrTokenText
 {
+    /// <summary>Internal source positions give each atomic token one unit between its boundaries.
+    /// Public character offsets continue to count only text.</summary>
+    internal static IReadOnlyList<IrDiffToken> PlacementTokens(IrParagraph paragraph, IrDiffSettings settings)
+    {
+        var tokens = IrDiffTokenizer.Tokenize(paragraph, settings);
+        if (paragraph.Source.Element?.Annotation<IrSourceContent>() is not { } source || !source.Entries.Any(e => e.Atomic))
+            return tokens;
+        int atoms = 0;
+        return tokens.Select(token =>
+        {
+            int start = token.StartChar + atoms;
+            if (token.Kind is not (IrDiffTokenKind.Word or IrDiffTokenKind.Separator)) atoms++;
+            return token with { StartChar = start, EndChar = token.EndChar + atoms };
+        }).ToArray();
+    }
+
     /// <summary>An Equal or FormatChanged span whose raw text is identical on both sides: it emits the revision's
     /// runs unwrapped.</summary>
     internal static bool KeepsTextUnchanged(

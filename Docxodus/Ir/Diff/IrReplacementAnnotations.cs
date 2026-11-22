@@ -10,11 +10,11 @@ internal static class IrReplacementAnnotations
 {
     internal static IEnumerable<(XElement Element, int Offset)> Markers(XElement paragraph)
     {
-        // Count precisely the leaves contributing to the paragraph's IR character coordinates.
-        // Text in an opaque child, field code or nested textbox belongs to another stream.
+        // A tab or image occupies one placement unit. Its enclosed text, if any, belongs to
+        // another stream, just as in the aligned token spans.
         if (paragraph.Annotation<IrSourceContent>() is not { } source)
             yield break;
-        var lengths = source.TextWidths();
+        var lengths = source.PlacementWidths();
         int offset = 0;
         foreach (var element in paragraph.Descendants())
         {
@@ -33,8 +33,8 @@ internal static class IrReplacementAnnotations
             winner.SourceReviewer < 0 || original.AnchorIndex.GetValueOrDefault(la) is not IrParagraph left ||
             documents[winner.SourceReviewer].Ir.AnchorIndex.GetValueOrDefault(ra) is not IrParagraph right)
             return reviewers;
-        var lt = IrDiffTokenizer.Tokenize(left, settings);
-        var rt = IrDiffTokenizer.Tokenize(right, settings);
+        var lt = IrTokenText.PlacementTokens(left, settings);
+        var rt = IrTokenText.PlacementTokens(right, settings);
         var spans = new List<(int Start, int End, int Shift)>();
         foreach (var op in diff.Ops)
         {

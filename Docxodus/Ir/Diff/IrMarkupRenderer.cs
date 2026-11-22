@@ -5637,7 +5637,10 @@ internal static partial class IrMarkupRenderer
         var insertions = new Dictionary<int, List<XElement>>();
         var comments = copy.Descendants().Where(IsCommentMarker)
             .Select(m => (m.Name, (string?)m.Attribute(W.id))).ToHashSet();
-        var bookmarks = copy.Descendants(W.bookmarkStart).Select(e => (string?)e.Attribute(W.name)).ToHashSet();
+        var unselected = state.CompositeBookmarks is { } plan
+            ? copy.Descendants().Where(m => !plan.Allows(state.RightSourceId, m)).ToHashSet() : null;
+        var bookmarks = copy.Descendants(W.bookmarkStart).Where(m => unselected?.Contains(m) != true)
+            .Select(e => (string?)e.Attribute(W.name)).ToHashSet();
         state.BaseBookmarkNames ??= BodyBookmarkNames(baseIr);
         var savedAuthor = state.AuthorOverride;
         foreach (var reviewer in reviewers)
@@ -5670,12 +5673,14 @@ internal static partial class IrMarkupRenderer
                 if (marker.Name == W.commentReference)
                     content = new XElement(W.r, marker.Parent?.Element(W.rPr), content);
                 var revision = new XElement(W.ins, state.RevisionAttributes(), content);
-                (state.ReplacementMarkerRevisions ??= new()).Add(revision.Attribute(W.id)!.Value);
+                (state.ReplacementMarkerOwners ??= new()).Add(revision.Attribute(W.id)!.Value, reviewer.Reviewer);
                 at.Add(revision);
             }
         }
         state.AuthorOverride = savedAuthor;
         PlaceOnCopy(winner, copy, insertions);
+        if (unselected is not null)
+            foreach (var marker in unselected) RemoveBookmarkMarker(marker);
         return copy;
     }
 
@@ -5684,7 +5689,7 @@ internal static partial class IrMarkupRenderer
     private static void PlaceOnCopy(XElement source, XElement copy, Dictionary<int, List<XElement>> insertions)
     {
         if (insertions.Count == 0 || source.Annotation<IrSourceContent>() is not { } content) return;
-        var widths = content.TextWidths();
+        var widths = content.PlacementWidths();
         var leaves = new List<(XElement Copy, int Start, int End)>();
         int end = 0;
         // Source and copy are still identical trees. Only the reader decides which leaves belong
@@ -5707,39 +5712,54 @@ internal static partial class IrMarkupRenderer
             bool hasStart = revisions.Any(r => r.Element(W.bookmarkStart) is not null || r.Element(W.commentRangeStart) is not null);
             while (index > 0 && (offset < leaves[index].Start || offset == leaves[index].Start && !hasStart)) index--;
             var (leaf, start, limit) = leaves[index];
-            var run = leaf.Parent!;
-            bool afterLeaf = offset >= limit;
-            var tail = leaf.ElementsAfterSelf().ToList();
-            if (offset > start && !afterLeaf && leaf.Name == W.t)
+            InsertAtSourceLeaf(leaf, offset - start, limit - start, revisions);
+        }
+    }
+
+    private static void InsertAtSourceLeaf(XElement leaf, int at, int width, IEnumerable<XElement> revisions, Func<int>? nextId = null)
+    {
+        var run = leaf.Parent!;
+        bool afterLeaf = at >= width;
+        if (run.Name != W.r)
+        {
+            // A paragraph-level atomic carrier (such as AlternateContent) stays intact.
+            if (afterLeaf) leaf.AddAfterSelf(revisions);
+            else leaf.AddBeforeSelf(revisions);
+            return;
+        }
+        var tail = leaf.ElementsAfterSelf().ToList();
+        if (at > 0 && !afterLeaf && leaf.Name == W.t)
+        {
+            var suffix = new XElement(leaf);
+            suffix.Value = leaf.Value[at..];
+            leaf.Value = leaf.Value[..at];
+            foreach (var t in new[] { leaf, suffix }) t.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+            tail.Insert(0, suffix);
+        }
+        else if (!afterLeaf) tail.Insert(0, leaf);
+        if (tail.Count == 0)
+            run.AddAfterSelf(revisions);
+        else if (tail[0] == run.Elements().First(e => e.Name != W.rPr))
+            run.AddBeforeSelf(revisions);
+        else
+        {
+            var rest = new XElement(W.r, run.Attributes(), run.Element(W.rPr));
+            if (nextId is not null)
+                foreach (var change in rest.Descendants(W.rPrChange))
+                    change.SetAttributeValue(W.id, nextId());
+            foreach (var child in tail)
             {
-                var suffix = new XElement(leaf);
-                suffix.Value = leaf.Value[(offset - start)..];
-                leaf.Value = leaf.Value[..(offset - start)];
-                foreach (var t in new[] { leaf, suffix }) t.SetAttributeValue(XNamespace.Xml + "space", "preserve");
-                tail.Insert(0, suffix);
+                if (child.Parent is not null) child.Remove();
+                rest.Add(child);
             }
-            else if (!afterLeaf) tail.Insert(0, leaf);
-            if (tail.Count == 0)
-                run.AddAfterSelf(revisions);
-            else if (tail[0] == run.Elements().First(e => e.Name != W.rPr))
-                run.AddBeforeSelf(revisions);
-            else
-            {
-                var rest = new XElement(W.r, run.Attributes(), run.Element(W.rPr));
-                foreach (var child in tail)
-                {
-                    if (child.Parent is not null) child.Remove();
-                    rest.Add(child);
-                }
-                run.AddAfterSelf(revisions, rest);
-            }
+            run.AddAfterSelf(revisions, rest);
         }
     }
 
     // An annotation placed on the fresh copy already carries its own reviewer's insertion.
     private static bool IsComposedAnnotationRevision(XElement child, RenderState state) =>
-        state.ReplacementMarkerRevisions is { } markers && child.Name == W.ins &&
-        (string?)child.Attribute(W.id) is { } id && markers.Contains(id);
+        state.ReplacementMarkerOwners is { } markers && child.Name == W.ins &&
+        (string?)child.Attribute(W.id) is { } id && markers.ContainsKey(id);
 
     /// <summary>A block is copied from only one source. Preserve missing comment markers from a counterpart
     /// with the same text at their source offsets, including their order at a shared offset. Common comments stay
@@ -5889,20 +5909,20 @@ internal static partial class IrMarkupRenderer
                 if ((revision.Name == W.rPrChange || revision.Name == W.ins || revision.Name == W.del) && revision.Attribute(W.id) is not null)
                     revision.SetAttributeValue(W.id, nextId());
         }
-        // Split a plain one-text run at split characters, the marker between its halves.
-        void SplitRun(XElement run, int split)
+        bool InsertInRun(XElement run, int offsetInRun)
         {
-            var text = run.Elements().First(e => e.Name != W.rPr);
-            var tail = new XElement(run);
-            Renumber(tail);
-            text.Value = text.Value[..split];
-            tail.Elements().First(e => e.Name != W.rPr).Value = tail.Elements().First(e => e.Name != W.rPr).Value[split..];
-            foreach (var t in new[] { text, tail.Elements().First(e => e.Name != W.rPr) })
-                t.SetAttributeValue(XNamespace.Xml + "space", "preserve");
-            run.AddAfterSelf(marker, tail);
+            if (!IrReader.IsPlainTextRun(run)) return false;
+            foreach (var text in run.Elements(W.t))
+            {
+                if (offsetInRun < text.Value.Length)
+                {
+                    InsertAtSourceLeaf(text, offsetInRun, text.Value.Length, new[] { marker }, nextId);
+                    return true;
+                }
+                offsetInRun -= text.Value.Length;
+            }
+            return false;
         }
-        static bool PlainRun(XElement run) => run.Name == W.r &&
-            run.Elements().Where(e => e.Name != W.rPr).ToList() is { Count: 1 } content && content[0].Name == W.t;
         bool end = originalView && (marker.Name == W.bookmarkEnd || marker.Name == W.commentRangeEnd ||
             marker.Element(W.commentReference) is not null);
         bool start = marker.Name == W.bookmarkStart || marker.Name == W.commentRangeStart;
@@ -5947,11 +5967,8 @@ internal static partial class IrMarkupRenderer
                     marker, offset - seen, originalView, nextId);
                 return;
             }
-            if (offset < seen + length && PlainRun(child))
-            {
-                SplitRun(child, offset - seen);
+            if (offset < seen + length && InsertInRun(child, offset - seen))
                 return;
-            }
             // Inside an insertion's plain run, in the view that shows it: the insertion is split in two around the marker.
             if (!originalView && nextId is not null && offset < seen + length && child.Name == W.ins)
             {
@@ -5960,14 +5977,12 @@ internal static partial class IrMarkupRenderer
                 {
                     int runLength = run.Descendants(W.t).Sum(t => t.Value.Length);
                     bool between = offset - seen == inside && inside > 0;
-                    if (between || offset - seen < inside + runLength && PlainRun(run) && offset - seen > inside)
+                    if (between || offset - seen > inside && offset - seen < inside + runLength && InsertInRun(run, offset - seen - inside))
                     {
                         var second = new XElement(W.ins, child.Attributes());
                         Renumber(second);
                         if (between)
                             run.AddBeforeSelf(marker);
-                        else
-                            SplitRun(run, offset - seen - inside);
                         var moved = marker.ElementsAfterSelf().ToList();
                         foreach (var node in moved)
                             node.Remove();
@@ -11862,19 +11877,7 @@ internal static partial class IrMarkupRenderer
     private static IReadOnlyList<IrDiffToken> ParagraphRenderTokens(string? anchor, IrDocument doc, IrDiffSettings settings)
     {
         if (anchor != null && doc.AnchorIndex.TryGetValue(anchor, out var block) && block is IrParagraph p)
-        {
-            var tokens = IrDiffTokenizer.Tokenize(p, settings);
-            if (p.Source.Element?.Annotation<IrSourceContent>() is not { } source || !source.Entries.Any(entry => entry.Atomic)) return tokens;
-            // Renderer-private positions: text retains its width and each atomic token occupies one unit.
-            // Convert the full paragraph before SubTokens so every slice retains its original positions.
-            int atoms = 0;
-            return tokens.Select(token =>
-            {
-                int start = token.StartChar + atoms;
-                if (token.Kind is not (IrDiffTokenKind.Word or IrDiffTokenKind.Separator)) atoms++;
-                return token with { StartChar = start, EndChar = token.EndChar + atoms };
-            }).ToArray();
-        }
+            return IrTokenText.PlacementTokens(p, settings);
         return Array.Empty<IrDiffToken>();
     }
 
@@ -11990,7 +11993,7 @@ internal static partial class IrMarkupRenderer
         /// <summary>Per-reviewer paragraph alignment and base comment ownership, supplied by the merger.</summary>
         internal IrNodeList<IrReviewerComparison>? ReviewerComparisons { get; init; }
         // Reviewer-owned marker revisions in the whole paragraph currently being emitted.
-        internal HashSet<string>? ReplacementMarkerRevisions { get; set; }
+        internal Dictionary<string, int>? ReplacementMarkerOwners { get; set; }
 
         public CompositeBookmarkPlan? CompositeBookmarks { get; set; }
 
@@ -12245,8 +12248,14 @@ internal static partial class IrMarkupRenderer
         public void RegisterMediaReferences(XElement clone)
         {
             if (CompositeBookmarks is { } bookmarks)
-                foreach (var marker in clone.DescendantsAndSelf().Where(e => bookmarks.Includes(RightSourceId, e)))
-                    CompositeBookmarkClones.TryAdd(marker, RightSourceId);
+                foreach (var marker in clone.DescendantsAndSelf().Where(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd))
+                {
+                    int owner = RightSourceId;
+                    if (ReplacementMarkerOwners is { } carried && marker.Parent?.Name == W.ins &&
+                        (string?)marker.Parent.Attribute(W.id) is { } id && carried.TryGetValue(id, out int reviewer))
+                        owner = reviewer;
+                    if (bookmarks.Includes(owner, marker)) CompositeBookmarkClones.TryAdd(marker, owner);
+                }
             if (clone.DescendantsAndSelf().Attributes().Any(a => a.Name.Namespace == R.r))
             {
                 if (!RightSourcedClonesBySource.TryGetValue(RightSourceId, out var list))

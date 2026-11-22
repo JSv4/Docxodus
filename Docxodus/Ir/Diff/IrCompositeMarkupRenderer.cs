@@ -716,7 +716,7 @@ internal static class IrCompositeMarkupRenderer
                 IrMarkupRenderer.SourceElement(op.RightAnchor, state.RightSource) is { } winner)
                 replacement = IrMarkupRenderer.PrepareReplacementCopy(winner, markers, baseIr, reviewerIrs, state);
             IrMarkupRenderer.RenderBlockOp(op, state, sink, replacement);
-            if (replacement is not null) state.ReplacementMarkerRevisions = null;
+            if (replacement is not null) state.ReplacementMarkerOwners = null;
         }
         // The reviewers who left this block's text equal but added comments or bookmarks: carried into the base's copy,
         // or into another reviewer's edit of a paragraph (or its formatting) at their original-view offsets (issue #1812).

@@ -286,6 +286,82 @@ public class ConsolidateReviewerMarkerTests
         }
     }
 
+    [Theory]
+    [MemberData(nameof(Orders))]
+    public void A_consensus_bookmark_keeps_its_selected_reviewer_on_a_replacement(ConflictResolution policy, bool editorFirst)
+    {
+        var original = PaymentTerm(true, "thirty days", null);
+        var expected = PaymentTerm(true, "forty days", "bookmark");
+        var reviewers = InOrder(editorFirst, expected, PaymentTerm(true, "thirty days", "bookmark"));
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+        var raw = DocxCompare.Consolidate(original, reviewers, settings);
+        var accepted = RevisionProcessor.AcceptRevisions(raw);
+        var rejected = RevisionProcessor.RejectRevisions(raw);
+        Assert.Equal(View(expected), View(accepted));
+        Assert.Equal(View(original), View(rejected));
+        var start = Assert.Single(Body(raw).Descendants(W + "bookmarkStart"));
+        Assert.Equal(reviewers[0].Author, start.Ancestors(W + "ins").First().Attribute(W + "author")!.Value);
+        Assert.Empty(DocxDiff.GetConflicts(original, reviewers, settings));
+        AssertValid(raw, accepted, rejected);
+    }
+
+    [Theory]
+    [InlineData("tab")]
+    [InlineData("picture")]
+    public void A_range_around_an_unchanged_atomic_run_keeps_its_contents(string shape)
+    {
+        string atom = shape == "tab" ? "<w:r><w:tab/></w:r>" :
+            "<w:r><w:pict><v:shape xmlns:v='urn:schemas-microsoft-com:vml' id='pic' style='width:10pt;height:10pt'>" +
+            "<v:imagedata r:id='rIdPic'/></v:shape></w:pict></w:r>";
+        WmlDocument Make(string term, bool marked)
+        {
+            string value = marked ? "<w:bookmarkStart w:id='6' w:name='Shelf'/>" + atom + "<w:bookmarkEnd w:id='6'/>" : atom;
+            string body = P("Cash ", value, "Payment is due within ", "<w:sdt><w:sdtPr><w:alias w:val='Term'/></w:sdtPr><w:sdtContent>" +
+                Run(term) + "</w:sdtContent></w:sdt>", " of the invoice date.") + P("Late payments accrue interest.");
+            return shape == "tab" ? Doc(body) : IrTestDocuments.FromBodyXmlWithImageParts(body, ("rIdPic", IrTestDocuments.TinyPng));
+        }
+        var original = Make("thirty days", false);
+        foreach (var order in Orders())
+        {
+            var reviewers = InOrder((bool)order[1], Make("forty days", false), Make("thirty days", true));
+            var accepted = AssertMerged(original, Make("forty days", true), (ConflictResolution)order[0], reviewers);
+            var marks = Body(accepted).Descendants().Where(e => e.Name == W + "bookmarkStart" ||
+                e.Name == W + "bookmarkEnd" || e.Name == W + (shape == "tab" ? "tab" : "pict"));
+            Assert.Equal(new[] { "bookmarkStart", shape == "tab" ? "tab" : "pict", "bookmarkEnd" }, marks.Select(e => e.Name.LocalName));
+        }
+    }
+
+    [Theory]
+    [InlineData("two-texts")]
+    [InlineData("tab-between")]
+    [InlineData("plain")]
+    public void Annotation_only_run_divisions_keep_the_control_envelope(string shape)
+    {
+        string tab = shape == "tab-between" ? "<w:tab/>" : "";
+        string left = shape == "plain" ? Run("Alpha beta") :
+            "<w:r><w:t xml:space='preserve'>Alpha </w:t>" + tab + "<w:t>beta</w:t></w:r>";
+        string right = "<w:r><w:t xml:space='preserve'>Alpha </w:t>" + tab + "</w:r>" + Marked("beta");
+        WmlDocument Make(string contents) => Doc(P("Invoice ", "<w:sdt><w:sdtPr><w:alias w:val='Term'/></w:sdtPr><w:sdtContent>" +
+            contents + "</w:sdtContent></w:sdt>", " ends here."));
+        var original = Make(left);
+        var reviewer = Make(right);
+        var reviewers = new[] { new DocxDiffReviewer { Author = "B", Document = reviewer } };
+        Assert.Empty(DocxDiff.GetRevisions(original, reviewer));
+        Assert.Empty(DocxDiff.GetConsolidatedRevisions(original, reviewers));
+        var changes = DocxDiff.GetSemanticChanges(original, reviewer).Changes;
+        Assert.Contains(changes, c => c.Family == SemanticChangeFamily.Bookmark);
+        Assert.DoesNotContain(changes, c => c.Family is SemanticChangeFamily.Text or SemanticChangeFamily.BlockStructure or SemanticChangeFamily.ContentControl);
+        foreach (var raw in new[] { DocxCompare.Compare(original, reviewer), DocxCompare.Consolidate(original, reviewers) })
+        {
+            var accepted = RevisionProcessor.AcceptRevisions(raw);
+            var rejected = RevisionProcessor.RejectRevisions(raw);
+            Assert.Single(Body(raw).Descendants(W + "sdt"));
+            Assert.Equal(View(reviewer), View(accepted));
+            Assert.Equal(View(original), View(rejected));
+            AssertValid(raw, accepted, rejected);
+        }
+    }
+
     public static IEnumerable<object[]> Orders() =>
         from policy in new[] { ConflictResolution.BaseWins, ConflictResolution.FirstReviewerWins, ConflictResolution.StackAll }
         from editorFirst in new[] { true, false }
