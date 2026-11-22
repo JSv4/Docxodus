@@ -627,7 +627,7 @@ internal static class ToolCatalog
                 "text": { "type": "string", "description": "fill_text payload." },
                 "markdown": { "type": "string", "description": "fill_rich_text payload." },
                 "checked": { "type": "boolean", "description": "set_checked value." },
-                "value": { "type": "string", "description": "set_date ISO-8601 value or select_item value/display text." },
+                "value": { "type": "string", "description": "set_date ISO-8601 date or timestamp (its calendar day is stored at midnight UTC; the time of day is not kept) or select_item value/display text." },
                 "displayText": { "type": "string", "description": "Optional set_date displayed text." },
                 "imageBase64": { "type": "string", "description": "fill_picture raw image bytes as base64." },
                 "sectionAnchorId": { "type": "string", "description": "add_repeating_item section control." },

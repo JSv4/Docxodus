@@ -1,6 +1,8 @@
 #nullable enable
 
+using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace Docxodus.Internal;
@@ -1156,8 +1158,9 @@ internal static class DocxSessionOps
     public static string SetContentControlDate(int handle, string anchorId, string value,
         string? displayText, string optionsJson)
     {
-        if (!System.DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+        // The session stores the date as written, so an input without an offset needs none
+        // from the host.
+        if (!DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed))
             return DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidContentControlValue,
                 "date value must be an ISO-8601 timestamp", anchorId));
         return ContentControlOptions(anchorId, optionsJson, options =>
