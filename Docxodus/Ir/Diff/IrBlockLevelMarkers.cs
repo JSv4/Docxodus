@@ -611,6 +611,7 @@ internal static partial class IrMarkupRenderer
     {
         CarryReviewerInlineMarkers(emitted, counterparts.Select(c =>
             (c.Reviewer, c.Counterpart, authors[c.Reviewer])).ToList(), state.Left, baseSource, state);
+        ApplyCopiedCommentAttachments(emitted, baseSource, state);
         var placement = new CompositeMarkerPlacement(state);
         var streams = new Dictionary<XElement, XElement>(ReferenceEqualityComparer.Instance); // emitted -> base
         foreach (var (reviewer, counterpart) in counterparts)
@@ -668,6 +669,7 @@ internal static partial class IrMarkupRenderer
     /// </summary>
     internal static bool ReconcileEqualContainerMarkers(XElement emitted, XElement? left, XElement? right, RenderState state)
     {
+        ApplyCopiedCommentAttachments(emitted, left, state);
         if (left is null || right is null || ReferenceEquals(left, right) ||
             !HasMarkerBetweenBlocks(left) && !HasMarkerBetweenBlocks(right))
             return false;
