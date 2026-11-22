@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using Docxodus.Verification;
 using Xunit;
 
 namespace Docxodus.Tests.Ir.Diff;
@@ -103,10 +104,384 @@ public class ConsolidateReviewerMarkerTests
         }
     }
 
+    private static WmlDocument PaymentTerm(bool controlled, string term, string? annotation, bool inside = false, bool partial = false)
+    {
+        string Annotate(string text) => annotation switch
+        {
+            "comment" => Commented(text),
+            "bookmark" => Marked(text),
+            _ => Run(text),
+        };
+        string value = inside && partial && annotation is not null
+            ? Annotate(term[..term.IndexOf(' ')]) + Run(term[term.IndexOf(' ')..])
+            : inside ? Annotate(term) : Run(term);
+        if (controlled)
+            value = "<w:sdt><w:sdtPr><w:alias w:val='Term'/></w:sdtPr><w:sdtContent>" + value + "</w:sdtContent></w:sdt>";
+        string xml = P(inside ? Run("Payment") : Annotate("Payment"), " is due within ", value, " of the invoice date.") +
+            P("Late payments accrue interest.");
+        return annotation == "comment" ? CommentDoc(xml) : Doc(xml);
+    }
+
+    [Theory]
+    [InlineData(true, "comment", false)]
+    [InlineData(true, "bookmark", false)]
+    [InlineData(true, "comment", true)]
+    [InlineData(true, "bookmark", true)]
+    [InlineData(true, "comment", true, true)]
+    [InlineData(true, "bookmark", true, true)]
+    [InlineData(false, "comment", false)]
+    [InlineData(false, "bookmark", false)]
+    public void An_annotation_keeps_the_paragraph_and_its_inline_control(bool controlled, string annotation, bool inside, bool partial = false)
+    {
+        var original = PaymentTerm(controlled, "thirty days", null, inside, partial);
+        var reviewed = PaymentTerm(controlled, "thirty days", annotation, inside, partial);
+        Assert.Empty(DocxDiff.GetRevisions(original, reviewed));
+        var changes = DocxDiff.GetSemanticChanges(original, reviewed).Changes;
+        Assert.Contains(changes, c => c.Family == (annotation == "comment" ? SemanticChangeFamily.Comment : SemanticChangeFamily.Bookmark));
+        Assert.DoesNotContain(changes, c => c.Family is SemanticChangeFamily.Text or SemanticChangeFamily.BlockStructure or SemanticChangeFamily.ContentControl);
+        var reviewers = new[] { new DocxDiffReviewer { Author = "Reviewer B", Document = reviewed } };
+        Assert.Empty(DocxDiff.GetConsolidatedRevisions(original, reviewers));
+        foreach (var (product, redline) in new[] { ("Compare", DocxCompare.Compare(original, reviewed)), ("Consolidate", DocxCompare.Consolidate(original, reviewers)) })
+        {
+            var accepted = RevisionProcessor.AcceptRevisions(redline);
+            var rejected = RevisionProcessor.RejectRevisions(redline);
+            Assert.DoesNotContain(Body(redline).Descendants(), e => e.Name == W + "delText" ||
+                (e.Name == W + "ins" && e.Descendants(W + "t").Any()));
+            Assert.Equal(View(reviewed), View(accepted));
+            Assert.True(View(original) == View(rejected), $"Rejecting {product} gave {View(rejected)}");
+            Assert.All(new[] { redline, accepted, rejected }, doc =>
+                Assert.Equal(controlled ? 1 : 0, Body(doc).Descendants(W + "sdt").Count()));
+            if (annotation == "comment")
+                Assert.Equal(CommentTexts(reviewed), CommentTexts(accepted));
+            AssertValid(redline, accepted, rejected);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Orders))]
+    public void An_annotation_beside_an_edited_inline_control_composes(ConflictResolution policy, bool editorFirst)
+    {
+        var original = PaymentTerm(true, "thirty days", null);
+        var editor = PaymentTerm(true, "forty days", null);
+        foreach (var annotation in new[] { "bookmark", "comment" })
+        {
+            var reviewer = PaymentTerm(true, "thirty days", annotation);
+            var expected = PaymentTerm(true, "forty days", annotation);
+            var reviewers = InOrder(editorFirst, editor, reviewer);
+            var accepted = AssertMerged(original, expected, policy, reviewers);
+            var revisions = DocxDiff.GetConsolidatedRevisions(original, reviewers, new DocxDiffConsolidateSettings { ConflictResolution = policy });
+            Assert.NotEmpty(revisions);
+            Assert.All(revisions, revision => Assert.Equal("Reviewer A", revision.Author));
+            Assert.Equal("forty days", Assert.Single(Body(accepted).Descendants(W + "sdtContent")).Value);
+            Assert.Equal(CommentTexts(expected), CommentTexts(accepted));
+        }
+    }
+
+    [Theory]
+    [InlineData("hyphen", "comment")]
+    [InlineData("hyphen", "bookmark")]
+    [InlineData("textbox", "comment")]
+    [InlineData("textbox", "bookmark")]
+    [InlineData("mixed", "comment")]
+    [InlineData("mixed", "bookmark")]
+    [InlineData("plain", "collapsed")]
+    [InlineData("plain", "comment")]
+    public void Replacement_ranges_use_the_winning_paragraphs_source_boundaries(string prefix, string annotation)
+    {
+        var leading = prefix switch
+        {
+            "hyphen" => "<w:r><w:t>Non</w:t><w:noBreakHyphen/><w:t>cash </w:t></w:r>",
+            "textbox" => "<w:r><w:pict><v:shape xmlns:v='urn:schemas-microsoft-com:vml' id='box'><v:textbox>" +
+                         "<w:txbxContent>" + P("Separate text stream") + "</w:txbxContent></v:textbox></v:shape></w:pict></w:r>",
+            _ => Run("Cash "),
+        };
+        WmlDocument Make(string term, string? mark)
+        {
+            string payment = mark switch
+            {
+                "comment" => Commented("Payment"),
+                "bookmark" => Marked("Payment"),
+                "collapsed" => "<w:bookmarkStart w:id='6' w:name='Shelf'/><w:bookmarkEnd w:id='6'/>" + Run("Payment"),
+                _ => Run("Payment"),
+            };
+            var beforeTerm = prefix == "mixed" && mark is null
+                ? "<w:r><w:t>Cash </w:t><w:softHyphen/><w:t>Invoices due. Payment is due within </w:t></w:r>"
+                : (prefix == "mixed" ? Run("Cash ") + "<w:r><w:softHyphen/></w:r>" : leading) +
+                  Run("Invoices due. ") + payment + Run(" is due within ");
+            var body = P(beforeTerm,
+                "<w:sdt><w:sdtPr><w:alias w:val='Term'/></w:sdtPr><w:sdtContent>" + Run(term) + "</w:sdtContent></w:sdt>",
+                " of the invoice date.") + P("Late payments accrue interest.");
+            return mark == "comment" ? CommentDoc(body) : Doc(body);
+        }
+        var original = Make("thirty days", null);
+        var expected = Make("forty days", annotation);
+        foreach (var order in Orders())
+        {
+            var reviewers = InOrder((bool)order[1], Make("forty days", null), Make("thirty days", annotation));
+            var settings = new DocxDiffConsolidateSettings { ConflictResolution = (ConflictResolution)order[0] };
+            var raw = DocxCompare.Consolidate(original, reviewers, settings);
+            var accepted = RevisionProcessor.AcceptRevisions(raw);
+            var rejected = RevisionProcessor.RejectRevisions(raw);
+            Assert.Equal(View(expected), View(accepted));
+            Assert.Equal(View(original), View(rejected));
+            Assert.Empty(DocxDiff.GetConflicts(original, reviewers, settings));
+            AssertValid(raw, accepted, rejected);
+            if (annotation == "comment")
+            {
+                AssertRangesInOrder(raw, accepted);
+                Assert.Equal(CommentTexts(expected), CommentTexts(accepted));
+            }
+            else
+            {
+                foreach (var doc in new[] { raw, accepted })
+                {
+                    var endpoints = Body(doc).Descendants().Where(e => e.Name == W + "bookmarkStart" || e.Name == W + "bookmarkEnd").ToList();
+                    Assert.Equal(new[] { W + "bookmarkStart", W + "bookmarkEnd" }, endpoints.Select(e => e.Name));
+                    Assert.Equal(endpoints[0].Attribute(W + "id")!.Value, endpoints[1].Attribute(W + "id")!.Value);
+                }
+            }
+            Assert.All(DocxDiff.GetConsolidatedRevisions(original, reviewers, settings),
+                revision => Assert.Equal("Reviewer A", revision.Author));
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_replaced_note_paragraph_keeps_its_references_defined(bool footnote)
+    {
+        string kind = footnote ? "footnote" : "endnote";
+        string body = P("The register lists every loan.", "<w:r><w:" + kind + "Reference w:id='1'/></w:r>");
+        WmlDocument Make(string term, string next, bool comment)
+        {
+            string note = "<w:" + kind + " w:id='1'>" + P(comment ? Commented("Payment") : Run("Payment"),
+                " is due within ", "<w:sdt><w:sdtPr><w:alias w:val='Term'/></w:sdtPr><w:sdtContent>" +
+                Run(term) + "</w:sdtContent></w:sdt>", " of the invoice date.") + P(next) + "</w:" + kind + ">";
+            return NoteDoc(body, note, comment ? "<w:comment w:id='0' w:author='Reviewer B'>" + P("Check the term.") +
+                "</w:comment>" : null, footnote);
+        }
+        static XElement Notes(WmlDocument doc, bool footnote)
+        {
+            using var stream = new MemoryStream(doc.DocumentByteArray);
+            using var package = WordprocessingDocument.Open(stream, false);
+            var main = package.MainDocumentPart!;
+            return (footnote ? (OpenXmlPart)main.FootnotesPart! : main.EndnotesPart!).GetXDocument().Root!;
+        }
+        var original = Make("thirty days", "The deposit is optional.", false);
+        var editor = Make("forty days", "The deposit is optional.", false);
+        var marker = Make("thirty days", "The deposit is required.", true);
+        foreach (var order in Orders())
+        {
+            var reviewers = InOrder((bool)order[1], editor, marker);
+            var settings = new DocxDiffConsolidateSettings { ConflictResolution = (ConflictResolution)order[0] };
+            var merged = DocxCompare.Consolidate(original, reviewers, settings);
+            var accepted = RevisionProcessor.AcceptRevisions(merged);
+            var rejected = RevisionProcessor.RejectRevisions(merged);
+            foreach (var view in new[] { merged, accepted, rejected })
+                Assert.Empty(Notes(view, footnote).Descendants(W + "commentReference"));
+            Assert.Equal(Notes(Make("forty days", "The deposit is required.", false), footnote).Value, Notes(accepted, footnote).Value);
+            Assert.Equal(Notes(original, footnote).Value, Notes(rejected, footnote).Value);
+            Assert.Empty(DocxDiff.GetConflicts(original, reviewers, settings));
+            AssertValid(merged, accepted, rejected);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Orders))]
+    public void A_consensus_bookmark_keeps_its_selected_reviewer_on_a_replacement(ConflictResolution policy, bool editorFirst)
+    {
+        var original = PaymentTerm(true, "thirty days", null);
+        var expected = PaymentTerm(true, "forty days", "bookmark");
+        var reviewers = InOrder(editorFirst, expected, PaymentTerm(true, "thirty days", "bookmark"));
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+        var raw = DocxCompare.Consolidate(original, reviewers, settings);
+        var accepted = RevisionProcessor.AcceptRevisions(raw);
+        var rejected = RevisionProcessor.RejectRevisions(raw);
+        Assert.Equal(View(expected), View(accepted));
+        Assert.Equal(View(original), View(rejected));
+        var start = Assert.Single(Body(raw).Descendants(W + "bookmarkStart"));
+        Assert.Equal(reviewers[0].Author, start.Ancestors(W + "ins").First().Attribute(W + "author")!.Value);
+        Assert.Empty(DocxDiff.GetConflicts(original, reviewers, settings));
+        AssertValid(raw, accepted, rejected);
+    }
+
+    [Theory]
+    [InlineData("tab")]
+    [InlineData("picture")]
+    public void A_range_around_an_unchanged_atomic_run_keeps_its_contents(string shape)
+    {
+        string atom = shape == "tab" ? "<w:r><w:tab/></w:r>" :
+            "<w:r><w:pict><v:shape xmlns:v='urn:schemas-microsoft-com:vml' id='pic' style='width:10pt;height:10pt'>" +
+            "<v:imagedata r:id='rIdPic'/></v:shape></w:pict></w:r>";
+        WmlDocument Make(string term, bool marked)
+        {
+            string value = marked ? "<w:bookmarkStart w:id='6' w:name='Shelf'/>" + atom + "<w:bookmarkEnd w:id='6'/>" : atom;
+            string body = P("Cash ", value, "Payment is due within ", "<w:sdt><w:sdtPr><w:alias w:val='Term'/></w:sdtPr><w:sdtContent>" +
+                Run(term) + "</w:sdtContent></w:sdt>", " of the invoice date.") + P("Late payments accrue interest.");
+            return shape == "tab" ? Doc(body) : IrTestDocuments.FromBodyXmlWithImageParts(body, ("rIdPic", IrTestDocuments.TinyPng));
+        }
+        var original = Make("thirty days", false);
+        foreach (var order in Orders())
+        {
+            var reviewers = InOrder((bool)order[1], Make("forty days", false), Make("thirty days", true));
+            var accepted = AssertMerged(original, Make("forty days", true), (ConflictResolution)order[0], reviewers);
+            var marks = Body(accepted).Descendants().Where(e => e.Name == W + "bookmarkStart" ||
+                e.Name == W + "bookmarkEnd" || e.Name == W + (shape == "tab" ? "tab" : "pict"));
+            Assert.Equal(new[] { "bookmarkStart", shape == "tab" ? "tab" : "pict", "bookmarkEnd" }, marks.Select(e => e.Name.LocalName));
+        }
+    }
+
+    [Theory]
+    [InlineData("two-texts")]
+    [InlineData("tab-between")]
+    [InlineData("plain")]
+    public void Annotation_only_run_divisions_keep_the_control_envelope(string shape)
+    {
+        string tab = shape == "tab-between" ? "<w:tab/>" : "";
+        string left = shape == "plain" ? Run("Alpha beta") :
+            "<w:r><w:t xml:space='preserve'>Alpha </w:t>" + tab + "<w:t>beta</w:t></w:r>";
+        string right = "<w:r><w:t xml:space='preserve'>Alpha </w:t>" + tab + "</w:r>" + Marked("beta");
+        WmlDocument Make(string contents) => Doc(P("Invoice ", "<w:sdt><w:sdtPr><w:alias w:val='Term'/></w:sdtPr><w:sdtContent>" +
+            contents + "</w:sdtContent></w:sdt>", " ends here."));
+        var original = Make(left);
+        var reviewer = Make(right);
+        var reviewers = new[] { new DocxDiffReviewer { Author = "B", Document = reviewer } };
+        Assert.Empty(DocxDiff.GetRevisions(original, reviewer));
+        Assert.Empty(DocxDiff.GetConsolidatedRevisions(original, reviewers));
+        var changes = DocxDiff.GetSemanticChanges(original, reviewer).Changes;
+        Assert.Contains(changes, c => c.Family == SemanticChangeFamily.Bookmark);
+        Assert.DoesNotContain(changes, c => c.Family is SemanticChangeFamily.Text or SemanticChangeFamily.BlockStructure or SemanticChangeFamily.ContentControl);
+        foreach (var raw in new[] { DocxCompare.Compare(original, reviewer), DocxCompare.Consolidate(original, reviewers) })
+        {
+            var accepted = RevisionProcessor.AcceptRevisions(raw);
+            var rejected = RevisionProcessor.RejectRevisions(raw);
+            Assert.Single(Body(raw).Descendants(W + "sdt"));
+            Assert.Equal(View(reviewer), View(accepted));
+            Assert.Equal(View(original), View(rejected));
+            AssertValid(raw, accepted, rejected);
+        }
+    }
+
     public static IEnumerable<object[]> Orders() =>
         from policy in new[] { ConflictResolution.BaseWins, ConflictResolution.FirstReviewerWins, ConflictResolution.StackAll }
         from editorFirst in new[] { true, false }
         select new object[] { policy, editorFirst };
+
+    [Theory]
+    [InlineData("before", false)]
+    [InlineData("around", false)]
+    [InlineData("after", false)]
+    [InlineData("before", true)]
+    [InlineData("around", true)]
+    [InlineData("after", true)]
+    public void An_annotation_only_range_keeps_its_side_of_a_tab_in_a_mixed_run(string extent, bool comment)
+    {
+        string start = comment ? "<w:commentRangeStart w:id='0'/>" : "<w:bookmarkStart w:id='8' w:name='Shelf'/>";
+        string end = comment ? "<w:commentRangeEnd w:id='0'/><w:r><w:commentReference w:id='0'/></w:r>" : "<w:bookmarkEnd w:id='8'/>";
+        const string tab = "<w:r><w:tab/></w:r>";
+        string Wrap(string payload) => "<w:sdt><w:sdtPr><w:alias w:val='Term'/></w:sdtPr><w:sdtContent>" +
+            payload + "</w:sdtContent></w:sdt>";
+        var original = Doc(P(Wrap("<w:r><w:t>Alpha</w:t><w:tab/><w:t>beta</w:t></w:r>")));
+        string body = P(Wrap(extent switch
+        {
+            "before" => start + Run("Alpha") + end + tab + Run("beta"),
+            "around" => Run("Alpha") + start + tab + end + Run("beta"),
+            _ => Run("Alpha") + tab + start + Run("beta") + end,
+        }));
+        var marked = comment ? CommentDoc(body) : Doc(body);
+        var reviewers = new[] { new DocxDiffReviewer { Author = "B", Document = marked } };
+        Assert.Empty(DocxDiff.GetRevisions(original, marked));
+        Assert.Empty(DocxDiff.GetConsolidatedRevisions(original, reviewers));
+        Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
+        Assert.Contains(DocxDiff.GetSemanticChanges(original, marked).Changes, c => c.Family == (comment ? SemanticChangeFamily.Comment : SemanticChangeFamily.Bookmark));
+        foreach (var raw in new[] { DocxCompare.Compare(original, marked), DocxCompare.Consolidate(original, reviewers) })
+        {
+            var accepted = RevisionProcessor.AcceptRevisions(raw);
+            var rejected = RevisionProcessor.RejectRevisions(raw);
+            Assert.Equal(MixedControlLeaves(marked), MixedControlLeaves(raw));
+            Assert.Equal(MixedControlLeaves(marked), MixedControlLeaves(accepted));
+            Assert.Equal(MixedControlLeaves(original), MixedControlLeaves(rejected));
+            AssertValid(raw, accepted, rejected);
+        }
+    }
+
+    private static string[] MixedControlLeaves(WmlDocument file) => Body(file).Descendants(W + "sdtContent").Single().Descendants()
+        .Where(e => e.Name == W + "t" || e.Name == W + "tab" || e.Name == W + "bookmarkStart" || e.Name == W + "bookmarkEnd" ||
+            e.Name == W + "commentRangeStart" || e.Name == W + "commentRangeEnd" || e.Name == W + "commentReference")
+        .Select(e => e.Name == W + "t" ? e.Value : e.Name.LocalName).ToArray();
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    public void A_carried_range_keeps_its_side_of_a_tab_beside_another_reviewers_edit(bool comment, bool formatOnly, bool editBefore)
+    {
+        const string mixed = "<w:r><w:t>Alpha</w:t><w:tab/><w:t>beta</w:t></w:r>";
+        string marked = (comment ? Commented("Alpha") : Marked("Alpha")) + "<w:r><w:tab/><w:t>beta</w:t></w:r>";
+        string Paragraph(string content, bool edited) => P(edited && editBefore ? "The new catalogue now lists " : "The catalogue lists ",
+            "<w:sdt><w:sdtPr><w:alias w:val='Term'/></w:sdtPr><w:sdtContent>" + content + "</w:sdtContent></w:sdt>",
+            edited && formatOnly ? "<w:r><w:rPr><w:b/></w:rPr><w:t xml:space='preserve'> on the old shelf.</w:t></w:r>"
+            : edited && !editBefore ? " on the new shelf." : " on the old shelf.") + P("Returns are due on Fridays.");
+        var original = Doc(Paragraph(mixed, false));
+        var editor = Doc(Paragraph(mixed, true));
+        var reviewer = comment ? CommentDoc(Paragraph(marked, false)) : Doc(Paragraph(marked, false));
+        foreach (var editorFirst in new[] { false, true })
+        {
+            var reviewers = InOrder(editorFirst, editor, reviewer);
+            var raw = DocxCompare.Consolidate(original, reviewers);
+            var accepted = RevisionProcessor.AcceptRevisions(raw);
+            var rejected = RevisionProcessor.RejectRevisions(raw);
+            Assert.Equal(MixedControlLeaves(reviewer), MixedControlLeaves(raw));
+            Assert.Equal(MixedControlLeaves(reviewer), MixedControlLeaves(accepted));
+            Assert.Equal(MixedControlLeaves(original), MixedControlLeaves(rejected));
+            Assert.Equal(string.Concat(Body(editor).Descendants(W + "t").Select(e => e.Value)),
+                string.Concat(Body(accepted).Descendants(W + "t").Select(e => e.Value)));
+            Assert.Equal(formatOnly, Body(accepted).Descendants(W + "b").Any());
+            Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
+            Assert.All(DocxDiff.GetConsolidatedRevisions(original, reviewers), r => Assert.Equal("Reviewer A", r.Author));
+            if (comment) Assert.Equal(CommentTexts(reviewer), CommentTexts(accepted));
+            AssertValid(raw, accepted, rejected);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void A_range_on_replaced_text_keeps_its_affinity_after_an_atomic_run(bool textbox, bool comment)
+    {
+        string prefix = textbox
+            ? "<w:r><w:pict><v:shape xmlns:v='urn:schemas-microsoft-com:vml' id='box'><v:textbox><w:txbxContent>" +
+              P("Separate text stream") + "</w:txbxContent></v:textbox></v:shape></w:pict></w:r>"
+            : "<w:r><w:t>Index</w:t><w:tab/></w:r>";
+        WmlDocument Make(string word, bool mark) => mark && comment
+            ? CommentDoc(P(prefix, "The shelf is ", Commented(word), " today."))
+            : Doc(P(prefix, "The shelf is ", mark ? Marked(word) : Run(word), " today."));
+        var original = Make("closed", false);
+        var editor = Make("open", false);
+        var reviewer = Make("closed", true);
+        var expected = Make("open", true);
+        foreach (var policy in new[] { ConflictResolution.BaseWins, ConflictResolution.FirstReviewerWins, ConflictResolution.StackAll })
+        foreach (var editorFirst in new[] { false, true })
+        {
+            var reviewers = InOrder(editorFirst, editor, reviewer);
+            var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+            var raw = DocxCompare.Consolidate(original, reviewers, settings);
+            var accepted = RevisionProcessor.AcceptRevisions(raw);
+            var rejected = RevisionProcessor.RejectRevisions(raw);
+            Assert.Equal(View(expected), View(raw));
+            Assert.Equal(View(expected), View(accepted));
+            Assert.Equal(View(original), View(rejected));
+            Assert.Single(Body(accepted).Descendants(W + (textbox ? "txbxContent" : "tab")));
+            Assert.Empty(DocxDiff.GetConflicts(original, reviewers, settings));
+            if (comment) Assert.Equal(CommentTexts(reviewer), CommentTexts(accepted));
+            AssertValid(raw, accepted, rejected);
+        }
+    }
 
     /// <summary>Consolidate the base with <paramref name="reviewers"/> under <paramref name="policy"/>: accepting gives
     /// <paramref name="expected"/>, rejecting the base, nothing is recorded as a conflict and every view is valid.</summary>
@@ -165,7 +540,8 @@ public class ConsolidateReviewerMarkerTests
     /// Reviewer A deletes, moves or replaces what reviewer B comments on. <c>words-deleted</c>: A deletes the commented
     /// words, and B's comment stays on them in the redline; <c>replaced-whole</c>: A changes a field, which redlines the
     /// paragraph as a deleted and an inserted copy with the same text, and the comment goes on the inserted copy, once.
-    /// <c>paragraph-deleted</c>, <c>rewritten-whole</c> (the field changes and so does the text) and <c>moved</c>: no
+    /// <c>rewritten-whole</c> changes the field and adjacent text while preserving the commented words.
+    /// <c>paragraph-deleted</c>, <c>covered-words-rewritten</c> and <c>moved</c>: no
     /// copy that survives accepting holds the commented text as written, so the comment is not carried, and accepting
     /// gives A's document exactly, with no stray marker or paragraph. <c>editor-comments-too</c> is a control: A comments
     /// on another paragraph and edits none, which main already merged. In every case rejecting gives the base and each
@@ -176,6 +552,7 @@ public class ConsolidateReviewerMarkerTests
     [InlineData("replaced-whole")]
     [InlineData("paragraph-deleted")]
     [InlineData("rewritten-whole")]
+    [InlineData("covered-words-rewritten")]
     [InlineData("moved")]
     [InlineData("editor-comments-too")]
     public void A_comment_on_text_another_reviewer_deletes_moves_or_replaces(string shape)
@@ -191,13 +568,14 @@ public class ConsolidateReviewerMarkerTests
             "words-deleted" => Doc(P("The register loan of the winter term to the members of the society.") + P(next) + P(last)),
             "replaced-whole" => Doc(P(commented, field) + P(next) + P(last)),
             "paragraph-deleted" => Doc(P(next) + P(last)),
+            "covered-words-rewritten" => Doc(P("The ledger counts each loan of the winter term to the members of the society.", field) + P(next) + P(last)),
             "rewritten-whole" => Doc(P("The ledger lists every loan of the winter term to the members of the society.", field) + P(next) + P(last)),
             "moved" => Doc(P(next) + P(last) + P(commented)),
             _ => IrTestDocuments.WithComment("Reviewer A", "A", "2026-03-02T00:00:00Z", "Check the due day",
                 P(commented) + P(Commented("Returns"), " are due on Fridays.") + P(last)),
         };
         var marker = CommentDoc(P("The register ", Commented("lists every"), " loan of the winter term to the members of the society.") + P(next) + P(last));
-        bool carried = shape is "words-deleted" or "replaced-whole" or "editor-comments-too";
+        bool carried = shape is "words-deleted" or "replaced-whole" or "rewritten-whole" or "editor-comments-too";
         foreach (var policy in new[] { ConflictResolution.BaseWins, ConflictResolution.StackAll })
             foreach (var reviewers in new[] { InOrder(true, editor, marker), InOrder(false, editor, marker) })
             {
@@ -209,8 +587,8 @@ public class ConsolidateReviewerMarkerTests
                     Assert.Contains("Confirm the loan period", CommentTexts(merged));
                 else
                     Assert.Equal(View(editor), View(accepted));
-                if (shape == "replaced-whole")
-                    Assert.Equal(View(CommentDoc(P("The register ", Commented("lists every"), " loan of the winter term to the members of the society.") +
+                if (shape is "replaced-whole" or "rewritten-whole")
+                    Assert.Equal(View(CommentDoc(P(shape == "rewritten-whole" ? "The ledger " : "The register ", Commented("lists every"), " loan of the winter term to the members of the society.") +
                         P(next) + P(last))), View(accepted));
                 Assert.Equal(View(original), View(rejected));
                 Assert.Equal(string.Concat(Body(editor).Descendants(W + "t").Select(t => t.Value)),
@@ -620,7 +998,7 @@ public class ConsolidateReviewerMarkerTests
         }
     }
 
-    private static WmlDocument NoteDoc(string body, string footnotes, string? comments)
+    private static WmlDocument NoteDoc(string body, string footnotes, string? comments, bool footnote = true)
     {
         using var stream = new MemoryStream();
         using (var package = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -628,7 +1006,10 @@ public class ConsolidateReviewerMarkerTests
             var main = package.AddMainDocumentPart();
             Write(main.AddNewPart<StyleDefinitionsPart>(), $"<w:styles xmlns:w=\"{W}\"/>");
             Write(main.AddNewPart<DocumentSettingsPart>(), $"<w:settings xmlns:w=\"{W}\"/>");
-            Write(main.AddNewPart<FootnotesPart>(), $"<w:footnotes xmlns:w=\"{W}\">{footnotes}</w:footnotes>");
+            if (footnote)
+                Write(main.AddNewPart<FootnotesPart>(), $"<w:footnotes xmlns:w='{W}'>{footnotes}</w:footnotes>");
+            else
+                Write(main.AddNewPart<EndnotesPart>(), $"<w:endnotes xmlns:w='{W}'>{footnotes}</w:endnotes>");
             if (comments is not null)
                 Write(main.AddNewPart<WordprocessingCommentsPart>(), $"<w:comments xmlns:w=\"{W}\">{comments}</w:comments>");
             Write(main, $"<w:document xmlns:w=\"{W}\"><w:body>{body}</w:body></w:document>");

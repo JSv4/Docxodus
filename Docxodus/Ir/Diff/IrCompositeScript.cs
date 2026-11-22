@@ -26,7 +26,11 @@ internal sealed record IrSourceRightAnchor(int Reviewer, string Anchor,
 
 /// <summary>A reviewer's equal block carrying markers omitted from IR content equality. The renderer
 /// reconciles its comments and bookmarks against the emitted base copy.</summary>
-internal sealed record IrEqualReviewerMarkers(int Reviewer, string Anchor, string Author);
+internal sealed record IrEqualReviewerMarkers(int Reviewer, string Anchor, string Author,
+    IrNodeList<IrMarkerPlacement>? ReplacementPositions = null);
+
+/// <summary>A reviewer's marker in paragraph source order and its accepted-side character position.</summary>
+internal readonly record struct IrMarkerPlacement(int Ordinal, int Offset);
 
 /// <summary>A contributing reviewer's row/cell pairings, retained to place markers between rows and cells.</summary>
 internal sealed record IrReviewerTable(int Reviewer, string Author, IrTableDiff Diff);

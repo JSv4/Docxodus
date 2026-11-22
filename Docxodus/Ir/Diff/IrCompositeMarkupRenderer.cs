@@ -725,7 +725,14 @@ internal static class IrCompositeMarkupRenderer
         else if (compositeOp.AuthoredTokens is not null)
             IrMarkupRenderer.RenderComposedParagraph(compositeOp, baseIr, reviewerIrs, state, sink);
         else
-            IrMarkupRenderer.RenderBlockOp(op, state, sink);
+        {
+            XElement? replacement = null;
+            if (compositeOp.EqualReviewerMarkers is { } markers && markers.Any(r => r.ReplacementPositions is not null) &&
+                IrMarkupRenderer.SourceElement(op.RightAnchor, state.RightSource) is { } winner)
+                replacement = IrMarkupRenderer.PrepareReplacementCopy(winner, markers, baseIr, reviewerIrs, state);
+            IrMarkupRenderer.RenderBlockOp(op, state, sink, replacement);
+            if (replacement is not null) state.ReplacementMarkerOwners = null;
+        }
         // The reviewers who left this block's text equal but added comments or bookmarks: carried into the base's copy,
         // or into another reviewer's edit of a paragraph (or its formatting) at their original-view offsets (issue #1812).
         // A block another reviewer edits otherwise, or replaces whole, keeps such a comment on a copy that still holds
@@ -746,9 +753,11 @@ internal static class IrCompositeMarkupRenderer
                     counterparts.Select(c => (c.Reviewer, c.Source)).ToList(),
                     AuthorsByReviewer(reviewerMarkers, reviewerIrs.Count), state);
             else if (!baseSourced && op.Kind != IrEditOpKind.DeleteBlock)
-                IrMarkupRenderer.CarryReviewerComments(sink.GetRange(emittedFrom, sink.Count - emittedFrom),
-                    counterparts.Select(c => (c.Reviewer, c.Source)), IrMarkupRenderer.SourceElement(op.LeftAnchor, baseIr), state,
-                    originalView: false);
+            {
+                var emitted = sink.GetRange(emittedFrom, sink.Count - emittedFrom);
+                IrMarkupRenderer.CarryReviewerComments(emitted, counterparts.Select(c => (c.Reviewer, c.Source)),
+                    IrMarkupRenderer.SourceElement(op.LeftAnchor, baseIr), state, originalView: false);
+            }
         }
 
         if (state.CommentAttachments?.For(op.LeftAnchor) is not null)
