@@ -448,22 +448,38 @@ public class ConsolidateReviewerMarkerTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void A_range_on_replaced_text_keeps_its_affinity_after_a_tab(bool comment)
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void A_range_on_replaced_text_keeps_its_affinity_after_an_atomic_run(bool textbox, bool comment)
     {
-        const string prefix = "<w:r><w:t>Index</w:t><w:tab/></w:r>";
+        string prefix = textbox
+            ? "<w:r><w:pict><v:shape xmlns:v='urn:schemas-microsoft-com:vml' id='box'><v:textbox><w:txbxContent>" +
+              P("Separate text stream") + "</w:txbxContent></v:textbox></v:shape></w:pict></w:r>"
+            : "<w:r><w:t>Index</w:t><w:tab/></w:r>";
         WmlDocument Make(string word, bool mark) => mark && comment
             ? CommentDoc(P(prefix, "The shelf is ", Commented(word), " today."))
             : Doc(P(prefix, "The shelf is ", mark ? Marked(word) : Run(word), " today."));
         var original = Make("closed", false);
         var editor = Make("open", false);
         var reviewer = Make("closed", true);
+        var expected = Make("open", true);
+        foreach (var policy in new[] { ConflictResolution.BaseWins, ConflictResolution.FirstReviewerWins, ConflictResolution.StackAll })
         foreach (var editorFirst in new[] { false, true })
         {
             var reviewers = InOrder(editorFirst, editor, reviewer);
-            var accepted = AssertMerged(original, Make("open", true), ConflictResolution.StackAll, reviewers);
-            Assert.Single(Body(accepted).Descendants(W + "tab"));
+            var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+            var raw = DocxCompare.Consolidate(original, reviewers, settings);
+            var accepted = RevisionProcessor.AcceptRevisions(raw);
+            var rejected = RevisionProcessor.RejectRevisions(raw);
+            Assert.Equal(View(expected), View(raw));
+            Assert.Equal(View(expected), View(accepted));
+            Assert.Equal(View(original), View(rejected));
+            Assert.Single(Body(accepted).Descendants(W + (textbox ? "txbxContent" : "tab")));
+            Assert.Empty(DocxDiff.GetConflicts(original, reviewers, settings));
+            if (comment) Assert.Equal(CommentTexts(reviewer), CommentTexts(accepted));
+            AssertValid(raw, accepted, rejected);
         }
     }
 

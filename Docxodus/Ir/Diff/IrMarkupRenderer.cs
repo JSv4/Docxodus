@@ -6061,11 +6061,13 @@ internal static partial class IrMarkupRenderer
                 var (leaf, first, end) = leaves[index];
                 if (originalView && leaf.Ancestors(W.del).Any())
                 {
-                    // An endpoint in removed content uses the existing replacement affinity. That
-                    // routine takes a text offset, excluding atomic carriers in this original view.
-                    int textOffset = leaves.Take(index).Where(l => l.Leaf.Name == W.t || l.Leaf.Name == W.delText)
-                        .Sum(l => l.End - l.Start);
-                    if (leaf.Name == W.t || leaf.Name == W.delText) textOffset += offset - first;
+                    // Replacement affinity uses the emitted paragraph's original text offsets. An
+                    // earlier textbox is one placement leaf but can contain many characters in that view.
+                    int textOffset = leaf.Name == W.t || leaf.Name == W.delText ? offset - first : 0;
+                    for (var child = leaf; child != paragraph; child = child.Parent!)
+                        foreach (var sibling in child.ElementsBeforeSelf())
+                            if (child.Parent != paragraph || sibling.Name != W.pPr)
+                                textOffset += OriginalTextLength(sibling);
                     foreach (var marker in markers) InsertAtTextOffset(paragraph, marker, textOffset, true, nextId);
                 }
                 else if (InsertAtSourceLeaf(leaf, offset - first, end - first, markers, nextId) is { } suffix)
@@ -6256,6 +6258,11 @@ internal static partial class IrMarkupRenderer
         }
     }
 
+    // Text coordinates used when placing annotations around another reviewer's revisions.
+    private static int OriginalTextLength(XElement element) => element.Name == W.ins ? 0
+        : element.Name == W.t || element.Name == W.delText ? element.Value.Length
+        : element.Elements().Sum(OriginalTextLength);
+
     /// <summary>Insert <paramref name="marker"/> among <paramref name="paragraph"/>'s children where
     /// <paramref name="offset"/> characters of its text precede it, splitting a plain one-text run the offset
     /// falls inside. In the original view, insertions consume no characters and deletions do; bookmark and
@@ -6263,9 +6270,6 @@ internal static partial class IrMarkupRenderer
     private static void InsertAtTextOffset(XElement paragraph, XElement marker, int offset, bool originalView = false,
         Func<int>? nextId = null)
     {
-        static int OriginalLength(XElement element) => element.Name == W.ins ? 0
-            : element.Name == W.t || element.Name == W.delText ? element.Value.Length
-            : element.Elements().Sum(OriginalLength);
         static bool ZeroWidthMarker(XElement e) => IsCommentMarker(e) || e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd ||
             (e.Name == W.r || e.Name == W.ins || e.Name == W.del) && e.Elements().Any(x => x.Name != W.rPr) &&
             e.Elements().Where(x => x.Name != W.rPr).All(ZeroWidthMarker);
@@ -6302,14 +6306,14 @@ internal static partial class IrMarkupRenderer
             // markers placed in order stay in order (issue #1812).
             if (offset < seen && ZeroWidthMarker(child))
                 continue;
-            int length = originalView ? OriginalLength(child) : child.Descendants(W.t).Sum(t => t.Value.Length);
+            int length = originalView ? OriginalTextLength(child) : child.Descendants(W.t).Sum(t => t.Value.Length);
             bool atBoundary = !end || length > 0;
             if (originalView && child.Name == W.ins)
             {
                 // Enclose replacement copies, but keep a pure insertion immediately before/after the
                 // range outside it. The original side of a replacement is the adjacent nonempty deletion.
                 var adjacent = (end ? child.ElementsBeforeSelf().Reverse() : child.ElementsAfterSelf())
-                    .FirstOrDefault(e => OriginalLength(e) > 0);
+                    .FirstOrDefault(e => OriginalTextLength(e) > 0);
                 atBoundary = end ? adjacent?.Name != W.del : adjacent?.Name == W.del;
             }
             if (offset < seen || (offset == seen && atBoundary))
