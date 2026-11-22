@@ -1390,6 +1390,31 @@ internal static class DocxSessionOps
         Mutate(handle, preconditions, cellAnchorId,
             s => s.SetRepeatHeaderRow(cellAnchorId, repeat ?? DefaultRepeatHeaderRow));
 
+    /// <summary><paramref name="opJson"/> is a TablePropertiesOp object ({ widthType?: "auto"|"twips"|"percent",
+    /// width?, alignment?: "left"|"center"|"right", indentTwips?, cellMargins?: { topTwips?, leftTwips?,
+    /// bottomTwips?, rightTwips? }, altTitle?, altDescription? }); an absent member is left as it is.</summary>
+    public static string SetTableProperties(int handle, string cellAnchorId, string opJson,
+        MutationPreconditions? preconditions = null)
+    {
+        var op = DocxSessionJson.ParseTablePropertiesOp(opJson);
+        return Mutate(handle, preconditions, cellAnchorId, s => s.SetTableProperties(cellAnchorId, op));
+    }
+
+    /// <summary><paramref name="opJson"/> is a CellPropertiesOp object ({ verticalAlignment?:
+    /// "top"|"center"|"bottom" }); <paramref name="scope"/> is "cell" | "row" | "column" | "table"
+    /// (null or "" takes "cell").</summary>
+    public static string SetCellProperties(int handle, string cellAnchorId, string opJson, string? scope,
+        MutationPreconditions? preconditions = null)
+    {
+        var op = DocxSessionJson.ParseCellPropertiesOp(opJson);
+        var parsedScope = DocxSessionJson.ParseTableCellScope(scope);
+        return Mutate(handle, preconditions, cellAnchorId, s => s.SetCellProperties(cellAnchorId, op, parsedScope));
+    }
+
+    /// <summary>A TablePropertiesInfo object, or "null" when the anchor is not in a table.</summary>
+    public static string GetTableProperties(int handle, string cellAnchorId) =>
+        DocxSessionJson.SerializeTablePropertiesInfo(SessionRegistry.Get(handle).GetTableProperties(cellAnchorId));
+
     public static string SetTableRowOptions(int handle, string cellAnchorId, bool? repeatHeader,
         bool? allowBreakAcrossPages, int? heightTwips, string? heightRule,
         MutationPreconditions? preconditions = null)

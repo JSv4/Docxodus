@@ -360,6 +360,12 @@ internal static partial class Dispatcher
             Handle(args), Str(args, "cellAnchorId"), OptBool(args, "repeatHeader"),
             OptBool(args, "allowBreakAcrossPages"), OptInt(args, "heightTwips"),
             OptStr(args, "heightRule")),
+        "set_table_properties" => DocxSessionOps.SetTableProperties(
+            Handle(args), Str(args, "cellAnchorId"), JsonObject(args, "op")),
+        "set_cell_properties" => DocxSessionOps.SetCellProperties(
+            Handle(args), Str(args, "cellAnchorId"), JsonObject(args, "op"), OptStr(args, "scope")),
+        "get_table_properties" => DocxSessionOps.GetTableProperties(
+            Handle(args), Str(args, "cellAnchorId")),
         "replace_cell_content" => DocxSessionOps.ReplaceCellContent(
             Handle(args), Str(args, "cellAnchorId"), Str(args, "markdown")),
 
@@ -1198,7 +1204,8 @@ internal static partial class Dispatcher
             or "delete_table_row" or "delete_table_column"
             or "merge_cells" or "unmerge_cells" or "set_column_widths"
             or "set_table_borders" or "set_cell_shading"
-            or "set_repeat_header_row" or "set_table_row_options";
+            or "set_repeat_header_row" or "set_table_row_options"
+            or "set_table_properties" or "set_cell_properties";
 
     private static string JsonString(string s) => DocxSessionJson.JsonString(s);
 

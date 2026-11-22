@@ -212,7 +212,12 @@ du -sh "$WASM_DIST"
 # 11 KB over a local build, more than any spread recorded above. 12 KiB more covers the change and the section
 # fixes for #1809 (CI measured that branch 2,126 over main) landing beside it; assembly roots, dependencies and
 # the AOT profile are unchanged.
-WIRE_BUDGET_BYTES=$((5964 * 1024))
+# Table Properties (SetTableProperties, SetCellProperties, GetTableProperties, their JSON and bridge
+# exports) add about 6 KB: CI's fidelity compare job measured the branch at 6,107,394 bytes and
+# main at 6,101,383 on the same job, which had 5,753 bytes of room under 5964 KiB, so the branch
+# was 258 bytes over. 8 KiB more covers it and the spread between runners; assembly roots,
+# dependencies and the AOT profile are unchanged.
+WIRE_BUDGET_BYTES=$((5972 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""
