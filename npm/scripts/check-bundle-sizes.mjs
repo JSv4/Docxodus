@@ -135,7 +135,11 @@ const budgetsKiB = {
   // The Tab key typing a tab (a w:tab) adds 214-227 gzip bytes over main with #1789: embed/IIFE/editor
   // 167039/167086/145589 -> 167253/167313/145808. Raise only these three gates, to the next 0.1 KiB
   // with at least 0.05 KiB to spare; pagination is unchanged.
-  'embed.bundle.js': 163.4,
+  // Backspace and Delete joining paragraphs in a table cell (and Delete at a paragraph's end), and
+  // leaving a picture beside the caret to the browser, add 229-253 gzip bytes over main with the Tab
+  // key: embed/IIFE/editor 167253/167313/145808 -> 167506/167542/146050. Raise only these three gates,
+  // to the next 0.1 KiB with at least 0.05 KiB to spare; pagination is unchanged.
+  'embed.bundle.js': 163.7,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
   // The appended bullet-normalization option adds 29 gzip bytes (161996 -> 162025).
@@ -152,12 +156,14 @@ const budgetsKiB = {
   // at this 160.9 KiB gate: 0.1 KiB more.
   // #1789 (above).
   // Tab types a tab (above).
-  'embed.iife.js': 163.5,
+  // Paragraph joins in cells (above).
+  'embed.iife.js': 163.7,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
   // #1776 (above): 0.1 KiB.
   // #1789 (above).
   // Tab types a tab (above).
-  'editor.bundle.js': 142.5,
+  // Paragraph joins in cells (above).
+  'editor.bundle.js': 142.7,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
   // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
   // Whole inline-layout continuation adds 0.24 KiB (35.801 -> 36.038 on main).

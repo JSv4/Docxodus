@@ -1905,6 +1905,10 @@ export interface DocxodusWasmExports {
     SetRepeatHeaderRow: (handle: number, cellAnchor: string, repeat: boolean | null) => string;
     SetTableRowOptions: (handle: number, cellAnchor: string, repeatHeader: boolean | null,
       allowBreakAcrossPages: boolean | null, heightTwips: number | null, heightRule: string) => string;
+    /** Word's Table Properties. */
+    SetTableProperties: (handle: number, cellAnchor: string, opJson: string) => string;
+    SetCellProperties: (handle: number, cellAnchor: string, opJson: string, scope: string) => string;
+    GetTableProperties: (handle: number, cellAnchor: string) => string;
     SetHeaderText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     SetFooterText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     InsertPageNumberField: (handle: number, anchor: string, field: string, format: string) => string;
@@ -3128,6 +3132,65 @@ export interface TableRowOptions {
   /** Zero removes an explicit height. */
   heightTwips?: number;
   heightRule?: TableRowHeightRule;
+}
+
+/** A table's preferred width kind (`w:tblW`). */
+export type TableWidthType = "auto" | "twips" | "percent";
+
+/** A table's default cell margins (`w:tblCellMar`), twips. An absent edge is left as it is. */
+export interface TableCellMargins {
+  topTwips?: number | null;
+  leftTwips?: number | null;
+  bottomTwips?: number | null;
+  rightTwips?: number | null;
+}
+
+/** Word's Table Properties, Table and Alt Text tabs, for `DocxSession.setTableProperties`.
+ *  An absent member is left as it is. */
+export interface TablePropertiesOp {
+  widthType?: TableWidthType;
+  /** Twips for `"twips"`, percent of the text width for `"percent"`. */
+  width?: number;
+  alignment?: "left" | "center" | "right";
+  /** Indent from the left margin, twips (may be negative); 0 removes it. */
+  indentTwips?: number;
+  cellMargins?: TableCellMargins;
+  /** Alt text; `""` removes it. */
+  altTitle?: string;
+  altDescription?: string;
+}
+
+/** Cell properties for `DocxSession.setCellProperties`. */
+export interface CellPropertiesOp {
+  verticalAlignment?: "top" | "center" | "bottom";
+}
+
+/** What `DocxSession.setCellProperties` applies to. */
+export type TableCellScope = "cell" | "row" | "column" | "table";
+
+/** The Table Properties dialog's values for a cell's table, row and cell
+ *  (`DocxSession.getTableProperties`). `null` = not set on the element itself. */
+export interface TablePropertiesInfo {
+  tableAnchorId: string;
+  widthType: TableWidthType | null;
+  width: number | null;
+  alignment: string | null;
+  indentTwips: number | null;
+  cellMargins: TableCellMargins | null;
+  altTitle: string | null;
+  altDescription: string | null;
+  layout: string | null;
+  columnWidthsTwips: number[];
+  columnIndex: number;
+  columnSpan: number;
+  rowIndex: number;
+  rowCount: number;
+  rowHeightTwips: number | null;
+  rowHeightRule: TableRowHeightRule | null;
+  allowBreakAcrossPages: boolean;
+  repeatHeader: boolean;
+  verticalAlignment: string | null;
+  cellWidthTwips: number | null;
 }
 
 /** Which table edges `DocxSession.setTableBorders` targets: `"outside"` = top/left/bottom/right,
