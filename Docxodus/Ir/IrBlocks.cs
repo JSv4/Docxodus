@@ -132,10 +132,9 @@ internal sealed record IrParagraph : IrBlock
     /// <summary>
     /// Canonical digest of the non-hyperlink fields carried by this paragraph: field-code instruction, simple
     /// versus complex representation, inline position, and source scaffolding that normal content/token hashes
-    /// intentionally omit. It is deliberately separate from <see cref="IrBlock.ContentHash"/> so a run-based
-    /// field result still aligns like its visible text, while a code/state-only change (or any direct simple-field
-    /// mutation) is lowered to a reversible whole paragraph replacement instead of leaking the right field into
-    /// Reject.
+    /// intentionally omit. It is deliberately separate from <see cref="IrBlock.ContentHash"/> so a field's cached
+    /// result, run-based or simple, still aligns like its visible text, while a code/state-only change is lowered
+    /// to a reversible whole paragraph replacement instead of leaking the right field into Reject.
     /// <para>It also records, in order, the field characters of a complex field that spans into or out of the
     /// paragraph (an <c>end</c> or <c>separate</c> with no <c>begin</c> in the paragraph, a <c>begin</c> left open
     /// at its end — a Word table of contents), so moving one of them between paragraphs is a change (issue

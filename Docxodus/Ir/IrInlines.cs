@@ -106,11 +106,11 @@ internal sealed record IrFieldRun(string Instruction, IrNodeList<IrInline> Cache
 
     /// <summary>
     /// Resolver-aware digest of the field representation that the transparent content hash deliberately omits.
-    /// For a simple field this is the complete <c>w:fldSimple</c> carrier (which cannot be safely token-sliced);
-    /// for a run-based field it is the sequence of raw <c>w:fldChar</c> scaffolding, including begin-state
-    /// attributes and <c>w:fldData</c>. The containing paragraph combines this with the instruction and inline
-    /// position into its separate structural-carrier digest. Run-based fields leave cached-result edits on the
-    /// normal token path; any direct simple-field mutation intentionally takes the whole-carrier fallback.
+    /// For a simple field this is the <c>w:fldSimple</c> shell: its attributes and <c>w:fldData</c>, without the
+    /// cached result. For a run-based field it is the sequence of raw <c>w:fldChar</c> scaffolding, including
+    /// begin-state attributes and <c>w:fldData</c>. The containing paragraph combines this with the instruction
+    /// and inline position into its separate structural-carrier digest. Both forms leave cached-result edits on
+    /// the normal token path; the renderer writes a simple field whose result an edit reaches in run-based form.
     /// </summary>
     public IrHash ScaffoldDigest { get; init; }
 }

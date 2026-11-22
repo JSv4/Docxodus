@@ -240,12 +240,15 @@ public sealed partial class DocxSession
         if (date is null)
             return EditResult.Fail(EditErrorCode.ContentControlMalformed,
                 "date content control has no w:date properties", anchorId);
-        var shown = displayText ?? value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        // A date control holds a calendar day, which the desktop word processor stores at
+        // midnight UTC with no time of day. Keep the value's own day (the one displayed), not
+        // the day its UTC instant falls on, which differs for any non-zero offset.
+        var day = value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var shown = displayText ?? day;
         if (XmlText.ValidatePayload(shown, anchorId) is { } textError) return EditResult.Fail(textError);
         return MutateContentControl(candidate, options, () =>
         {
-            date.SetAttributeValue(W.fullDate, value.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'",
-                CultureInfo.InvariantCulture));
+            date.SetAttributeValue(W.fullDate, day + "T00:00:00Z");
             ReplaceControlWithPlainText(candidate.Element, shown);
         });
     }
