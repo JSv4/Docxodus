@@ -9740,3 +9740,46 @@ kind to the same part is removed as a duplicate. A
 reference the comparison does not bind keeps its bytes, missing attribute included.
 
 Tests: `UntypedStoryReferenceTests`.
+
+## A cross-reference's cached result in simple and complex form (#1844)
+
+Original and revision differ only in the cached result of one `REF` field in the middle of a sentence. The
+field is written either as a simple field or in run-based form; a literal-text pair is the control.
+
+```xml
+<!-- simple form; the revision caches 21.8 -->
+<w:p><w:r><w:t xml:space="preserve">Record the survey at point </w:t></w:r>
+  <w:fldSimple w:instr=" REF RidgeMarker "><w:r><w:t>16.4</w:t></w:r></w:fldSimple>
+  <w:r><w:t xml:space="preserve"> before leaving the ridge.</w:t></w:r></w:p>
+<!-- run-based form of the same field -->
+<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> REF RidgeMarker </w:instrText></w:r>
+<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>16.4</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>
+```
+
+Each pair was also run with `w:fldLock="1"` on the field, which no comparison treated differently.
+
+| Input form | Docxodus `2ab56798` | Docxodus with the fix | Desktop word processor (build 16.0.20326), its own compare | LibreOffice Writer 25.8.7.3 Compare Documents |
+| --- | --- | --- | --- | --- |
+| Simple field | The whole paragraph deleted and inserted | `16.4` deleted, `21.8` inserted | `16.4` deleted, `21.8` inserted | No revision |
+| Run-based field | `16.4` deleted, `21.8` inserted | Unchanged | `16.4` deleted, `21.8` inserted | No revision |
+| Literal text | `16.4` deleted, `21.8` inserted | Unchanged | `16.4` deleted, `21.8` inserted | `16.4` deleted, `21.8` inserted |
+
+In the reference application's redline the simple field is written in run-based form, with the begin,
+instruction and separator outside every revision, then `<w:del>16.4</w:del><w:ins>21.8</w:ins>`, then the
+end. Accepting gives one live field with the instruction, result `21.8` and its lock state; rejecting gives
+`16.4`. LibreOffice records no revision for a changed field result and keeps the revised value.
+
+Docxodus hashed the whole `w:fldSimple` element into the paragraph's field-carrier digest, so any change to
+its cached result sent the paragraph down the whole-paragraph replacement path. The digest now covers only
+the field's own state: its attributes (instruction, `w:dirty`, `w:fldLock`) and `w:fldData`
+(`IrReader.BuildFldSimple`). A change to the code or state still replaces the paragraph. A cached-result edit
+is ordinary content, as it already was for a run-based field. When an edit reaches inside a simple field's
+result, the redline's source slicer walks that paragraph's simple fields as their run-based equivalent on
+both sides (`SourceRunModel.ExpandSimpleFields`, built on the existing `ExpandFieldForRevision`), so the
+field's characters and instruction are kept once and only the result is tracked. A simple field no edit
+reaches keeps its source form. The plain paired paragraph, a moved-and-edited paragraph and a consolidated
+paragraph all take this path; splits, merges and cross-paragraph rewrites still replace any paragraph
+holding a field.
+
+Tests: `IrFieldEnvelopeMarkupRendererTests.CachedReferenceResult_TracksOnlyTheResultAndResolvesToOneLiveField`,
+`IrFieldEnvelopeMarkupRendererTests.Consolidate_SimpleFieldResultAndNearbyEdit_TrackOnlyTheChangedWords`.

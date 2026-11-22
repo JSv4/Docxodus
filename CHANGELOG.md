@@ -14,6 +14,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A comparison tracks only the changed cached result of a simple field (`w:fldSimple`), as it already did for the same field in run-based form (#1844). A cross-reference whose cached number changed, `16.4` to `21.8`, made the redline delete and insert its whole paragraph, so unchanged prose around it showed as edited. The redline now writes such a field in run-based form, keeping its instruction, lock state and field data once outside every revision, and tracks only the result, as the desktop word processor's own comparison does; the revisions list reports only the result too. A change to a simple field's instruction or state still replaces the paragraph, and a simple field no edit reaches keeps its form.
+
 - Filling a date control stores the day it shows, at midnight UTC, in every host time zone (#1842). A date-only value such as `2032-03-04` was stored as the previous day on a host east of UTC, a timestamp with an offset (`2032-03-04T01:00:00+05:00`) was stored as its UTC instant on the previous or next day, and a `DateTimeOffset` passed to `DocxSession.SetContentControlDate` was converted the same way. `w:fullDate` now always holds the value's own calendar day at `T00:00:00Z`, the same day as the default display text, as the desktop word processor stores a date control; the time of day is not kept.
 
 - `SemanticDiff.Compare` reports changes to the controls around table rows and cells, including changes to control properties, grouping, and the position of empty controls (#1814).

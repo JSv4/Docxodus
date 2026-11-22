@@ -6280,6 +6280,13 @@ internal static partial class IrMarkupRenderer
         var rightRuns = new SourceRunModel(rightPara);
         var leftTokens = ParagraphRenderTokens(leftAnchor, state.Left, state.Settings);
         var rightTokens = ParagraphRenderTokens(rightAnchor, state.RightSource, state.Settings);
+        if (leftRuns.HasSimpleFields || rightRuns.HasSimpleFields)
+        {
+            var changedOps = diff.Ops.Where(op => op.Kind != IrTokenOpKind.Equal).ToList();
+            ExpandSimpleFieldsUnderEdits(
+                (leftRuns, changedOps.Select(op => LeftSpanPositions(leftTokens, op))),
+                (rightRuns, changedOps.Select(op => RightSpanPositions(rightTokens, op))));
+        }
         // An equal span whose raw text differs (an NBSP against a space) is a deletion plus an insertion.
         bool Shares(IrTokenOp op) => op.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged &&
             RawSpanText(leftTokens, op.LeftStart, op.LeftEnd) == RawSpanText(rightTokens, op.RightStart, op.RightEnd);
@@ -7054,6 +7061,14 @@ internal static partial class IrMarkupRenderer
             var runs = new SourceRunModel(paragraph ?? new XElement(W.p));
             fieldSources[source.Reviewer] = new(tokens, runs, source.Author);
         }
+        if (fieldSources.Values.Any(source => source.Runs.HasSimpleFields))
+        {
+            var changedOps = authored.Where(item => item.Op.Kind != IrTokenOpKind.Equal).ToList();
+            ExpandSimpleFieldsUnderEdits(fieldSources.Select(source => (source.Value.Runs, source.Key < 0
+                ? changedOps.Select(item => LeftSpanPositions(leftTokens, item.Op))
+                : changedOps.Where(item => item.SourceReviewer == source.Key)
+                    .Select(item => RightSpanPositions(source.Value.Tokens, item.Op)))).ToArray());
+        }
         authored = SyncSourceBoundaries(authored, item => item.Op, (item, tokenOp) => item with { Op = tokenOp },
             item => item.SourceReviewer, leftTokens, leftRuns, fieldSources, out var fieldCharactersBefore);
 
@@ -7620,6 +7635,21 @@ internal static partial class IrMarkupRenderer
         left.MatchKey == right.MatchKey &&
         string.Equals(left.Text, right.Text, StringComparison.Ordinal);
 
+    /// <summary>
+    /// Walk the simple fields of every side as their run-based equivalent when a changed span on any side
+    /// reaches inside one (<see cref="SourceRunModel.EditReachesSimpleField"/>). A cached-result edit is then
+    /// tracked inside the field, which keeps its code and state once, as the reference application's own
+    /// comparison writes it. Every side expands, so the field characters pair across the views as a run-based
+    /// field's do. A simple field no edit reaches keeps its source form.
+    /// </summary>
+    private static void ExpandSimpleFieldsUnderEdits(
+        params (SourceRunModel Runs, IEnumerable<(int Start, int End)> Changed)[] sides)
+    {
+        if (sides.Any(side => side.Runs.EditReachesSimpleField(side.Changed)))
+            foreach (var side in sides)
+                side.Runs.ExpandSimpleFields();
+    }
+
     private static List<XElement> BuildTokenOpContent(
         IrTokenDiff tokenDiff,
         IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
@@ -7637,6 +7667,13 @@ internal static partial class IrMarkupRenderer
         var ops = CoalesceTokenOpsWordShaped(
             tokenDiff.Ops, leftTokens, rightTokens, state.Settings.FormatComparison,
             leftRuns, rightRuns).ToList();
+        if (leftRuns.HasSimpleFields || rightRuns.HasSimpleFields)
+        {
+            var changed = ops.Where(op => op.Kind != IrTokenOpKind.Equal).ToList();
+            ExpandSimpleFieldsUnderEdits(
+                (leftRuns, changed.Select(op => LeftSpanPositions(leftTokens, op))),
+                (rightRuns, changed.Select(op => RightSpanPositions(rightTokens, op))));
+        }
 
         // The field characters both sides of a paired paragraph carry are emitted once each, where both sides
         // reach them (issue #1165); see SyncSourceBoundaries. Only a whole-paragraph pair is planned this way: the
@@ -11864,8 +11901,8 @@ internal static partial class IrMarkupRenderer
         }
 
         public int TextLength => _segments.Count == 0 ? 0 : _segments.Max(s => s.TextEnd);
-        public bool HasAtomicContent { get; }
-        public bool HasRangeMarkers { get; }
+        public bool HasAtomicContent { get; private set; }
+        public bool HasRangeMarkers { get; private set; }
 
         private readonly Dictionary<XElement, (int Text, int Atoms)>? _sourceWidths;
         private readonly HashSet<XElement>? _atomicCarriers;
@@ -11889,9 +11926,48 @@ internal static partial class IrMarkupRenderer
             SupportsWhitespaceReanchoring = para.Elements()
                 .Where(e => e.Name != W.pPr)
                 .All(IsPlainDirectTextRun);
+            _para = para;
+            Walk();
+        }
 
+        private readonly XElement _para;
+
+        /// <summary>Whether simple fields are walked as their run-based equivalent (<see cref="ExpandSimpleFields"/>).</summary>
+        private bool _expandSimpleFields;
+
+        /// <summary>Whether the paragraph holds a simple field at run level, walked whole or expanded.</summary>
+        public bool HasSimpleFields { get; private set; }
+
+        /// <summary>Whether a changed span on this side reaches inside a simple field holding text: it overlaps
+        /// the field's result, or is an insertion point strictly inside it. Spans are rendering positions.</summary>
+        public bool EditReachesSimpleField(IEnumerable<(int Start, int End)> changed) =>
+            HasSimpleFields && changed.Any(span => _segments.Any(field =>
+                field.Kind == SegmentKind.Container && field.Element.Name == W.fldSimple && field.End > field.Start &&
+                (span.Start < span.End
+                    ? span.Start < field.End && field.Start < span.End
+                    : field.Start < span.Start && span.Start < field.End)));
+
+        /// <summary>Walk this paragraph's simple fields as their run-based equivalent from now on, so an edit
+        /// inside a cached result is tracked there while the field's code and state are kept once. Rendering
+        /// positions do not move (the field's plumbing is zero-width), so spans computed before still apply. It
+        /// does nothing once a slice has claimed source elements, since those refer to the segments it was built
+        /// from; the fields are then emitted whole into each revision, which still accepts and rejects exactly.</summary>
+        public void ExpandSimpleFields()
+        {
+            if (_expandSimpleFields || !HasSimpleFields || _claimedSourceElements.Count > 0) return;
+            _expandSimpleFields = true;
+            _segments.Clear();
+            _hyperlinkOrdinal.Clear();
+            _hyperlinkTarget.Clear();
+            _nextHyperlinkOrdinal = 0;
+            _linkSegments = null;
+            Walk();
+        }
+
+        private void Walk()
+        {
             int charOffset = 0;
-            foreach (var child in para.Elements().Where(e => e.Name != W.pPr))
+            foreach (var child in _para.Elements().Where(e => e.Name != W.pPr))
                 WalkRunLevel(child, ref charOffset, ContainerChain.Empty);
             HasRangeMarkers = _segments.Any(segment => segment.AlwaysKeep && !IsFieldChar(segment) && !IsInstruction(segment));
 
@@ -11956,19 +12032,30 @@ internal static partial class IrMarkupRenderer
                 if (!anyChild)
                     _segments.Add(new Segment(runLevel, charOffset, charOffset, SegmentKind.ZeroWidth) { Chain = childChain });
             }
+            else if (runLevel.Name == W.fldSimple && _expandSimpleFields)
+            {
+                // A simple field whose cached result an edit reaches is walked as its run-based equivalent, as the
+                // reference application writes it: begin, instruction and separator runs, the result's own source
+                // runs, then the end. The plumbing is zero-width and the result keeps its source coordinates, so
+                // the edit is tracked inside the result while the field's code and state are kept once.
+                foreach (var part in ExpandFieldForRevision(runLevel))
+                    WalkRunLevel(part, ref charOffset, chain);
+            }
             else if (runLevel.Name == W.ins || runLevel.Name == W.del ||
                      runLevel.Name == W.sdt || runLevel.Name == W.smartTag || runLevel.Name == W.fldSimple)
             {
                 // Non-hyperlink container (sdt/smartTag/accepted ins-del wrapper/direct simple field): one ATOMIC
-                // segment spanning its full inner text, emitted whole. A changed fldSimple is always marked as a
-                // whole-paragraph structural replacement by FieldEnvelopeDigest; this branch only needs to carry
-                // an unchanged simple field once while adjacent token edits use the correct text offset. Its char
+                // segment spanning its full inner text, emitted whole. A change to a fldSimple's own code or state
+                // is marked as a whole-paragraph structural replacement by FieldEnvelopeDigest, and an edit inside
+                // its cached result walks it expanded (above); this branch only carries an unchanged simple field
+                // once while adjacent token edits use the correct text offset. Its char
                 // span mirrors the reader/tokenizer's transparent recursion, including the special hyphens and
                 // valid w:sym glyphs that each contribute one visible character. Counting only descendant w:t
                 // nodes makes a suffix edit start one character early after a direct simple field containing one
                 // of those run children, so the source slicer can drop or misplace the field/result.
                 int start = charOffset;
                 charOffset += VisibleTextLength(runLevel);
+                HasSimpleFields |= runLevel.Name == W.fldSimple;
                 _segments.Add(new Segment(runLevel, start, charOffset, SegmentKind.Container)
                 {
                     Chain = chain,
