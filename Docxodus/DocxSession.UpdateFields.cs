@@ -400,7 +400,11 @@ public sealed partial class DocxSession
         // The entries' styles: TOC 1-9, indented by level, as Word's.
         foreach (var level in entries.Select(e => e.Level).Distinct()) EnsureTocLevelStyle(level);
 
-        var tabs = first.Element(W.pPr)?.Element(W.tabs);
+        // The page numbers' right tab (dot leader) as the table had it, else Word's at the right margin.
+        var pageTab = first.Element(W.pPr)?.Element(W.tabs)?.Elements(W.tab)
+            .LastOrDefault(t => (string?)t.Attribute(W.val) == "right") is { } right
+            ? new XElement(right)
+            : new XElement(W.tab, new XAttribute(W.val, "right"), new XAttribute(W.leader, "dot"), new XAttribute(W.pos, "9350"));
         var before = first.Elements().Where(n => n.Name != W.pPr).TakeWhile(n => !ReferenceEquals(n, toc.Begin) && !n.DescendantsAndSelf().Contains(toc.Begin)).ToList();
         var after = last.Elements().SkipWhile(n => !ReferenceEquals(n, toc.End) && !n.DescendantsAndSelf().Contains(toc.End)).Skip(1).ToList();
         var fieldStart = new[]
@@ -440,7 +444,7 @@ public sealed partial class DocxSession
                 var paragraph = new XElement(W.p,
                     new XElement(W.pPr,
                         new XElement(W.pStyle, new XAttribute(W.val, "TOC" + level.ToString(CultureInfo.InvariantCulture))),
-                        tabs is null ? null : new XElement(tabs),
+                        EntryTabs(level, number, pageTab),
                         new XElement(W.rPr, new XElement(W.noProof))));
                 if (i == 0) paragraph.Add(before.Select(n => new XElement(n)), fieldStart);
                 if (links)
@@ -455,6 +459,23 @@ public sealed partial class DocxSession
         foreach (var p in paragraphs) p.Remove();
 
         static XElement TextRun(string text) => new XElement(W.r, TextContent(text, W.t));
+    }
+
+    /// <summary>An entry's tab stops, as Word writes them: after a heading number, a left tab where
+    /// the heading's text starts (past the number, at the entry's indent plus 22 pt or more), so
+    /// the number's tab does not run on to the page number's right tab; then that right tab.</summary>
+    private static XElement EntryTabs(int level, string? number, XElement pageTab)
+    {
+        var tabs = new XElement(W.tabs);
+        if (number is not null)
+        {
+            int indent = (level - 1) * 220;
+            int textAt = indent + Math.Max(440, (number.Length + 1) * 120);
+            tabs.Add(new XElement(W.tab, new XAttribute(W.val, "left"),
+                new XAttribute(W.pos, textAt.ToString(CultureInfo.InvariantCulture))));
+        }
+        tabs.Add(new XElement(pageTab));
+        return tabs;
     }
 
     /// <summary>Word's <c>TOC n</c> paragraph style (entries of level n), made when the document has

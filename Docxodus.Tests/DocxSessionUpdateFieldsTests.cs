@@ -222,6 +222,23 @@ public class DocxSessionUpdateFieldsTests
     }
 
     [Fact]
+    public void UF009_TheTitleIsNotNumbered_AndAnUnnumberedEntryHasOnlyThePageTab()
+    {
+        var (session, _) = WithContents();
+        using var _s = session;
+        Assert.True(session.UpdateFields().Success);
+        using var stream = new MemoryStream(session.Save());
+        using var doc = WordprocessingDocument.Open(stream, false);
+        var styles = XDocument.Parse(new StreamReader(doc.MainDocumentPart!.StyleDefinitionsPart!.GetStream()).ReadToEnd());
+        var title = styles.Descendants(W + "style").Single(s => (string?)s.Attribute(W + "styleId") == "TOCHeading");
+        Assert.Equal("0", (string?)title.Descendants(W + "numId").Single().Attribute(W + "val"));
+        var entry = Body(session).Descendants(W + "p")
+            .First(p => (string?)p.Element(W + "pPr")?.Element(W + "pStyle")?.Attribute(W + "val") == "TOC1");
+        var tab = Assert.Single(entry.Element(W + "pPr")!.Element(W + "tabs")!.Elements(W + "tab"));
+        Assert.Equal("right", (string?)tab.Attribute(W + "val"));
+    }
+
+    [Fact]
     public void UF006_RefusedWhileChangesAreTracked()
     {
         using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(),
