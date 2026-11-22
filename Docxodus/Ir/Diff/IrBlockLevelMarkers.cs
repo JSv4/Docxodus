@@ -470,6 +470,10 @@ internal static partial class IrMarkupRenderer
             PlaceStreamMarkers(emitted, plan, includeControls);
     }
 
+    private static IEnumerable<(XElement Element, int Before)> TopLevelRowlessControls(IrTable table) =>
+        table.ChildOrder?.EmptyControls.Where(c => c.Parent < 0 && c.Source.Element is not null)
+            .Select(c => (c.Source.Element!, c.FirstMember)) ?? Enumerable.Empty<(XElement, int)>();
+
     private static IEnumerable<(XElement Element, int Before)> TopLevelRowlessControls(XElement table)
     {
         int rows = 0;
@@ -495,7 +499,7 @@ internal static partial class IrMarkupRenderer
             ? RightRow(r.SourceReviewer, r.RightRowAnchor) : null)).ToList();
         var controls = emitted.Element(W.sdt) is not null && (original.Source.Element!.Elements().Any(IsBlockLevelMarker) ||
             tables.Any(t => t.RevisedTable?.Source.Element?.Elements().Any(IsBlockLevelMarker) == true))
-            ? TopLevelRowlessControls(original.Source.Element!).ToList() : null;
+            ? TopLevelRowlessControls(original).ToList() : null;
         if (controls is { Count: > 0 })
             foreach (var (left, placed) in controls.Zip(TopLevelRowlessControls(emitted)).Reverse())
             {
@@ -514,7 +518,7 @@ internal static partial class IrMarkupRenderer
                     IndexRows(revised)) is { } drawn && IrTableDiffer.ControlsInPlace(original, revised, drawn.RowOps) is { } positions)
             {
                 pairs = drawn.Sources;
-                foreach (var (left, right) in controls.Zip(TopLevelRowlessControls(revised.Source.Element!)).Reverse())
+                foreach (var (left, right) in controls.Zip(TopLevelRowlessControls(revised)).Reverse())
                     pairs.Insert(positions[right.Before], (left.Element, right.Element));
             }
             reviews.Add(new(t.Reviewer, t.Author, pairs));

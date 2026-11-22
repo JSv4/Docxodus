@@ -195,6 +195,10 @@ internal sealed record IrTable : IrBlock
     /// <summary>What the table holds among its rows that decides whether the redline can rebuild its content controls
     /// around them (issue #1810); see <see cref="IrContainerControls"/>.</summary>
     public IrContainerControls Controls { get; init; }
+
+    /// <summary>Ordered source children when the standard property prelude and direct members do not
+    /// describe the complete container.</summary>
+    public IrTableOrder? ChildOrder { get; init; }
 }
 
 /// <summary>
@@ -216,7 +220,7 @@ internal enum IrContainerControls
     Marker = 2,
 
     /// <summary>A control that delivers children but also holds something else, or nests past the reader's cap.</summary>
-    Unrebuildable = 4,
+    MixedControlContent = 4,
 }
 
 /// <summary>
@@ -361,6 +365,10 @@ internal sealed record IrRow(IrAnchor Anchor, IrNodeList<IrCell> Cells, IrHash C
     /// <summary>What the row holds among its cells that decides whether an edit of it can rebuild their content controls
     /// (issue #1810); see <see cref="IrContainerControls"/>.</summary>
     public IrContainerControls Controls { get; init; }
+
+    /// <summary>Ordered source children when the standard property prelude and direct members do not
+    /// describe the complete container.</summary>
+    public IrTableOrder? ChildOrder { get; init; }
 }
 
 /// <summary>

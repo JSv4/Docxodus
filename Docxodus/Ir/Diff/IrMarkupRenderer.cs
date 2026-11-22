@@ -2159,9 +2159,10 @@ internal static partial class IrMarkupRenderer
             var places = IrTableDiffer.ControlsInPlace(leftIr, rightIr, rowOps);
             if (places is null)
                 return false;
-            foreach (var (child, rightRows) in TopLevelRowlessControls(rightTbl))
-                if (places.TryGetValue(rightRows, out var before))
-                    extras.Add((child, before));
+            if (rightIr.ChildOrder is { } order)
+                foreach (var control in order.EmptyControls.Where(c => c.Parent < 0))
+                    if (control.Source.Element is { } source && places.TryGetValue(control.FirstMember, out var before))
+                        extras.Add((source, before));
         }
         int extrasPlaced = 0;
         void PlaceExtrasBefore(int rowIndex)
@@ -2256,7 +2257,7 @@ internal static partial class IrMarkupRenderer
         if (leftTbl.Elements().Any(IsBlockLevelMarker) || rightTbl.Elements().Any(IsBlockLevelMarker))
         {
             if (extras.Count > 0)
-                foreach (var (left, right) in TopLevelRowlessControls(leftTbl).Zip(extras).Reverse())
+                foreach (var (left, right) in TopLevelRowlessControls(leftIrTable!).Zip(extras).Reverse())
                     rowSources.Insert(right.Before, (left.Element, right.Element));
             ReconcileTableStreamMarkers(newTbl, rowSources, state, extras.Count > 0);
         }
@@ -3156,19 +3157,28 @@ internal static partial class IrMarkupRenderer
         // bookmark) go back before the same base row, as a composed row's go back between its cells (issue #1812).
         var newTbl = new XElement(W.tbl);
         var extras = new List<(XElement Element, int RowsBefore)>();
-        var baseRowOrdinal = new Dictionary<XElement, int>();
-        foreach (var child in baseTbl.Elements())
+        Dictionary<string, int>? baseRowOrdinals = null;
+        if (baseTblBlock.ChildOrder is { } tableOrder)
         {
-            if (child.Name == W.tr)
-                baseRowOrdinal.Add(child, baseRowOrdinal.Count);
-            else if (child.Name == W.sdt && IrReader.DeliversAny(child, W.tr))
-                foreach (var delivered in IrReader.UnwrapSdtChildren(child, W.tr))
-                    baseRowOrdinal.Add(delivered, baseRowOrdinal.Count);
-            else if (child.Name == W.tblPr || child.Name == W.tblGrid)
-                newTbl.Add(StripUnids(new XElement(child)));
-            else
-                extras.Add((child, baseRowOrdinal.Count));
+            foreach (var child in tableOrder.Children)
+            {
+                if (child.Parent >= 0 || child.MemberCount > 0 || child.Source.Element is not { } source)
+                    continue;
+                if (child.Name == W.tblPr || child.Name == W.tblGrid)
+                    newTbl.Add(StripUnids(new XElement(source)));
+                else
+                    extras.Add((source, child.FirstMember));
+            }
+            if (extras.Count > 0)
+            {
+                baseRowOrdinals = new(StringComparer.Ordinal);
+                for (int i = 0; i < baseTblBlock.Rows.Count; i++)
+                    baseRowOrdinals[baseTblBlock.Rows[i].Anchor.ToString()] = i;
+            }
         }
+        else
+            foreach (var property in baseTbl.Elements().TakeWhile(child => child.Name != W.tr))
+                newTbl.Add(StripUnids(new XElement(property)));
         int extrasPlaced = 0, emptyControlsPlaced = 0;
         void PlaceNextExtra()
         {
@@ -3190,7 +3200,7 @@ internal static partial class IrMarkupRenderer
         foreach (var rowOp in authoredRows)
         {
             if (rowOp.Kind != IrRowOpKind.InsertRow && rowOp.BaseRowAnchor is { } baseAnchor &&
-                baseRowsByAnchor.TryGetValue(baseAnchor, out var baseRow) && baseRowOrdinal.TryGetValue(baseRow, out var ordinal))
+                baseRowOrdinals is not null && baseRowOrdinals.TryGetValue(baseAnchor, out var ordinal))
             {
                 PlaceExtrasBefore(ordinal);
                 boundary = ordinal + 1;

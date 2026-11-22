@@ -249,6 +249,57 @@ public class ContentControlTableTests
         Assert.Equal(Layout(original), Layout(RevisionProcessor.RejectRevisions(merged)));
     }
 
+    public static IEnumerable<object[]> BookmarkAndEditCases()
+    {
+        foreach (var policy in Enum.GetValues<ConflictResolution>())
+        foreach (bool controlled in new[] { false, true })
+        foreach (bool editorFirst in new[] { false, true })
+            yield return new object[] { policy, controlled, editorFirst };
+    }
+
+    [Theory]
+    [MemberData(nameof(BookmarkAndEditCases))]
+    public void A_bookmark_in_one_row_composes_with_an_edit_in_another(
+        ConflictResolution policy, bool controlled, bool editorFirst)
+    {
+        const string bookmark = "<w:bookmarkStart w:id=\"4\" w:name=\"Berth\"/><w:r><w:t>Berth one</w:t></w:r><w:bookmarkEnd w:id=\"4\"/>";
+        WmlDocument Make(bool marked, bool edited)
+        {
+            string first = Row("Dock", Cell(marked ? "<w:p>" + bookmark + "</w:p>" : P("Berth one")));
+            string second = Row("Crane", edited ? "Hook two, spare" : "Hook two");
+            return Table(first, controlled ? Control(9, second) : second);
+        }
+
+        var original = Make(false, false);
+        var editor = new DocxDiffReviewer { Author = "Editor", Document = Make(false, true) };
+        var marker = new DocxDiffReviewer { Author = "Marker", Document = Make(true, false) };
+        var reviewers = editorFirst ? new[] { editor, marker } : new[] { marker, editor };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+        var redline = DocxCompare.Consolidate(original, reviewers, settings);
+        var accepted = RevisionProcessor.AcceptRevisions(redline);
+        var rejected = RevisionProcessor.RejectRevisions(redline);
+        AssertValid(redline, accepted, rejected);
+        Assert.Empty(DocxDiff.GetConflicts(original, reviewers, settings));
+        Assert.Equal(Layout(Make(true, true)), Layout(accepted));
+        Assert.Equal(Layout(original), Layout(rejected));
+        Assert.Empty(Body(rejected).Descendants(W + "bookmarkStart"));
+        Assert.Empty(Body(rejected).Descendants(W + "bookmarkEnd"));
+        foreach (var doc in new[] { redline, accepted })
+        {
+            var body = Body(doc);
+            var rows = body.Descendants(W + "tr").ToArray();
+            Assert.Equal(2, rows.Length);
+            var start = Assert.Single(body.Descendants(W + "bookmarkStart"));
+            var end = Assert.Single(body.Descendants(W + "bookmarkEnd"));
+            Assert.Same(rows[0], start.Ancestors(W + "tr").Single());
+            Assert.Same(start.Ancestors(W + "p").Single(), end.Ancestors(W + "p").Single());
+            Assert.Equal("Berth", (string?)start.Attribute(W + "name"));
+            Assert.Equal((string?)start.Attribute(W + "id"), (string?)end.Attribute(W + "id"));
+            var covered = rows[0].Descendants().SkipWhile(e => e != start).TakeWhile(e => e != end);
+            Assert.Equal("Berth one", string.Concat(covered.Where(e => e.Name == W + "t").Select(e => e.Value)));
+        }
+    }
+
     [Fact]
     public void Two_reviewers_editing_a_table_with_a_content_control_row_keep_each_row_once()
     {
