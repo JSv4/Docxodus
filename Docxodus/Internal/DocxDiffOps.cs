@@ -485,6 +485,8 @@ internal static class DocxDiffOps
             settings.DetectMoves = detectMoves;
         if (root.TryGetProperty("moveSimilarityThreshold", out var sim) && sim.ValueKind == JsonValueKind.Number)
             settings.MoveSimilarityThreshold = sim.GetDouble();
+        if (root.TryGetProperty("minimumAnchorWordCount", out var minAnchor) && minAnchor.ValueKind == JsonValueKind.Number)
+            settings.MinimumAnchorWordCount = minAnchor.GetInt32();
         if (root.TryGetProperty("moveMinimumWordCount", out var minWords) && minWords.ValueKind == JsonValueKind.Number)
             settings.MoveMinimumWordCount = minWords.GetInt32();
         if (root.TryGetProperty("revisionGranularity", out var gran) && gran.ValueKind == JsonValueKind.Number)

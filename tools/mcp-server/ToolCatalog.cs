@@ -684,6 +684,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "baselinePath": { "type": "string", "description": "The earlier version both forms diff against." },
+                "minimumAnchorWordCount": { "type": "integer", "minimum": 0, "description": "Minimum words for a paragraph to anchor alignment. Use 2 for one-word positional labels." },
                 "revisedPath": { "type": "string", "description": "Two-way: the later version. Exactly one of revisedPath / revisedPaths." },
                 "revisedPaths": { "type": "array", "items": { "type": "string" }, "minItems": 2, "description": "Two or more revised versions. Merged into ONE redline by default (consolidate); with mode=fan_out, compared separately into one redline each." },
                 "mode": { "type": "string", "enum": ["consolidate", "fan_out"], "default": "consolidate", "description": "How revisedPaths is interpreted. fan_out compares the baseline against each entry separately and needs outputPaths; the baseline is read once for the whole set rather than once per entry." },

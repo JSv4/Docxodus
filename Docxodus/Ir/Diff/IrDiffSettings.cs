@@ -230,6 +230,8 @@ internal sealed record IrDiffSettings
     /// </remarks>
     public int MoveMinimumTokenCount { get; init; } = 3;
 
+    public int MinimumAnchorWordCount { get; init; }
+
     /// <summary>
     /// DIFF-TIME setting (M2.6). When true (the DEFAULT), the aligner's gap fill runs the 1:N paragraph
     /// split / N:1 merge containment scan (after similarity pairing, before the 1×1-residue rule),

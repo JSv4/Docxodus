@@ -250,6 +250,13 @@ internal static class IrBlockAligner
             if (rightMatch[rj] != -1)
                 continue;
 
+            // Position labels can repeat the same number on different entries after a renumbering.
+            // Leave short paragraphs for local pairing when the caller opts into a minimum.
+            if (settings.MinimumAnchorWordCount > 0 && leftBlocks[i] is IrParagraph lp && rightBlocks[rj] is IrParagraph rp &&
+                (!similarity.HasAnchorWords(lp, settings.MinimumAnchorWordCount) ||
+                 !similarity.HasAnchorWords(rp, settings.MinimumAnchorWordCount)))
+                continue;
+
             // Pass B refines its content-equal pair into Unchanged (format-equal) or FormatOnly.
             var resolvedKind = anchorKind == IrAlignmentKind.FormatOnly
                 ? (FormatEqual(leftBlocks[i], rightBlocks[rj], settings)

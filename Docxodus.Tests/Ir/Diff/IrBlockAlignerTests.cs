@@ -42,6 +42,26 @@ public class IrBlockAlignerTests
 
     // ------------------------------------------------------------------ identity / edit
 
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(1, 1)]
+    [InlineData(2, 0)]
+    public void FormattedLabelUsesTheSameAnchorThresholdInEitherDirection(int minimum, int expectedMoves)
+    {
+        const string plain = "<w:p><w:r><w:t>N7</w:t></w:r></w:p>";
+        const string split = "<w:p><w:r><w:t>N</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>7</w:t></w:r></w:p>";
+        const string body = "<w:p><w:r><w:t>Study the map</w:t></w:r></w:p><w:p><w:r><w:t>Cross the meadow</w:t></w:r></w:p>";
+        var left = FromXml(split + body);
+        var right = FromXml(body + plain);
+        var settings = new IrDiffSettings { MinimumAnchorWordCount = minimum };
+        foreach (var (a, b) in new[] { (left, right), (right, left), (left, FromXml(body + split)) })
+        {
+            var alignment = Align(a, b, settings);
+            Assert.Equal(expectedMoves, Count(alignment, IrAlignmentKind.MovedModified) + Count(alignment, IrAlignmentKind.Moved));
+            AssertInvariants(a, b, alignment);
+        }
+    }
+
     [Fact]
     public void Identity_all_unchanged()
     {

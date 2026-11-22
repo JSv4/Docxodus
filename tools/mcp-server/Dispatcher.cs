@@ -992,8 +992,11 @@ internal static partial class Dispatcher
         // fan_out: one redline PER revised version rather than one merged redline, with the
         // baseline read once for the whole set (issue #617). The default stays consolidate, so an
         // existing caller passing revisedPaths gets exactly what it always did.
+        var settings = DocxDiffOps.FrontDoorSettings(revisedPath is null ? null : OptStr(args, "author"), caseInsensitive: false);
+        if (OptInt(args, "minimumAnchorWordCount") is { } minimum)
+            settings.MinimumAnchorWordCount = minimum;
         if (hasMany && OptStr(args, "mode") is "fan_out")
-            return CompareFanOut(store, args, baseline, revisedPaths);
+            return CompareFanOut(store, args, baseline, revisedPaths, settings);
 
         byte[] redline;
         string revisionsJson;
@@ -1004,7 +1007,7 @@ internal static partial class Dispatcher
             // full comparison twice, once per product. It goes through the DocxCompare front door,
             // comparing the accepted view of each input as the CLI and the browser do (issue #1006).
             var products = DocxDiffOps.CompareFrontDoorProducts(
-                baseline, revised, DocxDiffOps.FrontDoorSettings(OptStr(args, "author"), caseInsensitive: false),
+                baseline, revised, settings,
                 redline: true, revisions: true, editScript: false, semanticChanges: false);
             redline = products.RedlineBytes!;
             revisionsJson = products.RevisionsJson!;
@@ -1039,7 +1042,8 @@ internal static partial class Dispatcher
             }));
             // One memoized consolidation pass serves both products (issue #617) — this used to
             // read the base and every reviewer twice, once per product.
-            var consolidated = DocxDiffOps.ConsolidateProducts(baseline, reviewersJson, null,
+            var diffOptions = JsonSerializer.Serialize(new { minimumAnchorWordCount = settings.MinimumAnchorWordCount });
+            var consolidated = DocxDiffOps.ConsolidateProducts(baseline, reviewersJson, diffOptions,
                 redline: true, revisions: true, editScript: false, conflicts: false);
             redline = consolidated.RedlineBytes!;
             revisionsJson = consolidated.RevisionsJson!;
@@ -1082,7 +1086,7 @@ internal static partial class Dispatcher
     /// of the fan-out still completes.
     /// </summary>
     private static string CompareFanOut(
-        SessionStore store, JsonElement args, byte[] baseline, JsonElement revisedPaths)
+        SessionStore store, JsonElement args, byte[] baseline, JsonElement revisedPaths, DocxDiffSettings settings)
     {
         var paths = revisedPaths.EnumerateArray().Select(value => value.GetString()).ToList();
         if (paths.Count < 2 || paths.Any(string.IsNullOrWhiteSpace))
@@ -1105,7 +1109,7 @@ internal static partial class Dispatcher
         }));
 
         using var batch = JsonDocument.Parse(DocxDiffOps.CompareBatchFrontDoorJson(
-            baseline, candidatesJson, new DocxDiffSettings(), "[\"redline\",\"revisions\"]"));
+            baseline, candidatesJson, settings, "[\"redline\",\"revisions\"]"));
 
         var summary = new StringBuilder(256);
         summary.Append("{\"results\":[");
