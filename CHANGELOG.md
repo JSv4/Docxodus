@@ -14,6 +14,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Filling a date control stores the day it shows, at midnight UTC, in every host time zone (#1842). A date-only value such as `2032-03-04` was stored as the previous day on a host east of UTC, a timestamp with an offset (`2032-03-04T01:00:00+05:00`) was stored as its UTC instant on the previous or next day, and a `DateTimeOffset` passed to `DocxSession.SetContentControlDate` was converted the same way. `w:fullDate` now always holds the value's own calendar day at `T00:00:00Z`, the same day as the default display text, as the desktop word processor stores a date control; the time of day is not kept.
+
 - `SemanticDiff.Compare` reports changes to the controls around table rows and cells, including changes to control properties, grouping, and the position of empty controls (#1814).
 
 - Revision lists include the text of an inserted or deleted row in a nested table or a table inside a content control (#1813).
