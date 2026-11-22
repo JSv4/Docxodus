@@ -1,10 +1,14 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { test, expect, type Page } from '@playwright/test';
 import { storedZip, xml, W_NS, R_NS } from './docx-zip.js';
 
 /**
  * Backspace at a paragraph's start and Delete at its end join two paragraphs, as in Word: in a
  * table cell only paragraphs of the same cell, so an empty paragraph in a cell can be removed while
- * the cell boundary stays. A tab or a line break is content: beside one, the keys delete it.
+ * the cell boundary stays. A tab, a line break or a picture is content: beside one, the keys delete
+ * it.
  */
 
 const HOST = '#cj-host';
@@ -167,4 +171,80 @@ test('Delete before a tab that ends a paragraph deletes the tab, not the paragra
   await caretBesideTab(page, 2, 'before');
   await page.keyboard.press('Delete');
   expect(await savedShapes(page)).toEqual(['Above', '|', 'Tail', 'Next']);
+});
+
+const PICTURE = fs.readFileSync(path.join(
+  path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'TestFiles', 'img.png')).toString('base64');
+
+/** Each paragraph as text, prefixed `[img]` when it holds a picture (wherever in it). */
+const withPictures = (page: Page) => page.evaluate(() =>
+  Array.from(document.querySelectorAll<HTMLElement>('#cj-host [data-anchor][contenteditable="true"]'))
+    .map((p) => (p.querySelector('img') ? '[img]' : '') + (p.textContent ?? '').replace(/[ ‎‏]/g, '').trim()));
+
+/** Puts the caret in paragraph `index` of the host, just before or just after its picture. */
+const caretBesidePicture = (page: Page, index: number, side: 'before' | 'after') =>
+  page.evaluate(({ index, side }) => {
+    const paragraph = Array.from(document.querySelectorAll<HTMLElement>('#cj-host [data-anchor][contenteditable="true"]'))[index];
+    paragraph.focus();
+    const picture = paragraph.querySelector('img')!;
+    const at = Array.prototype.indexOf.call(picture.parentNode!.childNodes, picture) + (side === 'after' ? 1 : 0);
+    window.getSelection()!.collapse(picture.parentNode, at);
+  }, { index, side });
+
+/** Body paragraphs "One" and "Two", with a picture at the end of "One", or at its start. */
+async function onePictureTwo(page: Page, pictureAt: 'end' | 'start') {
+  await mount(page);
+  const blocks = page.locator(`${HOST} [data-anchor][contenteditable="true"]`);
+  await blocks.first().click();
+  await page.keyboard.type('One');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('Two');
+  await blocks.first().click();
+  await page.keyboard.press(pictureAt === 'end' ? 'End' : 'Home');
+  await page.evaluate((b64) => (window as any).__ribbon.editor.insertImage(b64, { widthPoints: 40, heightPoints: 40 }), PICTURE);
+  await expect.poll(() => withPictures(page)).toEqual(['[img]One', 'Two']);
+}
+
+/** A cell holding "Top" and a second paragraph "Low" that starts with a picture. */
+async function cellWithPictureStartingLow(page: Page) {
+  await mount(page);
+  await page.locator(`${HOST} [data-anchor][contenteditable="true"]`).first().click();
+  await page.evaluate(() => (window as any).__ribbon.editor.insertTable(1, 2, { cellContents: ['Top', 'Next'] }));
+  await inCell(page, 0, 0).click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('Low');
+  await page.keyboard.press('Home');
+  await page.evaluate((b64) => (window as any).__ribbon.editor.insertImage(b64, { widthPoints: 40, heightPoints: 40 }), PICTURE);
+  await expect.poll(() => cells(page)).toEqual([['Top', 'Low'], ['Next']]);
+  await expect.poll(() => page.locator(`${HOST} td img`).count()).toBe(1);
+}
+
+test('Delete before a picture that ends a paragraph deletes the picture, not the paragraph mark after it', async ({ page }) => {
+  await onePictureTwo(page, 'end');
+  await caretBesidePicture(page, 0, 'before');
+  await page.keyboard.press('Delete');
+  await expect.poll(() => withPictures(page)).toEqual(['One', 'Two']);
+});
+
+test('Backspace after a picture that starts a cell paragraph deletes the picture, not the break before it', async ({ page }) => {
+  await cellWithPictureStartingLow(page);
+  await caretBesidePicture(page, 1, 'after');
+  await page.keyboard.press('Backspace');
+  await expect.poll(() => cells(page)).toEqual([['Top', 'Low'], ['Next']]);
+  await expect.poll(() => page.locator(`${HOST} img`).count()).toBe(0);
+});
+
+test('with the picture on the other side of the caret, the keys still join the paragraphs', async ({ page }) => {
+  await onePictureTwo(page, 'start');
+  await caretBesidePicture(page, 0, 'after');
+  await page.keyboard.press('End');
+  await page.keyboard.press('Delete');
+  await expect.poll(() => withPictures(page)).toEqual(['[img]One Two']);
+
+  await cellWithPictureStartingLow(page);
+  await caretBesidePicture(page, 1, 'before');
+  await page.keyboard.press('Backspace');
+  await expect.poll(() => cells(page)).toEqual([['Top Low'], ['Next']]);
+  await expect.poll(() => page.locator(`${HOST} img`).count()).toBe(1);
 });
