@@ -203,7 +203,14 @@ public class IrFieldEnvelopeMarkupRendererTests
             var field = Assert.Single(paragraph.Inlines.OfType<IrFieldRun>());
             Assert.Equal(result, Assert.IsType<IrTextRun>(Assert.Single(field.CachedResult)).Text);
             var xmlView = MainXml(doc);
-            Assert.Equal("RidgeMarker", (string?)Assert.Single(xmlView.Descendants(W + "bookmarkStart")).Attribute(W + "name"));
+            var start = Assert.Single(xmlView.Descendants(W + "bookmarkStart"));
+            var end = Assert.Single(xmlView.Descendants(W + "bookmarkEnd"));
+            Assert.Equal("RidgeMarker", (string?)start.Attribute(W + "name"));
+            Assert.Equal(start.Attribute(W + "id")!.Value, end.Attribute(W + "id")!.Value);
+            Assert.Same(start.Parent, end.Parent);
+            Assert.Contains(end, start.ElementsAfterSelf());
+            Assert.Equal("Survey checkpoint", string.Concat(start.ElementsAfterSelf().TakeWhile(e => e != end)
+                .Descendants(W + "t").Select(e => e.Value)));
             Assert.Equal(new[] { prefix + result + suffix, "Survey checkpoint" }, xmlView.Descendants(W + "p")
                 .Select(p => string.Concat(p.Descendants(W + "t").Select(e => e.Value))));
         }
