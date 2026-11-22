@@ -302,6 +302,32 @@ footers, unchanged notes) verbatim, so pending tracked changes in an input's hea
 survive into the redline under their original authors. To compare as Word's Compare does (and as the
 front door does), pass `DocxDiffSettings(pre_accept_input_revisions=True)`. Tune pairwise comparisons with `DocxDiffSettings` and N-way consolidation with `DocxDiffConsolidateSettings` (whose `conflict_resolution` takes a `ConflictResolution` value). `DetectMoves`/format-change tracking, header/footer comparison, and per-reviewer attribution all round-trip through these calls.
 
+Consolidation reports a conflict when reviewers compete for the same span of base tokens.
+With the default word boundaries, one reviewer can change the first word of a quantity
+and another can add words after it. Accepting both edits can then produce a quantity
+neither reviewer proposed.
+
+For plain prose, a punctuation-only separator set keeps words joined across ordinary
+spaces. Pass the same settings to the conflict query and to consolidation:
+
+```python
+from docx_scalpel import (
+    ConflictResolution, DocxDiffConsolidateSettings, DocxDiffSettings,
+    docx_diff_consolidate, docx_diff_get_conflicts,
+)
+
+settings = DocxDiffConsolidateSettings(
+    diff=DocxDiffSettings(word_separators=".;!?"),
+    conflict_resolution=ConflictResolution.BASE_WINS,
+)
+conflicts = docx_diff_get_conflicts(base, reviewers, settings)
+redline = docx_diff_consolidate(base, reviewers, settings)
+```
+
+This changes tokenization throughout the comparison, so unrelated edits can also
+conflict. Punctuation, formatting boundaries and non-text content can still divide a
+sentence. Inspect the reported conflicts before relying on the accepted wording.
+
 For an open session, `session.get_semantic_changes()` compares the exact opening package with the
 current logical checkpoint. It requires the default
 `DocxSessionSettings(capture_initial_projection=True)`. The schema and package-suppression rules are
