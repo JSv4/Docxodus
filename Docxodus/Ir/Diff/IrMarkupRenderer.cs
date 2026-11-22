@@ -1587,7 +1587,7 @@ internal static partial class IrMarkupRenderer
         if (sink.Count != start + 1)
             return;
         var left = SourceElement(op.LeftAnchor, state.Left);
-        CarryMissingComments(sink[start], left);
+        CarryMissingComments(sink[start], left, state.NextId);
         ReconcileSectionBreaks(sink[start], left, state);
         if (sink[start].Name != W.p)
             ReconcileEqualContainerMarkers(sink[start], left, SourceElement(op.RightAnchor, state.RightSource), state);
@@ -2845,16 +2845,57 @@ internal static partial class IrMarkupRenderer
         var baseRowsByAnchor = IndexRows(baseTblBlock);
         var baseCellsByAnchor = IndexBaseCells(baseTblBlock);
 
+        // The table's properties and grid lead. Its other non-row children (a content control that holds no row, a
+        // bookmark) go back before the same base row, as a composed row's go back between its cells (issue #1812).
         var newTbl = new XElement(W.tbl);
-        foreach (var pre in baseTbl.Elements().Where(e => e.Name != W.tr))
-            newTbl.Add(StripUnids(new XElement(pre)));
+        var extras = new List<(XElement Element, int RowsBefore)>();
+        var baseRowOrdinal = new Dictionary<XElement, int>();
+        foreach (var child in baseTbl.Elements())
+        {
+            if (child.Name == W.tr)
+                baseRowOrdinal.Add(child, baseRowOrdinal.Count);
+            else if (child.Name == W.tblPr || child.Name == W.tblGrid)
+                newTbl.Add(StripUnids(new XElement(child)));
+            else
+                extras.Add((child, baseRowOrdinal.Count));
+        }
+        int extrasPlaced = 0;
+        void PlaceExtrasBefore(int baseRow)
+        {
+            for (; extrasPlaced < extras.Count && extras[extrasPlaced].RowsBefore <= baseRow; extrasPlaced++)
+                newTbl.Add(StripUnids(new XElement(extras[extrasPlaced].Element)));
+        }
 
         // B2: the table-level shells (tblPr/tblGrid) were base-cloned above; swap in the composed winner's and
         // stamp native w:tblPrChange/w:tblGridChange (inner = base) so a table-shell edit round-trips.
         ApplyComposedTableShell(newTbl, baseTbl, op.TableShell, reviewerIrs, state);
 
+        int boundary = 0;
         foreach (var rowOp in authoredRows)
         {
+            if (rowOp.Kind != IrRowOpKind.InsertRow && rowOp.BaseRowAnchor is { } baseAnchor &&
+                baseRowsByAnchor.TryGetValue(baseAnchor, out var baseRow) && baseRowOrdinal.TryGetValue(baseRow, out var ordinal))
+            {
+                PlaceExtrasBefore(ordinal);
+                boundary = ordinal + 1;
+            }
+            else if (rowOp.Kind == IrRowOpKind.InsertRow && extrasPlaced < extras.Count && extras[extrasPlaced].RowsBefore == boundary &&
+                     rowOp.SourceReviewer >= 0 && rowOp.SourceReviewer < reviewerIrs.Count && rowOp.RightRowAnchor is { } insertedAnchor &&
+                     FindRowSource(reviewerIrs[rowOp.SourceReviewer], insertedAnchor) is { } inserted)
+            {
+                // A control the inserting reviewer keeps before the row it adds goes before it, as in that reviewer's table.
+                var kept = new HashSet<IrHash>();
+                foreach (var sibling in inserted.ElementsBeforeSelf().Reverse())
+                {
+                    if (sibling.Name == W.tr || sibling.Name == W.sdt && IrReader.UnwrapSdtChildren(sibling, W.tr).Any())
+                        break;
+                    if (sibling.Name == W.sdt)
+                        kept.Add(IrHasher.CanonicalHash(sibling));
+                }
+                for (; extrasPlaced < extras.Count && extras[extrasPlaced].RowsBefore == boundary &&
+                       kept.Contains(IrHasher.CanonicalHash(extras[extrasPlaced].Element)); extrasPlaced++)
+                    newTbl.Add(StripUnids(new XElement(extras[extrasPlaced].Element)));
+            }
             switch (rowOp.Kind)
             {
                 case IrRowOpKind.EqualRow:
@@ -2889,6 +2930,7 @@ internal static partial class IrMarkupRenderer
                 }
             }
         }
+        PlaceExtrasBefore(int.MaxValue);
 
         ReconcileComposedTableMarkers(newTbl, op, baseRowsByAnchor, baseCellsByAnchor, reviewerIrs, state);
         sink.Add(newTbl);
@@ -4452,7 +4494,7 @@ internal static partial class IrMarkupRenderer
                 continue; // right-added / left-deleted: keep its revision context
             var all = MarkersWithId(id);
             bool keepBlockCopies = false;
-            if (SplitAcrossReplacedWrapperCopies(all, state) ||
+            if (SplitAcrossCommentCopies(all, state) ||
                 SplitAroundBlockLevelCopies(all, state, ref changed, out keepBlockCopies))
             {
                 changed = true; // every marker is one-sided now → (B) gives each copy its own comment
@@ -4802,16 +4844,20 @@ internal static partial class IrMarkupRenderer
         sameKind[0].Name == W.commentRangeEnd ? sameKind[sameKind.Count - 1] : sameKind[0];
 
     /// <summary>
-    /// A common comment crosses a block wrapper that is replaced, added or removed. Each view needs its
+    /// A common comment crosses a replaced block wrapper or a moved run. Each view needs its
     /// own complete marker set: the wrapper's markers pair with counterparts in another wrapper or an ordinary
     /// paragraph. Confine bare counterparts to the uncovered view and give shared outside markers one twin
     /// per copy. Phase B then assigns each copy its own comment definition.
     /// </summary>
-    private static bool SplitAcrossReplacedWrapperCopies(List<XElement> markers, RenderState state)
+    private static bool SplitAcrossCommentCopies(List<XElement> markers, RenderState state)
     {
         var shared = new List<List<XElement>>();
         var inside = new List<XElement>();
-        static bool InCopy(XElement marker) => ReplacedWrapperCopy(marker) is not null;
+        static XElement? CopyOwner(XElement marker) => marker.Ancestors().FirstOrDefault(a =>
+            a.Name == W.moveFrom || a.Name == W.moveTo || WholeWrapperCopyView(a) is not null);
+        static bool InCopy(XElement marker) => CopyOwner(marker) is not null;
+        static XElement? Envelope(XElement copy) => copy.Name == W.moveFrom || copy.Name == W.moveTo
+            ? copy : WrapperCopyEnvelope(copy);
         foreach (var sameKind in markers.GroupBy(m => m.Name).Select(g => g.ToList()))
         {
             if (sameKind.All(m => !InCopy(m)))
@@ -4830,11 +4876,11 @@ internal static partial class IrMarkupRenderer
         }
         if (inside.Count == 0)
             return false;
-        var authority = WrapperCopyEnvelope(ReplacedWrapperCopy(inside.First(InCopy))!);
+        var authority = Envelope(CopyOwner(inside.First(InCopy))!);
         ConfineSharedCommentMarkers(inside, InCopy, authority, state);
         var copies = CommentViewCopies(inside)
-            .Select(c => (c.View, Envelope: c.Markers.Select(m => ReplacedWrapperCopy(m) is { } copy
-                ? WrapperCopyEnvelope(copy) : m.Ancestors().FirstOrDefault(a => a.Name == W.ins || a.Name == W.del))
+            .Select(c => (c.View, Envelope: c.Markers.Select(m => CopyOwner(m) is { } copy
+                ? Envelope(copy) : m.Ancestors().FirstOrDefault(a => a.Name == W.ins || a.Name == W.del))
                 .FirstOrDefault(e => e is not null)))
             .ToList();
         TwinSharedMarkersPerCopy(shared, copies, state);
@@ -4849,7 +4895,7 @@ internal static partial class IrMarkupRenderer
     /// such copies are never collapsed. A marker of the same kind shown in both views (an inline one the fine path
     /// kept bare) is confined to the views no block-level copy covers. When both views then hold a copy of their
     /// own, the markers both views still share (typically the reference, in an equal paragraph) are given a twin
-    /// per view, as for a comment straddling a replaced wrapper (<see cref="SplitAcrossReplacedWrapperCopies"/>),
+    /// per view, as for a comment straddling a replaced wrapper (<see cref="SplitAcrossCommentCopies"/>),
     /// and true is returned: phase B gives each view a comment of its own. Otherwise the caller collapses the rest,
     /// leaving the per-view copies alone (<paramref name="keepBlockCopies"/>) unless a view would be left with half
     /// a range, when they collapse too. Every revision minted here takes the author and date of the copies between
@@ -5076,15 +5122,19 @@ internal static partial class IrMarkupRenderer
     {
         foreach (var a in marker.Ancestors())
         {
-            if (a.Name == W.del)
-                return RevKind.Del;
-            if (a.Name == W.ins)
-                return RevKind.Ins;
+            if (CommentRevisionView(a.Name) is { } revision)
+                return revision;
             if (WholeWrapperCopyView(a) is { } view)
                 return view;
         }
         return null;
     }
+
+    // A move source survives rejection and a destination survives acceptance. Each copy goes
+    // through the same definition and marker reconciliation as a deleted or inserted copy.
+    private static RevKind? CommentRevisionView(XName name) =>
+        name == W.del || name == W.moveFrom ? RevKind.Del :
+        name == W.ins || name == W.moveTo ? RevKind.Ins : null;
 
     /// <summary>The view of the nearest block wrapper around <paramref name="marker"/> that is emitted as a whole
     /// deleted or inserted copy, or null when no such wrapper encloses it (run-level <c>w:ins</c>/<c>w:del</c>
@@ -5116,7 +5166,7 @@ internal static partial class IrMarkupRenderer
         {
             if (a.Name == W.p || a.Name == W.body || a.Name == W.tc || a.Name == W.hdr || a.Name == W.ftr)
                 return true;
-            if (a.Name != W.r && a.Name != W.ins && a.Name != W.del && a.Name != W.hyperlink &&
+            if (a.Name != W.r && CommentRevisionView(a.Name) is null && a.Name != W.hyperlink &&
                 a.Name != W.sdt && a.Name != W.sdtContent && !IsBlockCustomXml(a) && a.Name != W.smartTag &&
                 a.Name != W.fldSimple)
                 return false;
@@ -5418,6 +5468,77 @@ internal static partial class IrMarkupRenderer
             .Where(r => r.Source is not null).Select(r => (r.Reviewer, r.Source!, r.Author)), baseIr, state);
     }
 
+    /// <summary>
+    /// Carry into a block emitted from one source the comments and bookmarks inside its paragraphs that each of
+    /// <paramref name="reviewers"/> added while leaving the block's text equal: the base's copy, or another
+    /// reviewer's edit of it (issue #1812). The IR leaves both kinds of marker out (rule N3), so the emitted copy holds
+    /// only its own source's.
+    /// </summary>
+    internal static void CarryReviewerInlineMarkers(XElement emitted,
+        IReadOnlyList<(int Reviewer, XElement Source, string Author)> reviewers, IrDocument baseIr, XElement? baseBlock,
+        RenderState state, bool baseCopy = true)
+    {
+        CarryReviewerComments(new[] { emitted }, reviewers.Select(r => r.Source), baseIr, baseBlock, state, originalView: true,
+            baseCopy);
+        CarryReviewerOnlyBookmarks(emitted, reviewers, baseIr, state);
+    }
+
+    /// <summary>Carry into <paramref name="emitted"/> the comment markers each of <paramref name="sources"/> placed where the
+    /// base's copy of the block, <paramref name="baseBlock"/>, does not have them (issue #1812): a reviewer's own comment,
+    /// or a reviewer's move of a base comment's marker. Only the body's: the merge brings in comment definitions for the
+    /// body's references.</summary>
+    /// <remarks>
+    /// A comment of the base is never carried into another reviewer's edit (<paramref name="baseCopy"/> false): that
+    /// reviewer's copy already holds the base's comment where it keeps it, so a second reviewer's copy of the comment
+    /// elsewhere could only move it, or re-anchor it on text the second reviewer removed, and either would leave one
+    /// comment with two ranges. Into the base's own copy, a base comment is carried unless the reviewer only moved it
+    /// (<see cref="MovesABaseComment"/>).
+    /// </remarks>
+    internal static void CarryReviewerComments(IReadOnlyList<XElement> emitted, IEnumerable<XElement> sources,
+        IrDocument baseIr, XElement? baseBlock, RenderState state, bool originalView, bool baseCopy = false)
+    {
+        var anchors = BaseCommentAnchors(baseIr, state);
+        foreach (var source in sources)
+            if (source.Ancestors(W.body).FirstOrDefault() is { } body)
+                CarryMissingComments(emitted, source, baseBlock, originalView, textBoxes: false, state.NextId,
+                    baseCopy ? id => MovesABaseComment(id, body, anchors, state) : anchors.ContainsKey);
+    }
+
+    /// <summary>The texts of the base paragraphs that hold each base body comment's markers, read once (issue #1812).</summary>
+    private static Dictionary<string, HashSet<string>> BaseCommentAnchors(IrDocument baseIr, RenderState state)
+    {
+        if (state.BaseCommentAnchors is { } known)
+            return known;
+        static string Text(XElement paragraph) => string.Concat(paragraph.Descendants(W.t).Select(t => t.Value));
+        var anchors = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        if (baseIr.Body.Blocks.Select(b => b.Source.Element).FirstOrDefault(e => e is not null)?.Ancestors(W.body).FirstOrDefault() is { } baseBody)
+            foreach (var marker in baseBody.Descendants().Where(IsCommentMarker))
+                if ((string?)marker.Attribute(W.id) is { } id && marker.Ancestors(W.p).FirstOrDefault() is { } paragraph)
+                    (anchors.TryGetValue(id, out var texts) ? texts : anchors[id] = new HashSet<string>(StringComparer.Ordinal))
+                        .Add(Text(paragraph));
+        return state.BaseCommentAnchors = anchors;
+    }
+
+    /// <summary>
+    /// True when <paramref name="id"/> is a comment of the base whose anchor the reviewer whose body is
+    /// <paramref name="reviewerBody"/> kept: the reviewer still has, with its text unchanged, every base paragraph that
+    /// holds one of the comment's markers, a paragraph holding no text among them (issue #1812). Such a reviewer's copy
+    /// of the comment elsewhere only moves it,
+    /// and a reviewer's change to where a base comment sits is not carried. A reviewer who removed or rewrote some of
+    /// the comment's paragraphs, and anchored the comment on what remains, has it carried.
+    /// </summary>
+    private static bool MovesABaseComment(string id, XElement reviewerBody, Dictionary<string, HashSet<string>> baseAnchors,
+        RenderState state)
+    {
+        static string Text(XElement paragraph) => string.Concat(paragraph.Descendants(W.t).Select(t => t.Value));
+        if (!baseAnchors.TryGetValue(id, out var anchors))
+            return false;
+        state.ReviewerParagraphTexts ??= new Dictionary<XElement, HashSet<string>>();
+        if (!state.ReviewerParagraphTexts.TryGetValue(reviewerBody, out var kept))
+            state.ReviewerParagraphTexts[reviewerBody] = kept = reviewerBody.Descendants(W.p).Select(Text).ToHashSet(StringComparer.Ordinal);
+        return anchors.IsSubsetOf(kept);
+    }
+
     internal static void CarryReviewerOnlyBookmarks(XElement emitted,
         IEnumerable<(int Reviewer, XElement Source, string Author)> reviewers, IrDocument baseIr, RenderState state)
     {
@@ -5458,7 +5579,7 @@ internal static partial class IrMarkupRenderer
                             && state.CompositeBookmarks?.Allows(reviewer.Reviewer, child) != false && carried.Add((targets[i], key)))
                         {
                             var marker = StripUnids(new XElement(child));
-                            InsertAtTextOffset(targets[i], marker, offset, originalView: true);
+                            InsertAtTextOffset(targets[i], marker, offset, originalView: true, state.NextId);
                             WrapMarkerInRevision(marker, RevKind.Ins, state);
                         }
                     }
@@ -5469,83 +5590,178 @@ internal static partial class IrMarkupRenderer
         state.AuthorOverride = savedAuthor;
     }
 
-    /// <summary>An equal paragraph is copied from only one source. Preserve missing comment markers from
-    /// its counterpart at their source offsets, including their order at a shared offset. Common comments stay
+    /// <summary>A block is copied from only one source. Preserve missing comment markers from a counterpart
+    /// with the same text at their source offsets, including their order at a shared offset. Common comments stay
     /// bare until NormalizeComments assigns their source view and reviewer. Equal containers pair paragraphs
     /// in order, as their block content is unchanged.</summary>
-    internal static void CarryMissingComments(XElement emitted, XElement? source)
+    internal static void CarryMissingComments(XElement emitted, XElement? source, Func<int>? nextId = null) =>
+        CarryMissingComments(new[] { emitted }, source, nextId: nextId);
+
+    /// <summary>
+    /// <see cref="CarryMissingComments(XElement, XElement?)"/> for a block emitted as one or more copies (issue #1812):
+    /// another reviewer's edit of it, or a paragraph's deleted and inserted copies. Each counterpart paragraph's
+    /// comments go into one copy's paragraph at the same position: one with the same text, or else, when
+    /// <paramref name="originalView"/> allows, one whose original view (its text without insertions, with deletions) is
+    /// the counterpart's text, where the markers go at original-view offsets, around the revisions as a bookmark's do.
+    /// A marker <paramref name="baseBlock"/> (the base's copy) has at the same place is the base's: the copies already
+    /// place it or drop it, so it is not added, only used to order the markers beside it. A copy holding moved text, a
+    /// comment whose markers would come out of order, and, unless <paramref name="textBoxes"/>, a text box's comments,
+    /// which a paragraph-level offset cannot reach, are left out.
+    /// </summary>
+    internal static void CarryMissingComments(IReadOnlyList<XElement> emitted, XElement? source,
+        XElement? baseBlock = null, bool originalView = true, bool textBoxes = true, Func<int>? nextId = null,
+        Func<string, bool>? notCarried = null)
     {
         if (source is null || !source.Descendants().Any(IsCommentMarker))
             return;
-        if (emitted.Name != W.p)
-        {
-            var originals = source.Descendants(W.p).ToList();
-            var copies = emitted.Descendants(W.p).ToList();
-            if (originals.Count == copies.Count)
-                for (int i = 0; i < originals.Count; i++)
-                    CarryMissingComments(copies[i], originals[i]);
-            return;
-        }
-        // Preserved input revisions can give an otherwise equal block a different emitted text shape.
-        if (!string.Concat(source.Descendants(W.t).Select(t => t.Value))
-            .Equals(string.Concat(emitted.Descendants(W.t).Select(t => t.Value)), StringComparison.Ordinal))
-            return;
-        IEnumerable<(XElement Element, int Offset)> Positions()
+        static List<XElement> Paragraphs(XElement block) =>
+            block.Name == W.p ? new List<XElement> { block } : block.Descendants(W.p).ToList();
+        static string Text(XElement paragraph) => string.Concat(paragraph.Descendants(W.t).Select(t => t.Value));
+        static string OriginalView(XElement element) => element.Name == W.ins ? ""
+            : element.Name == W.t || element.Name == W.delText ? element.Value
+            : string.Concat(element.Elements().Select(OriginalView));
+        List<(XElement Element, int Offset)> Markers(XElement paragraph)
         {
             int offset = 0;
-            foreach (var element in source.Descendants())
+            var markers = new List<(XElement, int)>();
+            foreach (var element in paragraph.Descendants())
             {
                 if (element.Name == W.t) offset += element.Value.Length;
-                if (IsCommentMarker(element)) yield return (element, offset);
+                if (IsCommentMarker(element) && element.Attribute(W.id) is not null &&
+                    (textBoxes || element.Ancestors(W.p).First() == paragraph))
+                    markers.Add((element, offset));
             }
+            return markers;
         }
-        CarryCommentMarkers(emitted, Positions());
+        var originals = Paragraphs(source);
+        var copies = emitted.Select(Paragraphs).Where(c => c.Count == originals.Count).ToList();
+        var baseParagraphs = baseBlock is null ? null : Paragraphs(baseBlock);
+        if (baseParagraphs?.Count != originals.Count)
+            baseParagraphs = null;
+
+        for (int i = 0; i < originals.Count; i++)
+        {
+            var original = originals[i];
+            var baseMarkers = baseParagraphs is null ? null : Markers(baseParagraphs[i])
+                .Select(m => (m.Element.Name, (string?)m.Element.Attribute(W.id), m.Offset)).ToHashSet();
+            // A base marker at its base place stays among the positions: it is not added, but orders the markers beside it.
+            var positions = Markers(original)
+                .Select(m => (m.Element, m.Offset,
+                    Base: baseMarkers?.Contains((m.Element.Name, (string?)m.Element.Attribute(W.id), m.Offset)) == true))
+                .Where(m => m.Base || notCarried is null || !notCarried((string)m.Element.Attribute(W.id)!)).ToList();
+            if (positions.Count == 0)
+                continue;
+            if (positions.All(p => p.Base))
+                continue;
+            // Preserved input revisions can give an otherwise equal block a different emitted text shape.
+            var text = Text(original);
+            var candidates = copies.Select(c => c[i])
+                .Where(p => !p.Descendants().Any(e => e.Name == W.moveFrom || e.Name == W.moveTo)).ToList();
+            bool inOriginalView = false;
+            var target = candidates.FirstOrDefault(p => Text(p).Equals(text, StringComparison.Ordinal));
+            if (target is null && originalView &&
+                (target = candidates.FirstOrDefault(p => OriginalView(p).Equals(text, StringComparison.Ordinal))) is not null)
+                inOriginalView = true;
+            if (target is not null)
+                CarryCommentMarkers(target, positions, inOriginalView, nextId);
+        }
     }
 
     private static bool IsCommentMarker(XElement element) => element.Name == W.commentRangeStart ||
         element.Name == W.commentRangeEnd || element.Name == W.commentReference;
 
-    private static void CarryCommentMarkers(XElement emitted, IEnumerable<(XElement Element, int Offset)> positions)
+    private static void CarryCommentMarkers(XElement emitted, IEnumerable<(XElement Element, int Offset, bool Base)> positions,
+        bool originalView = false, Func<int>? nextId = null)
     {
         var markers = emitted.Descendants().Where(IsCommentMarker)
             .GroupBy(m => (m.Name, (string?)m.Attribute(W.id))).ToDictionary(g => g.Key, g => g.First());
+        var carried = new List<(string Id, XElement Content)>();
         XElement? previous = null;
         int previousOffset = -1;
-        foreach (var (element, offset) in positions)
+        foreach (var (element, offset, isBase) in positions)
         {
             if ((string?)element.Attribute(W.id) is not { } id)
                 continue;
             if (!markers.TryGetValue((element.Name, id), out var marker))
             {
+                // The base's own marker, which the copy does not hold: the edit that made the copy dropped it.
+                if (isBase)
+                    continue;
                 marker = StripUnids(new XElement(element));
                 var content = marker.Name == W.commentReference
                     ? new XElement(W.r, element.Parent?.Element(W.rPr), marker) : marker;
                 if (previous is not null && previousOffset == offset)
                     previous.AddAfterSelf(content);
                 else
-                    InsertAtTextOffset(emitted, content, offset);
+                    InsertAtTextOffset(emitted, content, offset, originalView, nextId);
                 markers.Add((element.Name, id), marker);
+                carried.Add((id, content));
             }
             previous = marker.Name == W.commentReference ? marker.Parent! : marker;
             while (previous.Parent is { } parent && (parent.Name == W.ins || parent.Name == W.del))
                 previous = parent;
             previousOffset = offset;
         }
+        // A comment whose start, end and reference no longer come in that order (an offset the copy's structure cannot
+        // reach) is left out rather than written inside out (issue #1812).
+        foreach (var id in carried.Select(c => c.Id).Distinct().ToList())
+        {
+            int Index(XName name) => markers.TryGetValue((name, id), out var m) && m.Parent is not null
+                ? emitted.Descendants().TakeWhile(d => d != m).Count() : -1;
+            int start = Index(W.commentRangeStart), end = Index(W.commentRangeEnd), reference = Index(W.commentReference);
+            if (start >= 0 && end >= 0 && start > end || end >= 0 && reference >= 0 && end > reference ||
+                start >= 0 && reference >= 0 && start > reference)
+                foreach (var (_, content) in carried.Where(c => c.Id == id))
+                    content.Remove();
+        }
     }
 
     /// <summary>Insert <paramref name="marker"/> among <paramref name="paragraph"/>'s children where
     /// <paramref name="offset"/> characters of its text precede it, splitting a plain one-text run the offset
-    /// falls inside. In the original view, insertions consume no characters and deletions do; bookmark
-    /// endpoints stay outside another reviewer's revisions and enclose replacement text at their boundaries.</summary>
-    private static void InsertAtTextOffset(XElement paragraph, XElement marker, int offset, bool originalView = false)
+    /// falls inside. In the original view, insertions consume no characters and deletions do; bookmark and
+    /// comment endpoints stay outside another reviewer's revisions and enclose replacement text at their boundaries.</summary>
+    private static void InsertAtTextOffset(XElement paragraph, XElement marker, int offset, bool originalView = false,
+        Func<int>? nextId = null)
     {
         static int OriginalLength(XElement element) => element.Name == W.ins ? 0
             : element.Name == W.t || element.Name == W.delText ? element.Value.Length
             : element.Elements().Sum(OriginalLength);
-        bool end = originalView && marker.Name == W.bookmarkEnd;
+        static bool ZeroWidthMarker(XElement e) => IsCommentMarker(e) || e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd ||
+            (e.Name == W.r || e.Name == W.ins || e.Name == W.del) && e.Elements().Any(x => x.Name != W.rPr) &&
+            e.Elements().Where(x => x.Name != W.rPr).All(ZeroWidthMarker);
+        // A split copies the revisions on the part it clones; each keeps an id of its own (issue #1812).
+        void Renumber(XElement copy)
+        {
+            if (nextId is null)
+                return;
+            foreach (var revision in copy.DescendantsAndSelf())
+                if ((revision.Name == W.rPrChange || revision.Name == W.ins || revision.Name == W.del) && revision.Attribute(W.id) is not null)
+                    revision.SetAttributeValue(W.id, nextId());
+        }
+        // Split a plain one-text run at split characters, the marker between its halves.
+        void SplitRun(XElement run, int split)
+        {
+            var text = run.Elements().First(e => e.Name != W.rPr);
+            var tail = new XElement(run);
+            Renumber(tail);
+            text.Value = text.Value[..split];
+            tail.Elements().First(e => e.Name != W.rPr).Value = tail.Elements().First(e => e.Name != W.rPr).Value[split..];
+            foreach (var t in new[] { text, tail.Elements().First(e => e.Name != W.rPr) })
+                t.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+            run.AddAfterSelf(marker, tail);
+        }
+        static bool PlainRun(XElement run) => run.Name == W.r &&
+            run.Elements().Where(e => e.Name != W.rPr).ToList() is { Count: 1 } content && content[0].Name == W.t;
+        bool end = originalView && (marker.Name == W.bookmarkEnd || marker.Name == W.commentRangeEnd ||
+            marker.Element(W.commentReference) is not null);
+        bool start = marker.Name == W.bookmarkStart || marker.Name == W.commentRangeStart;
         int seen = 0;
         foreach (var child in paragraph.Elements().Where(e => e.Name != W.pPr).ToList())
         {
+            // An offset inside an earlier child that cannot be split goes after the markers already placed there, so
+            // markers placed in order stay in order (issue #1812).
+            if (offset < seen && ZeroWidthMarker(child))
+                continue;
             int length = originalView ? OriginalLength(child) : child.Descendants(W.t).Sum(t => t.Value.Length);
             bool atBoundary = !end || length > 0;
             if (originalView && child.Name == W.ins)
@@ -5565,7 +5781,8 @@ internal static partial class IrMarkupRenderer
             {
                 if (!end)
                 {
-                    child.AddBeforeSelf(marker);
+                    // A start inside deleted text goes before it, and before the replacement drawn just ahead of it.
+                    (child.ElementsBeforeSelf().LastOrDefault() is { } before && before.Name == W.ins ? before : child).AddBeforeSelf(marker);
                     return;
                 }
                 // An interior position in deleted text has no accepted counterpart. Keep the range's
@@ -5576,20 +5793,46 @@ internal static partial class IrMarkupRenderer
                 child.Name == W.smartTag || child.Name == W.sdt))
             {
                 InsertAtTextOffset(child.Name == W.sdt ? child.Element(W.sdtContent)! : child,
-                    marker, offset - seen, originalView);
+                    marker, offset - seen, originalView, nextId);
                 return;
             }
-            var runContent = child.Elements().Where(e => e.Name != W.rPr).ToList();
-            if (offset < seen + length && child.Name == W.r && runContent.Count == 1 && runContent[0].Name == W.t)
+            if (offset < seen + length && PlainRun(child))
             {
-                var text = runContent[0];
-                int split = offset - seen;
-                var tail = new XElement(child);
-                text.Value = text.Value[..split];
-                tail.Element(W.t)!.Value = tail.Element(W.t)!.Value[split..];
-                foreach (var t in new[] { text, tail.Element(W.t)! })
-                    t.SetAttributeValue(XNamespace.Xml + "space", "preserve");
-                child.AddAfterSelf(marker, tail);
+                SplitRun(child, offset - seen);
+                return;
+            }
+            // Inside an insertion's plain run, in the view that shows it: the insertion is split in two around the marker.
+            if (!originalView && nextId is not null && offset < seen + length && child.Name == W.ins)
+            {
+                int inside = 0;
+                foreach (var run in child.Elements().ToList())
+                {
+                    int runLength = run.Descendants(W.t).Sum(t => t.Value.Length);
+                    bool between = offset - seen == inside && inside > 0;
+                    if (between || offset - seen < inside + runLength && PlainRun(run) && offset - seen > inside)
+                    {
+                        var second = new XElement(W.ins, child.Attributes());
+                        Renumber(second);
+                        if (between)
+                            run.AddBeforeSelf(marker);
+                        else
+                            SplitRun(run, offset - seen - inside);
+                        var moved = marker.ElementsAfterSelf().ToList();
+                        foreach (var node in moved)
+                            node.Remove();
+                        second.Add(moved);
+                        marker.Remove();
+                        child.AddAfterSelf(marker, second);
+                        return;
+                    }
+                    inside += runLength;
+                }
+            }
+            // A child that cannot be split: a range's start goes before it and anything else after it, so the range
+            // covers the child rather than coming out of order.
+            if (start && seen < offset && offset < seen + length)
+            {
+                child.AddBeforeSelf(marker);
                 return;
             }
             seen += length;
@@ -11630,6 +11873,12 @@ internal static partial class IrMarkupRenderer
 
         /// <summary>The base document's bookmark names, for <see cref="CarryReviewerOnlyBookmarks"/>.</summary>
         public HashSet<string>? BaseBookmarkNames { get; set; }
+
+        /// <summary>The texts of the base paragraphs that hold each base comment's markers (issue #1812).</summary>
+        public Dictionary<string, HashSet<string>>? BaseCommentAnchors { get; set; }
+
+        /// <summary>Each reviewer body's paragraph texts, read once per body (issue #1812).</summary>
+        public Dictionary<XElement, HashSet<string>>? ReviewerParagraphTexts { get; set; }
 
         public CompositeBookmarkPlan? CompositeBookmarks { get; set; }
 
