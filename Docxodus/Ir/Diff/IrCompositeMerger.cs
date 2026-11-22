@@ -98,11 +98,14 @@ internal static class IrCompositeMerger
         var bookmarks = IrMarkupRenderer.PlanCompositeBookmarks(baseIr, reviewers, scripts,
             policy, settings, conflicts, ref nextConflictId);
 
+        var attachments = IrCommentAttachments.Compose(baseIr, rawScripts, reviewers, ops, policy, conflicts, ref nextConflictId);
+
         // Each reviewer's own comparison rides along for the renderer: the composite ops say nothing about the
         // bookmarks and comment ranges a reviewer has between blocks (rule N3), and placing them needs that
         // reviewer's alignment with the base, in the body and in each note (issues #1149, #1175).
         return new IrCompositeScript(IrNodeList.From(ops), IrNodeList.From(conflicts), noteOps, noteIdMaps, trailingSectPr,
-            IrNodeList.From(scripts.Select(script => new IrReviewerComparison(script.Operations, script.NoteOps))), bookmarks);
+            IrNodeList.From(scripts.Select((script, i) => new IrReviewerComparison(script.Operations, script.NoteOps,
+                IrCommentAttachments.BaseAttachments(baseIr, rawScripts[i], reviewers.Count == 1, i, attachments)))), bookmarks, attachments);
     }
 
     // ---- N-way note-scope merge ----
@@ -2345,7 +2348,7 @@ internal static class IrCompositeMerger
 
     /// <summary>Every row of <paramref name="ir"/>'s tables by anchor, nested tables included; built once per
     /// document.</summary>
-    private static Dictionary<string, IrRow> RowIndex(IrDocument ir) => RowIndexes.GetValue(ir, doc =>
+    internal static Dictionary<string, IrRow> RowIndex(IrDocument ir) => RowIndexes.GetValue(ir, doc =>
     {
         var index = new Dictionary<string, IrRow>(StringComparer.Ordinal);
         void Visit(IrTable table)
@@ -2644,7 +2647,7 @@ internal static class IrCompositeMerger
     }
 
     /// <summary>Every cell of <paramref name="ir"/> by anchor, nested tables included; built once per document.</summary>
-    private static Dictionary<string, IrCell> CellIndex(IrDocument ir) => CellIndexes.GetValue(ir, doc =>
+    internal static Dictionary<string, IrCell> CellIndex(IrDocument ir) => CellIndexes.GetValue(ir, doc =>
     {
         var index = new Dictionary<string, IrCell>(StringComparer.Ordinal);
         void Visit(IrTable table)

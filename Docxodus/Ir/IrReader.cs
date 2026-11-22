@@ -469,6 +469,18 @@ internal static class IrReader
         private readonly Dictionary<string, (IrAnchor Block, int Offset)> _danglingRefs =
             new(StringComparer.Ordinal);
 
+        // Field markers have a physical paragraph even when their character offsets are unmodeled.
+        private Dictionary<string, (IrAnchor First, IrAnchor Last)>? _fieldMarkers;
+        public void FieldMarker(string id)
+        {
+            _fieldMarkers ??= new(StringComparer.Ordinal);
+            var first = _fieldMarkers.TryGetValue(id, out var existing) ? existing.First : _currentBlock;
+            _fieldMarkers[id] = (first, _currentBlock);
+        }
+
+        public (IrAnchor First, IrAnchor Last)? FieldParagraphs(string id) =>
+            _fieldMarkers is not null && _fieldMarkers.TryGetValue(id, out var range) ? range : null;
+
         private IrAnchor _currentBlock;
         private int _charOffset;
 
@@ -1524,9 +1536,13 @@ internal static class IrReader
         /// </summary>
         private void HandleCommentRangeMarker(XElement marker)
         {
-            if (_ctx.CommentTracker is null || _fieldDepth > 0)
-                return;
+            if (_ctx.CommentTracker is null) return;
             var id = (string?)marker.Attribute(W + "id") ?? "";
+            if (_fieldDepth > 0)
+            {
+                _ctx.CommentTracker.FieldMarker(id);
+                return;
+            }
             if (marker.Name == W + "commentRangeStart")
                 _ctx.CommentTracker.OpenRange(id);
             else
@@ -1557,8 +1573,9 @@ internal static class IrReader
                 }
                 if (child.Name == W + "commentReference")
                 {
-                    if (_ctx.CommentTracker is not null && _fieldDepth == 0)
-                        _ctx.CommentTracker.Reference((string?)child.Attribute(W + "id") ?? "");
+                    var id = (string?)child.Attribute(W + "id") ?? "";
+                    if (_fieldDepth == 0) _ctx.CommentTracker?.Reference(id);
+                    else _ctx.CommentTracker?.FieldMarker(id);
                     continue; // never emitted; never hashed.
                 }
                 if (_fieldDepth > 0)
@@ -3419,7 +3436,11 @@ internal static class IrReader
                 var targets = tracker.TargetsFor(commentId);
 
                 comments.Add(new IrComment(anchor, author, initials, date,
-                    IrNodeList.From(blocks), IrNodeList.From(targets)));
+                    IrNodeList.From(blocks), IrNodeList.From(targets))
+                {
+                    PackageId = commentId,
+                    FieldMarkerParagraphs = tracker.FieldParagraphs(commentId),
+                });
             }
 
             if (retain)
