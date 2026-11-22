@@ -305,7 +305,8 @@ front door does), pass `DocxDiffSettings(pre_accept_input_revisions=True)`. Tune
 Consolidation reports a conflict when reviewers compete for the same span of base tokens.
 With the default word boundaries, one reviewer can change the first word of a quantity
 and another can add words after it. Accepting both edits can then produce a quantity
-neither reviewer proposed.
+neither reviewer proposed. A desktop word processor's own combine feature does the same, in
+either reviewer order (see `docs/ooxml_corner_cases.md`).
 
 For plain prose, a punctuation-only separator set keeps words joined across ordinary
 spaces. Pass the same settings to the conflict query and to consolidation:
