@@ -352,12 +352,15 @@ public class ConsolidateReviewerMarkerTests
         }
     }
 
-    [Fact]
-    public void An_identical_paragraph_elsewhere_does_not_own_a_deleted_comment_anchor()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Similar_text_elsewhere_does_not_own_a_deleted_comment_anchor(bool tabOnly)
     {
-        var source = P("Alpha ", Commented("beta"), " gamma delta.");
+        var source = tabOnly ? P(Commented("beta").Replace(Run("beta"), "<w:r><w:tab/></w:r>"))
+            : P("Alpha ", Commented("beta"), " gamma delta.");
         var gap = P("The plates stay on the upper shelf.");
-        var duplicate = P("Alpha beta gamma delta.");
+        var duplicate = tabOnly ? P() : P("Alpha beta gamma delta.");
         var target = P("Returns are due on Fridays.");
         var baseTail = P("Invoices go out on Thursdays.");
         var editedTail = P("Invoices go out on Mondays.");
@@ -373,6 +376,13 @@ public class ConsolidateReviewerMarkerTests
             var marked = DocxCompare.Consolidate(original, reviewers, settings);
             var accepted = RevisionProcessor.AcceptRevisions(marked);
             var rejected = RevisionProcessor.RejectRevisions(marked);
+            var starts = Body(marked).Descendants(W + "commentRangeStart").ToList();
+            Assert.Equal(2, starts.Count);
+            foreach (var start in starts)
+            {
+                var revision = start.Ancestors().First(e => e.Name == W + "ins" || e.Name == W + "del");
+                Assert.Equal("Reviewer B", (string?)revision.Attribute(W + "author"));
+            }
             Assert.Empty(DocxDiff.GetConflicts(original, reviewers, settings));
             Assert.Equal(View(expected), View(accepted));
             Assert.Equal(View(original), View(rejected));
