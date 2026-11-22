@@ -346,7 +346,10 @@ internal static partial class IrMarkupRenderer
 
     private static void PlaceStreamMarkers(XElement stream, IReadOnlyDictionary<int, List<XElement>> markers)
     {
-        var blocks = stream.Elements().Where(IsMarkerStreamContent).ToList();
+        // A table's markers are planned between its rows and a row's between its cells; a content control among them
+        // that holds none (issue #1812) is not one of the positions.
+        var blocks = stream.Elements().Where(e => stream.Name == W.tbl ? e.Name == W.tr
+            : stream.Name == W.tr ? e.Name == W.tc : IsMarkerStreamContent(e)).ToList();
         stream.Elements().Where(IsBlockLevelMarker).Remove();
         foreach (var (index, values) in markers.OrderBy(p => p.Key))
         {
@@ -534,8 +537,9 @@ internal static partial class IrMarkupRenderer
     internal static void ReconcileCompositeEqualContainerMarkers(XElement emitted, XElement baseSource,
         IReadOnlyList<(int Reviewer, XElement Counterpart)> counterparts, IReadOnlyList<string> authors, RenderState state)
     {
-        CarryReviewerOnlyBookmarks(emitted, counterparts.Select(c =>
-            (c.Reviewer, c.Counterpart, authors[c.Reviewer])), state.Left, state);
+        CarryReviewerInlineMarkers(emitted, counterparts.Select(c =>
+            (c.Reviewer, c.Counterpart, authors[c.Reviewer])).ToList(), state.Left, baseSource, state);
+        ApplyCopiedCommentAttachments(emitted, baseSource, state);
         var placement = new CompositeMarkerPlacement(state);
         var streams = new Dictionary<XElement, XElement>(ReferenceEqualityComparer.Instance); // emitted -> base
         foreach (var (reviewer, counterpart) in counterparts)
@@ -593,6 +597,7 @@ internal static partial class IrMarkupRenderer
     /// </summary>
     internal static bool ReconcileEqualContainerMarkers(XElement emitted, XElement? left, XElement? right, RenderState state)
     {
+        ApplyCopiedCommentAttachments(emitted, left, state);
         if (left is null || right is null || ReferenceEquals(left, right) ||
             !HasMarkerBetweenBlocks(left) && !HasMarkerBetweenBlocks(right))
             return false;
@@ -627,7 +632,8 @@ internal static partial class IrMarkupRenderer
         return true;
     }
 
-    /// <summary>Marker-only table and cell reviewers also contribute bookmarks inside paragraphs.</summary>
+    /// <summary>Marker-only table and cell reviewers also contribute the bookmarks and comments inside paragraphs
+    /// (issue #1812).</summary>
     internal static bool CompositeMarkersDiffer(XElement? left, XElement? right)
     {
         static IEnumerable<(int Paragraph, int Offset, string Key)> Inline(XElement? container)
@@ -639,7 +645,8 @@ internal static partial class IrMarkupRenderer
                 foreach (var element in p.Descendants())
                 {
                     if (element.Name == W.t) offset += element.Value.Length;
-                    if ((element.Name == W.bookmarkStart || element.Name == W.bookmarkEnd) && IsRunLevelBookmark(element))
+                    if ((element.Name == W.bookmarkStart || element.Name == W.bookmarkEnd) && IsRunLevelBookmark(element) ||
+                        IsCommentMarker(element))
                         yield return (paragraph, offset, MarkerKey(element));
                 }
                 paragraph++;
