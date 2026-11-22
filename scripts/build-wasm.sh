@@ -135,9 +135,13 @@ const files = fs.readdirSync(dir).filter(f => !f.endsWith(".br") && fs.statSync(
 Promise.all(files.map(async f => {
   const p = path.join(dir, f);
   const buf = fs.readFileSync(p);
-  const c = await compress(buf, { params: {
+  const params = {
     [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
-    [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buf.length } });
+    [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buf.length
+  };
+  // The generated Open XML schema assembly compresses better with a 2 MiB history window.
+  if (f === "DocumentFormat.OpenXml.wasm") params[zlib.constants.BROTLI_PARAM_LGWIN] = 21;
+  const c = await compress(buf, { params });
   fs.writeFileSync(p + ".br", c);
   return [buf.length, c.length];
 })).then(sizes => {
