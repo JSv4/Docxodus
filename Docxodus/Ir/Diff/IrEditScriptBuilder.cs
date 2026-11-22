@@ -76,7 +76,7 @@ internal static class IrEditScriptBuilder
         var headerFooterOps = BuildHeaderFooterOps(left, right, settings, bodyOps);
         return UniqueMoveGroupIds.Apply(new IrEditScript(IrNodeList.From(bodyOps),
             noteOps.Count == 0 ? null : IrNodeList.From(noteOps),
-            headerFooterOps));
+            headerFooterOps) { CommentAttachments = IrCommentAttachments.Plan(left, right, bodyOps) });
     }
 
     // Relocation pairing runs after Build and can turn an ordinary deletion into a gap barrier, and a redline that

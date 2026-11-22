@@ -43,7 +43,19 @@ internal sealed record IrCommentStore(IrNodeList<IrComment> Comments, System.Uri
 /// document text it targets.
 /// </summary>
 internal sealed record IrComment(IrAnchor Anchor, string Author, string? Initials, string? Date,
-                                 IrNodeList<IrBlock> Blocks, IrNodeList<IrCommentTarget> Targets);
+                                 IrNodeList<IrBlock> Blocks, IrNodeList<IrCommentTarget> Targets)
+{
+    // Package-local identity joins markers to their definition, independent of XML retention.
+    internal string? PackageId { get; init; }
+    internal (IrAnchor First, IrAnchor Last)? FieldMarkerParagraphs { get; init; }
+    internal (IrAnchor First, IrAnchor Last)? BodyMarkerParagraphs => Targets.Count == 0 ? FieldMarkerParagraphs
+        : (Targets[0].BlockAnchor, Targets[^1].BlockAnchor);
+
+    public bool Equals(IrComment? other) => other is not null && Anchor == other.Anchor &&
+        Author == other.Author && Initials == other.Initials && Date == other.Date &&
+        Blocks.Equals(other.Blocks) && Targets.Equals(other.Targets);
+    public override int GetHashCode() => System.HashCode.Combine(Anchor, Author, Initials, Date, Blocks, Targets);
+}
 
 /// <summary>
 /// A character range a comment targets within a given block (rule N15).
