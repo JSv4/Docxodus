@@ -2268,7 +2268,8 @@ internal static partial class IrMarkupRenderer
             var sources = rowOps.Select(row => (
                 row.Kind == IrRowOpKind.MovedRow && row.IsMoveSource != true ? null : leftRowsByAnchor.GetValueOrDefault(row.LeftRowAnchor ?? ""),
                 row.Kind == IrRowOpKind.MovedRow && row.IsMoveSource == true ? null : rightRowsByAnchor.GetValueOrDefault(row.RightRowAnchor ?? ""))).ToList();
-            ReconcileTableStreamMarkers(newTbl, sources, state);
+            if (plan is not null && extras.Count != 0) IncludeEmptyControls(sources, leftIrTable, rightIrTable, plan);
+            ReconcileTableStreamMarkers(newTbl, sources, state, extras.Count != 0);
         }
         RewrapInControls(newTbl, W.tr, rowControls, state);
         sink.Add(newTbl);
@@ -2798,7 +2799,7 @@ internal static partial class IrMarkupRenderer
         }
         PlaceExtrasBefore(int.MaxValue);
 
-        ReconcileComposedTableMarkers(newTbl, op, baseRowsByAnchor, baseCellsByAnchor, reviewerIrs, state);
+        ReconcileComposedTableMarkers(newTbl, op, baseTblBlock, baseRowsByAnchor, baseCellsByAnchor, reviewerIrs, state);
 
         // The rows and cells were built bare; their content controls go back around them last, once the markers among
         // them are placed (issue #1810). The merger composed the table only because this layout exists.

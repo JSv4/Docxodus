@@ -1962,7 +1962,7 @@ internal static class IrCompositeMerger
             var rows = baseTable.Rows.Zip(table.Rows, (b, r) =>
                 new IrRowOp(IrRowOpKind.EqualRow, b.Anchor.ToString(), r.Anchor.ToString(), null));
             promoted.Add((reviewer, new IrEditOp(IrEditOpKind.ModifyBlock, anchor, right, null, null, null,
-                TableDiff: new IrTableDiff(IrNodeList.From(rows)))));
+                TableDiff: IrTableDiffer.PlanRows(baseTable, table, IrNodeList.From(rows)))));
         }
         return promoted;
     }

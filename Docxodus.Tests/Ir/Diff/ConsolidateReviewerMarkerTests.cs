@@ -736,18 +736,29 @@ public class ConsolidateReviewerMarkerTests
     [InlineData("last-after")]
     [InlineData("middle-after")]
     [InlineData("middle-before")]
+    [InlineData("middle-after-bare-bookmark")]
     public void A_row_inserted_beside_a_control_that_holds_no_row_keeps_its_side(string place)
     {
         const string control = "<w:sdt><w:sdtPr><w:id w:val=\"5\"/></w:sdtPr><w:sdtContent><w:bookmarkStart w:id=\"3\" w:name=\"Middle\"/><w:bookmarkEnd w:id=\"3\"/></w:sdtContent></w:sdt>";
+        const string bare = "<w:bookmarkStart w:id=\"7\" w:name=\"Gap\"/><w:bookmarkEnd w:id=\"7\"/>";
         string atlas = Row("Atlas", "Shelf one"), added = Row("Chart", "Drawer three");
         WmlDocument Make(string globeText, bool withRow) => Doc(Table("", place switch
         {
             "head-after" => new[] { control, withRow ? added : "", atlas, Row("Globe", globeText) },
             "last-after" => new[] { atlas, Row("Globe", globeText), control, withRow ? added : "" },
+            "middle-after-bare-bookmark" => new[] { atlas, bare, control, withRow ? added : "", Row("Globe", globeText) },
             "middle-after" => new[] { atlas, control, withRow ? added : "", Row("Globe", globeText) },
             _ => new[] { atlas, withRow ? added : "", control, Row("Globe", globeText) },
         }));
         var original = Make("Stand two", false);
+        var inserted = Make("Stand two", true);
+        var pairwise = DocxCompare.Compare(original, inserted);
+        var accepted = RevisionProcessor.AcceptRevisions(pairwise);
+        var rejected = RevisionProcessor.RejectRevisions(pairwise);
+        Assert.Equal(View(inserted), View(accepted));
+        Assert.Equal(View(original), View(rejected));
+        AssertValid(pairwise, accepted, rejected);
+
         var expected = Make("Stand two, brass", true);
         foreach (var policy in new[] { ConflictResolution.BaseWins, ConflictResolution.StackAll })
         {
