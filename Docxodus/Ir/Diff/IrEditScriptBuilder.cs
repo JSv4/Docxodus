@@ -322,18 +322,19 @@ internal static class IrEditScriptBuilder
                 if (!DrawOp(bodyOps[step.Start])) return null;
                 continue;
             }
-            // Both copies of a replaced section end remain in the marked document. Match the
-            // source boundaries within this replacement gap in order. The inserted copy owns the
-            // story comparison, while the deleted copy only needs the original story on reject.
-            // Unmatched endings keep their existing visibility for actual section additions/removals.
+            // When the gap replaces its section ends one for one, the inserted copy owns the
+            // story comparison and the deleted copy retains the original story on reject. With
+            // an extra break on either side, ordinal pairs are ambiguous. Keep the assignments
+            // from the paragraphs drawn in each section.
             int first = sections.Count;
             foreach (var op in step.Side(bodyOps, IrEditOpKind.InsertBlock))
                 if (!DrawOp(op)) return null;
             int firstDeleted = sections.Count;
             foreach (var op in step.Side(bodyOps, IrEditOpKind.DeleteBlock))
                 if (!DrawOp(op)) return null;
-            int pairs = Math.Min(firstDeleted - first, sections.Count - firstDeleted);
-            for (int i = 0; i < pairs; i++)
+            int insertedEnds = firstDeleted - first;
+            if (insertedEnds != sections.Count - firstDeleted) continue;
+            for (int i = 0; i < insertedEnds; i++)
             {
                 int original = sections[firstDeleted + i].Item1;
                 sections[first + i] = (original, sections[first + i].Item2);

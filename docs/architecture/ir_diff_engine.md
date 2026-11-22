@@ -660,4 +660,4 @@ are withheld, so a removed range cannot reappear bare and an added range is emit
 
 ### Stories at replaced section ends
 
-The section planner matches section ends within a replacement gap in source order. The inserted copy carries the comparison of the two logical stories. The deleted copy retains the original story on rejection. Unmatched breaks retain their own visibility rules.
+The section planner matches section ends in source order when a replacement gap contains the same number of inserted and deleted ends. The inserted copy carries the comparison of the two logical stories. The deleted copy retains the original story on rejection. When the counts differ, the planner binds each drawn section to the source paragraphs it contains. A section containing only inserted or only deleted paragraphs keeps that side’s story.
