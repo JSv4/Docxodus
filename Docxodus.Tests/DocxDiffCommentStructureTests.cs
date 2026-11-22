@@ -595,17 +595,21 @@ public class DocxDiffCommentStructureTests
     }
 
     [Theory]
-    [InlineData("format", false)]
-    [InlineData("format", true)]
-    [InlineData("equal-row", false)]
-    [InlineData("equal-row", true)]
-    [InlineData("deleted-row", false)]
-    [InlineData("deleted-row", true)]
-    [InlineData("deleted-cell", false)]
-    [InlineData("deleted-cell", true)]
-    public void A_comment_can_leave_a_copied_or_deleted_container_paragraph(string shape, bool consolidate)
+    [InlineData("format", false, null)]
+    [InlineData("format", true, null)]
+    [InlineData("equal-row", false, null)]
+    [InlineData("equal-row", true, null)]
+    [InlineData("deleted-row", false, null)]
+    [InlineData("deleted-row", true, null)]
+    [InlineData("deleted-cell", false, null)]
+    [InlineData("deleted-cell", true, null)]
+    [InlineData("deleted-row", true, true)]
+    [InlineData("deleted-row", true, false)]
+    [InlineData("deleted-cell", true, true)]
+    [InlineData("deleted-cell", true, false)]
+    public void A_comment_can_leave_a_copied_or_deleted_container_paragraph(string shape, bool consolidate, bool? moverFirst)
     {
-        WmlDocument Form(bool revised)
+        WmlDocument Form(bool revised, bool outsideEdit = false)
         {
             string P(string text) => "<w:p>" + text + "</w:p>";
             string Cell(string paragraphs) => "<w:tc>" + paragraphs + "</w:tc>";
@@ -613,7 +617,7 @@ public class DocxDiffCommentStructureTests
             var origin = P((revised && shape == "format" ? "<w:pPr><w:jc w:val='center'/></w:pPr>" : "") +
                 CommentRun("Original term.", revised ? null : "0"));
             var target = P(CommentRun("Destination", revised ? "0" : null) +
-                CommentRun(revised ? " on Mondays." : " on Fridays.", null));
+                CommentRun(revised && moverFirst is null ? " on Mondays." : " on Fridays.", null));
             string contents = shape switch
             {
                 "format" => origin + target,
@@ -624,16 +628,25 @@ public class DocxDiffCommentStructureTests
             if (shape != "format")
                 contents = "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='3000'/>" +
                     (shape == "deleted-cell" ? "<w:gridCol w:w='3000'/>" : "") + "</w:tblGrid>" + contents + "</w:tbl>";
+            if (moverFirst is not null) contents += P(CommentRun(outsideEdit ? "Edited closing." : "Original closing.", null));
             return IrTestDocuments.WithComment("Cedar", "C", "2026-01-01T00:00:00Z", "Check the term.", contents);
         }
         var original = Form(false);
         var revised = Form(true);
-        var marked = consolidate ? DocxCompare.Consolidate(original, new[] { new DocxDiffReviewer { Author = "Mover", Document = revised } })
-            : DocxCompare.Compare(original, revised);
+        var mover = new DocxDiffReviewer { Author = "Mover", Document = revised };
+        var reviewers = new[] { mover };
+        if (moverFirst is { } first)
+        {
+            var editor = new DocxDiffReviewer { Author = "Editor", Document = Form(false, true) };
+            reviewers = first ? new[] { mover, editor } : new[] { editor, mover };
+            Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
+        }
+        var marked = consolidate ? DocxCompare.Consolidate(original, reviewers) : DocxCompare.Compare(original, revised);
         var accepted = RevisionProcessor.AcceptRevisions(marked);
         var rejected = RevisionProcessor.RejectRevisions(marked);
         Assert.Equal(RangeCoverage(original, true), RangeCoverage(rejected, true));
         Assert.Equal(RangeCoverage(revised, true), RangeCoverage(accepted, true));
+        if (moverFirst is not null) Assert.Equal(BodyText(Form(true, true)), BodyText(accepted));
         foreach (var doc in new[] { marked, accepted, rejected })
             PackageValidation.AssertValid(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
     }

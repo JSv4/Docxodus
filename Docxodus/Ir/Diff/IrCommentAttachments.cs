@@ -40,8 +40,9 @@ internal sealed class IrCommentAttachments
         var pairs = new Dictionary<IrAnchor, IrAnchor>();
         var sources = new HashSet<IrAnchor>();
         var plan = new IrCommentAttachments();
-        void Pair(IrParagraph left, IrParagraph? right, bool kept, bool reattach)
+        void Pair(IrParagraph left, IrParagraph? right, IrEditOpKind kind, bool kept)
         {
+            bool reattach = kind != IrEditOpKind.MoveBlock;
             if (baseEndpoints.Contains(left.Anchor))
             {
                 if (kept) (plan._unchanged ??= new()).Add(left.Anchor);
@@ -51,12 +52,27 @@ internal sealed class IrCommentAttachments
                 pairs[right.Anchor] = left.Anchor;
         }
 
+        VisitParagraphPairs(original, revised, operations, Pair);
+        foreach (var (id, oldParent) in originalTargets)
+        {
+            if (!revisedTargets.TryGetValue(id, out var revisedParent) ||
+                !pairs.TryGetValue(revisedParent, out var newParent) || oldParent == newParent || !sources.Contains(oldParent))
+                continue;
+            plan.Add(oldParent, id, View.Original);
+            plan.Add(newParent, id, View.Revised);
+        }
+        return plan;
+    }
+
+    private static void VisitParagraphPairs(IrDocument original, IrDocument revised, IReadOnlyList<IrEditOp> operations,
+        Action<IrParagraph, IrParagraph?, IrEditOpKind, bool> visit)
+    {
         // Equal containers have the same block order, including nested cells and controls.
         // Edited containers name each matched row, cell and paragraph in their child operations.
-        void Equal(IEnumerable<IrBlock> left, IEnumerable<IrBlock> right, bool reattach = true)
+        void Equal(IEnumerable<IrBlock> left, IEnumerable<IrBlock> right, IrEditOpKind kind = IrEditOpKind.EqualBlock)
         {
             foreach (var (l, r) in left.SelectMany(Paragraphs).Zip(right.SelectMany(Paragraphs)))
-                Pair(l, r, true, reattach);
+                visit(l, r, kind, true);
         }
         void Walk(IReadOnlyList<IrEditOp> ops)
         {
@@ -66,16 +82,16 @@ internal sealed class IrCommentAttachments
                 var right = op.RightAnchor is { } r ? revised.AnchorIndex.GetValueOrDefault(r) : null;
                 if (left is null) continue;
                 if (op.Kind == IrEditOpKind.DeleteBlock && op.RelocationGroupId is null)
-                    foreach (var paragraph in Paragraphs(left)) Pair(paragraph, null, false, true);
+                    foreach (var paragraph in Paragraphs(left)) visit(paragraph, null, IrEditOpKind.DeleteBlock, false);
                 else if (right is not null && op.Kind is IrEditOpKind.EqualBlock or IrEditOpKind.FormatOnlyBlock or IrEditOpKind.MoveBlock)
                 {
                     if (left is IrParagraph lpara && right is IrParagraph rpara)
-                        Pair(lpara, rpara, true, op.Kind != IrEditOpKind.MoveBlock);
+                        visit(lpara, rpara, op.Kind, true);
                     else
-                        Equal(new[] { left }, new[] { right }, op.Kind != IrEditOpKind.MoveBlock);
+                        Equal(new[] { left }, new[] { right }, op.Kind);
                 }
                 else if (op.Kind == IrEditOpKind.ModifyBlock && left is IrParagraph lp && right is IrParagraph rp)
-                    Pair(lp, rp, op.TokenDiff is { } tokens && !tokens.Ops.Any(t => t.Kind is IrTokenOpKind.Insert or IrTokenOpKind.Delete), true);
+                    visit(lp, rp, op.Kind, op.TokenDiff is { } tokens && !tokens.Ops.Any(t => t.Kind is IrTokenOpKind.Insert or IrTokenOpKind.Delete));
                 if (op.WrapperOps is { } children) Walk(children);
                 if (op.TextboxDiffs is { } boxes)
                     foreach (var box in boxes) Walk(box.Ops);
@@ -85,7 +101,7 @@ internal sealed class IrCommentAttachments
                     if (row.Kind == IrRowOpKind.DeleteRow && row.LeftRowAnchor is { } deletedRow &&
                         IrCompositeMerger.RowIndex(original).TryGetValue(deletedRow, out var removed))
                         foreach (var paragraph in removed.Cells.SelectMany(c => c.Blocks).SelectMany(Paragraphs))
-                            Pair(paragraph, null, false, true);
+                            visit(paragraph, null, IrEditOpKind.DeleteBlock, false);
                     if (row.Kind == IrRowOpKind.EqualRow && row.LeftRowAnchor is { } lr && row.RightRowAnchor is { } rr &&
                         IrCompositeMerger.RowIndex(original).TryGetValue(lr, out var leftRow) &&
                         IrCompositeMerger.RowIndex(revised).TryGetValue(rr, out var rightRow))
@@ -97,7 +113,7 @@ internal sealed class IrCommentAttachments
                             IrCompositeMerger.CellIndex(original).TryGetValue(deletedCell, out var removedCell))
                         {
                             foreach (var paragraph in removedCell.Blocks.SelectMany(Paragraphs))
-                                Pair(paragraph, null, false, true);
+                                visit(paragraph, null, IrEditOpKind.DeleteBlock, false);
                         }
                         else if (cell.LeftCellAnchor is { } lc && cell.RightCellAnchor is { } rc &&
                             IrCompositeMerger.CellIndex(original).TryGetValue(lc, out var leftCell) &&
@@ -107,15 +123,6 @@ internal sealed class IrCommentAttachments
             }
         }
         Walk(operations);
-        foreach (var (id, oldParent) in originalTargets)
-        {
-            if (!revisedTargets.TryGetValue(id, out var revisedParent) ||
-                !pairs.TryGetValue(revisedParent, out var newParent) || oldParent == newParent || !sources.Contains(oldParent))
-                continue;
-            plan.Add(oldParent, id, View.Original);
-            plan.Add(newParent, id, View.Revised);
-        }
-        return plan;
     }
 
     private static IEnumerable<IrParagraph> Paragraphs(IrBlock block) => block switch
@@ -158,7 +165,14 @@ internal sealed class IrCommentAttachments
                 foreach (var child in children) Index(child);
             else if (op.Op.WrapperOps is { } wrapper)
                 foreach (var child in wrapper) Index(new IrCompositeOp(child, op.Author, op.SourceReviewer));
-            if (op.AuthoredRows is not { } rows) return;
+            if (op.AuthoredRows is not { } rows)
+            {
+                // A table touched by only one surviving reviewer retains its pairwise plan.
+                if (op.Op.TableDiff is not null && op.SourceReviewer >= 0)
+                    VisitParagraphPairs(original, reviewers[op.SourceReviewer].Ir, new[] { op.Op }, (paragraph, _, kind, _) =>
+                        owners.TryAdd(paragraph.Anchor.ToString(), op with { Op = op.Op with { Kind = kind } }));
+                return;
+            }
             var equal = op with { Op = op.Op with { Kind = IrEditOpKind.EqualBlock } };
             foreach (var row in rows)
             {
