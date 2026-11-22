@@ -2,6 +2,7 @@
 
 using System.Collections.Generic;
 using System.Linq;
+using System.Xml.Linq;
 using Docxodus.Ir;
 
 namespace Docxodus.Ir.Diff;
@@ -52,23 +53,21 @@ internal static class IrCompositeMerger
 
         // 1. Raw pairwise scripts, NOT yet lowered — so PlanMoves can inspect every reviewer's move groups
         //    against the shared base anchor space before any move is collapsed to del/ins.
+        var pairSettings = settings with { KeepSplitContributions = true };
         var rawScripts = reviewers
-            .Select(r => IrEditScriptBuilder.Build(baseIr, r.Ir, settings))
+            .Select(r => IrEditScriptBuilder.Build(baseIr, r.Ir, pairSettings))
             .ToList();
 
         // 2. Decide, per reviewer move group, NATIVE (non-colliding single-reviewer move → keep
         //    MoveBlock/MoveModifyBlock) vs LOWER (colliding move → del/ins), and assign a GLOBAL move-group
-        //    id so two reviewers' independent native moves never share a w:name. The same touchers map then
-        //    decides, per reviewer Split/Merge, NATIVE (sole toucher of every consumed base anchor → keep the
-        //    structural op, rendered as native split/merge markup) vs LOWER (colliding → del/ins).
+        //    id so two reviewers' independent native moves never share a w:name. The same map identifies contested N:1 merges.
         var touchers = BuildTouchers(rawScripts);
         var plan = PlanMoves(rawScripts, settings, touchers);
 
         // 3. Transform each script per the plans: NATIVE move groups keep their move ops (with the global gid
-        //    substituted) and NATIVE Split/Merge ops pass through; LOWERED move groups and COLLIDING
-        //    Split/Merge collapse to Insert/Delete.
+        //    substituted). A split stays anchored to its one base paragraph through conflict resolution.
         var scripts = rawScripts
-            .Select((s, reviewer) => ApplySplitMergePlan(ApplyMovePlan(s, reviewer, plan), reviewer, touchers))
+            .Select((s, reviewer) => LowerContestedMerges(ApplyMovePlan(s, reviewer, plan), reviewer, touchers))
             .ToList();
         var baseOrder = BaseBlockAnchors(baseIr);
         var byBase = GroupByBaseAnchor(scripts);
@@ -104,7 +103,9 @@ internal static class IrCompositeMerger
         // bookmarks and comment ranges a reviewer has between blocks (rule N3), and placing them needs that
         // reviewer's alignment with the base, in the body and in each note (issues #1149, #1175).
         return new IrCompositeScript(IrNodeList.From(ops), IrNodeList.From(conflicts), noteOps, noteIdMaps, trailingSectPr,
-            IrNodeList.From(scripts.Select((script, i) => new IrReviewerComparison(script.Operations, script.NoteOps,
+            IrNodeList.From(scripts.Select((script, i) => new IrReviewerComparison(PhysicalSplitOps(script.Operations),
+                script.NoteOps is { } notes && notes.Any(n => n.Ops.Any(IsWholeSplit))
+                    ? IrNodeList.From(notes.Select(n => n with { Ops = PhysicalSplitOps(n.Ops) })) : script.NoteOps,
                 IrCommentAttachments.BaseAttachments(baseIr, rawScripts[i], reviewers.Count == 1, i, attachments)))), bookmarks, attachments);
     }
 
@@ -183,7 +184,14 @@ internal static class IrCompositeMerger
                 for (int r = 0; r < reviewers.Count; r++)
                     scripts.Add(new IrEditScript(IrNodeList.From(System.Array.Empty<IrEditOp>())));
                 foreach (var (r, nd) in byBaseNote[baseId])
-                    scripts[r] = LowerStructuralOps(new IrEditScript(nd.Ops));
+                    scripts[r] = new IrEditScript(nd.Ops);
+                // Notes historically draw structural changes as deletions and insertions. Only
+                // a contested split needs to reach the policy decision intact.
+                var noteTouchers = byBaseNote[baseId].Count > 1 &&
+                    scripts.Any(s => s.Operations.Any(o => o.Kind == IrEditOpKind.SplitBlock))
+                    ? BuildTouchers(scripts) : null;
+                foreach (var (r, _) in byBaseNote[baseId])
+                    scripts[r] = LowerNoteOps(scripts[r], r, noteTouchers);
 
                 var byBase = GroupByBaseAnchor(scripts);
                 var insertsAfter = GroupInsertsByPrecedingAnchor(scripts);
@@ -257,7 +265,7 @@ internal static class IrCompositeMerger
     /// Index every surviving (native) <see cref="IrEditOpKind.MergeBlock"/> across the transformed scripts
     /// by its FIRST consumed base anchor, with the remaining consumed anchors in <see cref="NativeMergeIndex.Consumed"/>.
     /// Eligibility (sole toucher of every consumed anchor) was already enforced by
-    /// <see cref="ApplySplitMergePlan"/>, so at most one reviewer's merge claims any base anchor here.
+    /// <see cref="LowerContestedMerges"/>, so at most one reviewer's merge claims any base anchor here.
     /// </summary>
     internal static NativeMergeIndex IndexNativeMerges(IReadOnlyList<IrEditScript> scripts)
     {
@@ -288,7 +296,7 @@ internal static class IrCompositeMerger
     /// <see cref="Merge"/> so the SAME grouping+dispatch runs over a cell's mini-body during per-cell table
     /// composition (FOLLOW-ON B): a cell's paragraph blocks are themselves a base-anchored block stream.
     /// <para><b>Native merges.</b> A surviving <see cref="IrEditOpKind.MergeBlock"/> (sole-toucher, kept by
-    /// <see cref="ApplySplitMergePlan"/>) is emitted when the walk reaches its FIRST consumed base anchor;
+    /// <see cref="LowerContestedMerges"/>) is emitted when the walk reaches its FIRST consumed base anchor;
     /// the remaining consumed anchors emit no block op (the merge op subsumes them) but still slot pending
     /// right-only inserts, which therefore land AFTER the whole merge markup — positionally coarse but safe
     /// (an insert between merge members would corrupt the deleted-pilcrow reject reconstruction).</para>
@@ -334,10 +342,31 @@ internal static class IrCompositeMerger
                         EqualReviewerMarkers = EqualOp(anchor,
                             entries.Where(e => e.Op.Kind == IrEditOpKind.EqualBlock).ToList(), reviewers, baseIr).EqualReviewerMarkers,
                     };
+                if (ops.Count > first && IsWholeSplit(ops[first].Op))
+                {
+                    // Materialize only a selected split. Its losing paragraphs never enter the next gap.
+                    var selected = ops[first];
+                    var parts = new List<IrEditOp>();
+                    LowerOneStructuralOp(selected.Op, parts);
+                    ops.RemoveAt(first);
+                    ops.InsertRange(first, parts.Select(part => selected with { Op = part }));
+                }
             }
             // A merge-consumed anchor emits no block op, but its pending inserts still slot here.
             EmitInsertsAt(insertsAfter, anchor, reviewers, ops, suppressedRelocations);
         }
+    }
+
+    private static bool IsWholeSplit(IrEditOp op) => op.Kind == IrEditOpKind.SplitBlock && op.RequiresWholeParagraphReplace;
+
+    private static IrNodeList<IrEditOp> PhysicalSplitOps(IrNodeList<IrEditOp> ops)
+    {
+        if (!ops.Any(IsWholeSplit)) return ops;
+        var blocks = new List<IrEditOp>();
+        foreach (var op in ops)
+            if (IsWholeSplit(op)) LowerOneStructuralOp(op, blocks);
+            else blocks.Add(op);
+        return IrNodeList.From(blocks);
     }
 
     // ---- FOLLOW-ON A: native move composition planning ----
@@ -475,7 +504,7 @@ internal static class IrCompositeMerger
     /// a NATIVE move group keeps its <see cref="IrEditOpKind.MoveBlock"/>/<see cref="IrEditOpKind.MoveModifyBlock"/>
     /// source AND destination, with <see cref="IrEditOp.MoveGroupId"/> rewritten to the GLOBAL gid; a LOWERED
     /// move group collapses to Insert/Delete via the per-op lowering rules. Split/Merge ops pass through
-    /// UNCHANGED — their native-vs-lower decision belongs to <see cref="ApplySplitMergePlan"/>. Op order is
+    /// UNCHANGED — their native-vs-lower decision belongs to <see cref="LowerContestedMerges"/>. Op order is
     /// preserved (the preceding-anchor insert routing depends on it).
     /// </summary>
     internal static IrEditScript ApplyMovePlan(IrEditScript script, int reviewer, MovePlan plan)
@@ -494,12 +523,12 @@ internal static class IrCompositeMerger
             }
             else if (op.Kind is IrEditOpKind.SplitBlock or IrEditOpKind.MergeBlock)
             {
-                // Split/Merge are decided by ApplySplitMergePlan (sole-toucher → native, else lowered).
+                // Both retain their paragraph membership through move planning.
                 result.Add(op);
             }
             else
             {
-                // LOWERED move group → del/ins (LowerStructuralOps' per-op rules); all other kinds verbatim.
+                // LOWERED move group → del/ins; all other kinds verbatim.
                 LowerOneStructuralOp(op, result);
             }
         }
@@ -583,104 +612,44 @@ internal static class IrCompositeMerger
     }
 
     /// <summary>
-    /// Decide each of reviewer <paramref name="reviewer"/>'s Split/Merge ops NATIVE vs LOWER, mirroring the
-    /// move plan's single eligibility predicate: the op is NATIVE iff the reviewer is the SOLE toucher of
-    /// EVERY base paragraph it consumes — a <see cref="IrEditOpKind.SplitBlock"/> consumes its
-    /// <see cref="IrEditOp.LeftAnchor"/>; a <see cref="IrEditOpKind.MergeBlock"/> consumes each of its
-    /// <see cref="IrEditOp.SplitMergeAnchors"/> (left anchors). A NATIVE split/merge passes through verbatim
-    /// and renders as native split/merge markup (inserted/deleted pilcrows + per-segment token spans — the
-    /// SAME shape the two-way renderer produces); a COLLIDING one lowers to del/ins so the existing
-    /// composition/conflict machinery handles the contention with no loss. Op order preserved.
+    /// An N:1 merge spans multiple base anchors. Only an uncontested merge can claim them all.
+    /// A 1:N split already has one base anchor. Keep its result paragraphs together so the block
+    /// conflict decision selects or discards them as a unit.
     /// </summary>
-    internal static IrEditScript ApplySplitMergePlan(
+    private static IrEditScript LowerContestedMerges(
         IrEditScript script, int reviewer, IReadOnlyDictionary<string, HashSet<int>> touchers)
     {
         var result = new List<IrEditOp>(script.Operations.Count);
         foreach (var op in script.Operations)
         {
-            switch (op.Kind)
-            {
-                case IrEditOpKind.SplitBlock when op.LeftAnchor is { } splitLeft
-                    && SoleToucher(touchers, splitLeft, reviewer):
-                case IrEditOpKind.MergeBlock when op.SplitMergeAnchors is { Count: > 0 } mergeLefts
-                    && mergeLefts.All(la => SoleToucher(touchers, la, reviewer)):
-                    result.Add(op);   // NATIVE
-                    break;
-                case IrEditOpKind.SplitBlock:
-                case IrEditOpKind.MergeBlock:
-                    LowerOneStructuralOp(op, result);   // COLLIDING → del/ins
-                    break;
-                default:
-                    result.Add(op);
-                    break;
-            }
+            if (op.Kind == IrEditOpKind.MergeBlock && op.SplitMergeAnchors is { } members &&
+                members.Any(anchor => !SoleToucher(touchers, anchor, reviewer)))
+                LowerOneStructuralOp(op, result);
+            else
+                result.Add(op);
         }
         return new IrEditScript(IrNodeList.From(result), script.NoteOps);
     }
 
     /// <summary>
-    /// Rewrite a reviewer's pairwise edit script so it contains NO structural op
-    /// (<see cref="IrEditOpKind.MoveBlock"/> / <see cref="IrEditOpKind.MoveModifyBlock"/> /
-    /// <see cref="IrEditOpKind.SplitBlock"/> / <see cref="IrEditOpKind.MergeBlock"/>) — lowering each to
-    /// equivalent <see cref="IrEditOpKind.InsertBlock"/> / <see cref="IrEditOpKind.DeleteBlock"/> ops,
-    /// PRESERVING op order (the preceding-anchor insert routing depends on order).
-    /// <para><b>Why.</b> The N-way merger groups each reviewer's ops by base anchor
-    /// (<see cref="GroupByBaseAnchor"/>, keyed on <see cref="IrEditOp.LeftAnchor"/>) and routes right-only
-    /// inserts by preceding anchor (<see cref="GroupInsertsByPrecedingAnchor"/>, only for
-    /// <see cref="IrEditOpKind.InsertBlock"/>). A structural op with a NULL left anchor — a move/move-modify
-    /// DESTINATION (RightAnchor set, LeftAnchor null) or a <see cref="IrEditOpKind.MergeBlock"/>
-    /// (RightAnchor set, <see cref="IrEditOp.SplitMergeAnchors"/> = left anchors, LeftAnchor null) — reaches
-    /// NEITHER path and was silently DROPPED, losing the moved/merged content on accept with no conflict
-    /// recorded (reject ≡ base still held — no corruption). Lowering to plain Insert/Delete makes the
-    /// existing Equal/Modify/FormatOnly/Insert/Delete composition handle them with no loss.</para>
-    /// <para><b>Lowering rules</b> (each preserves accept ≡ that reviewer's right body and reject ≡ base):
-    /// <list type="bullet">
-    /// <item>Move/MoveModify SOURCE (IsMoveSource=true, LeftAnchor=X) → <c>DeleteBlock(X)</c> — retaining
-    /// <c>MoveGroupId</c>/<c>IsMoveSource=true</c> as a relocation marker (see the per-op method below).</item>
-    /// <item>Move/MoveModify DEST (IsMoveSource=false, RightAnchor=Y) → <c>InsertBlock(Y)</c> — retaining
-    /// <c>MoveGroupId</c>/<c>IsMoveSource=false</c> so <c>(reviewer, MoveGroupId)</c> links it to its source
-    /// (issue #233 contested-relocation placement). A MoveModify
-    /// dest's in-move TokenDiff is discarded — inserting the whole edited destination block is correct
-    /// (accept shows the moved+edited text; the paired source delete removes the original → net
-    /// move-with-edit).</item>
-    /// <item>Split (LeftAnchor=X, SplitMergeAnchors=[R1..Rn] RIGHT anchors) → <c>DeleteBlock(X)</c> then
-    /// <c>InsertBlock(R1)</c> … <c>InsertBlock(Rn)</c> in order, at the split op's position.</item>
-    /// <item>Merge (RightAnchor=Y, SplitMergeAnchors=[L1..Ln] LEFT anchors) → <c>DeleteBlock(L1)</c> …
-    /// <c>DeleteBlock(Ln)</c> then <c>InsertBlock(Y)</c> in order. This DELETES the consumed left base
-    /// blocks (otherwise they passed through as EqualBlock and the merge was ignored) and INSERTS the
-    /// merged result.</item>
-    /// </list></para>
-    /// <para><b>When lowering applies.</b> The consolidate pipeline keeps a NON-COLLIDING (sole-toucher)
-    /// reviewer move/split/merge NATIVE (see <see cref="PlanMoves"/>/<see cref="ApplySplitMergePlan"/>) and
-    /// lowers only the COLLIDING ones — two reviewers moving/merging the same base block become competing
-    /// deletes+inserts, whose source-block deletes collide in byBase → a recorded conflict, no loss. This
-    /// method lowers EVERYTHING unconditionally (the conservative transform, kept for tests and as the
-    /// documentation of the per-op rules the planners reuse via <see cref="LowerOneStructuralOp"/>).</para>
+    /// Lower note moves, merges, and uncontested splits to their historical whole-block markup.
     /// </summary>
-    internal static IrEditScript LowerStructuralOps(IrEditScript script)
+    private static IrEditScript LowerNoteOps(IrEditScript script, int reviewer,
+        IReadOnlyDictionary<string, HashSet<int>>? touchers)
     {
-        var lowered = new List<IrEditOp>(script.Operations.Count);
+        var result = new List<IrEditOp>(script.Operations.Count);
         foreach (var op in script.Operations)
-            LowerOneStructuralOp(op, lowered);
-
-        Invariant(
-            lowered.All(o => o.Kind is not (IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock
-                or IrEditOpKind.SplitBlock or IrEditOpKind.MergeBlock)),
-            "LowerStructuralOps must leave no Move/Split/Merge op before composite grouping.");
-
-        // Note scopes (footnotes/endnotes) are not part of body grouping, so they pass through this body-op
-        // lowering unchanged; cross-reviewer note composition happens later in MergeNoteScopes, which reads
-        // these passed-through NoteOps off each reviewer's script.
-        return new IrEditScript(IrNodeList.From(lowered), script.NoteOps);
+        {
+            if (op.Kind == IrEditOpKind.SplitBlock && op.LeftAnchor is { } left &&
+                touchers is not null && !SoleToucher(touchers, left, reviewer))
+                result.Add(op);
+            else
+                LowerOneStructuralOp(op, result);
+        }
+        return new IrEditScript(IrNodeList.From(result), script.NoteOps);
     }
 
-    /// <summary>
-    /// Append the lowered form of ONE structural op (Move/MoveModify/Split/Merge) — or the op itself for any
-    /// other kind — to <paramref name="sink"/>, per the lowering rules documented on
-    /// <see cref="LowerStructuralOps"/>. Shared by <see cref="LowerStructuralOps"/> (lowers everything) and
-    /// <see cref="ApplyMovePlan"/> (lowers only the move groups the plan did NOT select for native rendering,
-    /// plus every Split/Merge).
-    /// </summary>
+    /// <summary>Replace a structural edit with its ordered deletions and insertions.</summary>
     private static void LowerOneStructuralOp(IrEditOp op, List<IrEditOp> sink)
     {
         switch (op.Kind)
@@ -713,9 +682,8 @@ internal static class IrCompositeMerger
                 // One left base paragraph fans out into N right segments: delete the base block, then
                 // insert each right segment in order at this position.
                 sink.Add(new IrEditOp(IrEditOpKind.DeleteBlock, op.LeftAnchor, null, null, null, null));
-                if (op.SplitMergeAnchors is { } splitRights)
-                    foreach (var rightAnchor in splitRights)
-                        sink.Add(new IrEditOp(IrEditOpKind.InsertBlock, null, rightAnchor, null, null, null));
+                foreach (var rightAnchor in ResultAnchors(op))
+                    sink.Add(new IrEditOp(IrEditOpKind.InsertBlock, null, rightAnchor, null, null, null));
                 break;
 
             case IrEditOpKind.MergeBlock:
@@ -1356,10 +1324,11 @@ internal static class IrCompositeMerger
         for (int i = 1; i < touched.Count; i++)
         {
             var (rev, op) = touched[i];
-            if (op.RightAnchor is not { } rightAnchor)
-                continue;
-            var insert = new IrEditOp(IrEditOpKind.InsertBlock, null, rightAnchor, null, null, null);
-            ops.Add(new IrCompositeOp(insert, reviewers[rev].Author, rev, null, cid));
+            foreach (var rightAnchor in ResultAnchors(op))
+            {
+                var insert = new IrEditOp(IrEditOpKind.InsertBlock, null, rightAnchor, null, null, null);
+                ops.Add(EmitOp(insert, reviewers[rev].Author, rev, cid));
+            }
         }
 
         // Exactly one op appended by THIS call consumes/restores the base anchor (LeftAnchor == anchor) — the
@@ -1409,7 +1378,7 @@ internal static class IrCompositeMerger
     /// <summary>
     /// Build the FINAL emitted <see cref="IrCompositeOp"/> for a base-block dispatch, stripping the
     /// internal relocation marker (<see cref="IrEditOp.MoveGroupId"/>/<see cref="IrEditOp.IsMoveSource"/>)
-    /// that <see cref="LowerStructuralOps"/> retains on a lowered move-source <see cref="IrEditOpKind.DeleteBlock"/>.
+    /// that <see cref="LowerOneStructuralOp"/> retains on a lowered move-source <see cref="IrEditOpKind.DeleteBlock"/>.
     /// <para><b>Why.</b> The marker exists ONLY so <see cref="MergeOneBaseBlock"/>'s contested-relocation
     /// detection can tell a relocation-delete from a plain removal — it is read off the GROUPED (pre-emit)
     /// <c>touched</c>/byBase ops. The documented <see cref="IrEditOp"/> field-presence contract says a
@@ -1571,6 +1540,27 @@ internal static class IrCompositeMerger
         if (touched.Any(e => e.Op.Kind != kind))
             return false;
 
+        if (kind == IrEditOpKind.SplitBlock)
+        {
+            // Paragraph boundaries are part of a split. Text hashes alone also omit bookmarks
+            // and comment positions, so compare the retained members before taking one copy.
+            (IrHash Content, IrHash Format, IrHash Markup)[]? Signature((int Reviewer, IrEditOp Op) entry)
+            {
+                var document = reviewers[entry.Reviewer].Ir;
+                if (entry.Op.SplitMergeAnchors is not { } anchors) return null;
+                var hashes = new (IrHash, IrHash, IrHash)[anchors.Count];
+                for (int i = 0; i < hashes.Length; i++)
+                {
+                    var member = document.AnchorIndex[anchors[i]];
+                    if (member.Source.Element is not { } paragraph) return null;
+                    hashes[i] = (member.ContentHash, member.FormatFingerprint, SplitMemberIdentity(paragraph, document));
+                }
+                return hashes;
+            }
+            var first = Signature(touched[0]);
+            return first is not null && touched.Skip(1).All(entry => Signature(entry) is { } other && first.SequenceEqual(other));
+        }
+
         // A flagged paragraph carries an inline envelope or non-hyperlink field-carrier delta. Text-only
         // equivalence would falsely collapse distinct tags, bindings, field codes, or field state, so permit
         // consensus only when every toucher is flagged and their whole structural paragraph signatures agree.
@@ -1704,6 +1694,77 @@ internal static class IrCompositeMerger
             ? IrDiffTokenizer.Tokenize(p, settings)
             : System.Array.Empty<IrDiffToken>();
 
+    // Compare what each reviewer supplied. Word's paragraph and text IDs change on save.
+    // A bookmark end names its start through a package-local ID, and a note reference names
+    // a definition in that reviewer's package. Resolve both before comparing the result.
+    private static IrHash SplitMemberIdentity(XElement paragraph, IrDocument document)
+    {
+        // Number each reachable definition in reference order. The same source note reached
+        // again keeps its number, including through a cycle.
+        var numbers = new Dictionary<(XName Kind, string Id), int>();
+        var notes = new List<(IrScope Scope, XElement Definition)>();
+        IrHash Signature(XElement source, bool definition = false)
+        {
+            var copy = new XElement(source);
+            if (definition) copy.Attribute(W.id)?.Remove();
+            foreach (var (element, target) in source.DescendantsAndSelf().Zip(copy.DescendantsAndSelf()))
+            {
+                target.Attribute(W14.paraId)?.Remove();
+                target.Attribute(W14.textId)?.Remove();
+                if (element.Name == W.bookmarkEnd)
+                    target.SetAttributeValue("bookmarkName", IrReader.BookmarkEndName(element));
+                if (element.Name != W.footnoteReference && element.Name != W.endnoteReference) continue;
+                if ((string?)element.Attribute(W.id) is not { } id) continue;
+                var key = (element.Name, id);
+                if (!numbers.TryGetValue(key, out var number))
+                {
+                    bool foot = element.Name == W.footnoteReference;
+                    var store = foot ? document.Footnotes : document.Endnotes;
+                    if (!store.Notes.TryGetValue(id, out var scope) || scope.PartUri is not { } uri ||
+                        !document.Sources.TryGetValue(uri, out var part)) continue;
+                    var noteName = foot ? W.footnote : W.endnote;
+                    var note = scope.Blocks.FirstOrDefault()?.Source.Element?.Ancestors(noteName).FirstOrDefault() ??
+                        part.Root?.Elements(noteName).FirstOrDefault(n => (string?)n.Attribute(W.id) == id);
+                    if (note is null) continue;
+                    number = notes.Count;
+                    numbers.Add(key, number);
+                    notes.Add((scope, note));
+                }
+                target.SetAttributeValue(W.id, number);
+            }
+            return IrHasher.RetainedMarkupHash(copy, source);
+        }
+
+        var markup = Signature(paragraph);
+        var before = paragraph.ElementsBeforeSelf().Reverse().TakeWhile(IrMarkupRenderer.IsBlockLevelMarker).Reverse();
+        var after = paragraph.ElementsAfterSelf().TakeWhile(IrMarkupRenderer.IsBlockLevelMarker);
+        if (notes.Count == 0 && !before.Any() && !after.Any()) return markup;
+        var result = new System.Text.StringBuilder(markup.ToHex());
+        foreach (var marker in before) result.Append('<').Append(Signature(marker).ToHex());
+        foreach (var marker in after) result.Append('>').Append(Signature(marker).ToHex());
+        for (int i = 0; i < notes.Count; i++)
+        {
+            var (scope, definition) = notes[i];
+            result.Append('#').Append(Signature(definition, definition: true).ToHex());
+            foreach (var block in scope.Blocks)
+                result.Append(block.ContentHash.ToHex()).Append(block.FormatFingerprint.ToHex());
+        }
+        return IrHash.ComputeUtf8(result.ToString());
+    }
+
+    // A split produces an ordered sequence of paragraphs. Both StackAll and conflict reports
+    // consume this same result; a deletion contributes no right paragraph.
+    private static IEnumerable<string> ResultAnchors(IrEditOp op)
+    {
+        if (op.Kind == IrEditOpKind.SplitBlock && op.SplitMergeAnchors is { } segments)
+        {
+            foreach (var segment in segments)
+                yield return segment;
+        }
+        else if (op.RightAnchor is { } anchor)
+            yield return anchor;
+    }
+
     /// <summary>
     /// The accepted (right) text the reviewer's op would produce: the concatenated token text of the right
     /// paragraph for a ModifyBlock (or any op carrying a <see cref="IrEditOp.RightAnchor"/>), and "" for a
@@ -1712,12 +1773,16 @@ internal static class IrCompositeMerger
     /// </summary>
     private static string BlockResultText(IrEditOp op, IrDocument reviewerIr, IrDiffSettings settings)
     {
-        if (op.RightAnchor is not { } ra)
-            return "";
-        if (!reviewerIr.AnchorIndex.TryGetValue(ra, out var block))
-            return "";
         var sb = new System.Text.StringBuilder();
-        AppendBlockText(block, sb, settings);
+        bool first = true;
+        foreach (var anchor in ResultAnchors(op))
+        {
+            if (!first)
+                sb.Append('\n');
+            first = false;
+            if (reviewerIr.AnchorIndex.TryGetValue(anchor, out var block))
+                AppendBlockText(block, sb, settings);
+        }
         return sb.ToString();
     }
 
@@ -2947,8 +3012,7 @@ internal static class IrCompositeMerger
             scripts[reviewer] = new IrEditScript(childOps);
 
         // A cell mini-body can itself carry Split/Merge ops (a reviewer split/merged paragraphs INSIDE the
-        // cell). Run the same sole-toucher plan the body runs: native when uncontested, lowered to del/ins
-        // when another editor touches a consumed cell paragraph. Without this, a MergeBlock (null LeftAnchor)
+        // cell). Preserve each split as one contribution and apply the body's merge eligibility rule. Without this, a MergeBlock (null LeftAnchor)
         // reached NEITHER grouping map and the merge was silently dropped from the composed cell.
         var cellTouchers = BuildTouchers(scripts);
         // Nested moves already carry globally assigned ids. A contested source must keep the wrapper's
@@ -2959,7 +3023,7 @@ internal static class IrCompositeMerger
                     !SoleToucher(cellTouchers, anchor, r)))
                     return false;
         for (int r = 0; r < scripts.Count; r++)
-            scripts[r] = ApplySplitMergePlan(scripts[r], r, cellTouchers);
+            scripts[r] = LowerContestedMerges(scripts[r], r, cellTouchers);
 
         var byBase = GroupByBaseAnchor(scripts);
         var insertsAfter = GroupInsertsByPrecedingAnchor(scripts);

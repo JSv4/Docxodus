@@ -710,6 +710,36 @@ public class DocxDiffHeaderFooterReferenceTests
             (r.LeftAnchor ?? r.RightAnchor ?? "").Contains("hdr") || (r.LeftAnchor ?? r.RightAnchor ?? "").Contains("ftr"));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Unequal_replaced_section_counts_bind_each_drawn_section_to_its_source_stories(bool insertedBreak)
+    {
+        static WmlDocument Document(string[] text, string label, bool oneSection = false)
+        {
+            var sections = oneSection ? new[] { new Section(text, Headers: new[] { ("default", "h1") }) }
+                : text.Select((p, i) => new Section(new[] { p }, Headers: new[] { ("default", $"h{i + 1}") })).ToArray();
+            return HeaderFooterFixtures.Build(sections, Enumerable.Range(1, sections.Length)
+                .ToDictionary(i => $"h{i}", i => new[] { $"{label} {i}" }));
+        }
+        var original = Document(new[] { "Masons split granite blocks at the northern quarry face before the carts arrive.",
+            "The foreman records every cracked slab in a notebook kept beside the crane.",
+            "Rainwater drains from the lowest bench through a channel cut last winter." }, "Quarry ledger");
+        var revised = Document(new[] { "Potters stack glazed bowls on the upper shelves of the brick kiln at dawn.",
+            "A thermometer above the firebox shows when the second glaze may begin." }, "Kiln register", !insertedBreak);
+        var result = DocxCompare.Compare(original, revised);
+        var stories = insertedBreak
+            ? new[] { "Kiln register 1", "Kiln register 2Quarry ledger 1", "Quarry ledger 2", "Kiln register 2Quarry ledger 3" }
+            : new[] { "Kiln register 1Quarry ledger 1", "Quarry ledger 2", "Kiln register 1Quarry ledger 3" };
+        Assert.Equal(stories, Enumerable.Range(0, stories.Length)
+            .Select(i => XDocument.Parse(ReferencedStoryXml(result, true, i)!).Root!.Value));
+        AssertStoryEndpoints(original, revised, result, true, "default");
+        var reviewers = new[] { new DocxDiffReviewer { Author = "Editor", Document = revised } };
+        Assert.Empty(DocxDiff.GetConflicts(original, reviewers));
+        Assert.DoesNotContain(DocxDiff.GetConsolidatedRevisions(original, reviewers), r =>
+            (r.LeftAnchor ?? r.RightAnchor ?? "").Contains("hdr"));
+    }
+
     [Fact]
     public void PreservingInputRevisionsLeavesCleanInputsMappedAsWithout()
     {
