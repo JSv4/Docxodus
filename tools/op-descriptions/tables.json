@@ -233,6 +233,54 @@
       }
     },
     {
+      "op": "setTableProperties",
+      "facade": "SetTableProperties",
+      "result": "EditResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true },
+        { "name": "op", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetTableProperties" },
+        "npm": { "method": "setTableProperties" },
+        "python": { "method": "set_table_properties" },
+        "stdio": { "op": "set_table_properties" },
+        "mcp": { "tool": "docxodus_table", "action": "set_properties" }
+      }
+    },
+    {
+      "op": "setCellProperties",
+      "facade": "SetCellProperties",
+      "result": "EditResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true },
+        { "name": "op", "type": "object", "required": true },
+        { "name": "scope", "type": "enum", "required": false, "default": "cell", "values": ["cell", "row", "column", "table"] }
+      ],
+      "transports": {
+        "wasm": { "method": "SetCellProperties" },
+        "npm": { "method": "setCellProperties" },
+        "python": { "method": "set_cell_properties" },
+        "stdio": { "op": "set_cell_properties" },
+        "mcp": { "tool": "docxodus_table", "action": "set_cell_properties" }
+      }
+    },
+    {
+      "op": "getTableProperties",
+      "facade": "GetTableProperties",
+      "result": "TablePropertiesInfo",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "GetTableProperties" },
+        "npm": { "method": "getTableProperties" },
+        "python": { "method": "get_table_properties" },
+        "stdio": { "op": "get_table_properties" },
+        "mcp": { "tool": "docxodus_table", "action": "get_properties" }
+      }
+    },
+    {
       "op": "getTableMetadata",
       "facade": "GetTableMetadata",
       "result": "TableMetadataResult",
