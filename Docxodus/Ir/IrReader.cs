@@ -2863,6 +2863,19 @@ internal static class IrReader
         // Which control instance each row sits in, by the positions of its controls among their siblings: rows that pair
         // ignore it (a control's identity is its shell), but the table's digest must tell one control around two rows
         // from two alike controls around one row each.
+        Dictionary<XElement, int>? ordinals = null;
+        int ControlOrdinal(XElement control)
+        {
+            ordinals ??= new();
+            if (ordinals.TryGetValue(control, out int ordinal)) return ordinal;
+            int index = 0;
+            foreach (var sibling in control.Parent!.Elements())
+            {
+                if (sibling.Name == W + "sdt") ordinals.Add(sibling, index);
+                index++;
+            }
+            return ordinals[control];
+        }
         List<string>? instances = null;
         foreach (var (tr, fromSdt) in TableChildren(tbl, W + "tr"))
         {
@@ -2873,7 +2886,7 @@ internal static class IrReader
                 row = row with { FromTableSdt = fromSdt, ControlDigest = rowControls, ControlsBeforeDigest = before };
             if (fromSdt)
                 (instances ??= Enumerable.Repeat("", rows.Count).ToList()).Add(string.Join(",", tr.Ancestors().TakeWhile(a => a != tbl)
-                    .Where(a => a.Name == W + "sdt").Select(a => a.ElementsBeforeSelf().Count())));
+                    .Where(a => a.Name == W + "sdt").Select(ControlOrdinal)));
             else
                 instances?.Add("");
             rows.Add(row);
@@ -2996,19 +3009,33 @@ internal static class IrReader
     {
         Dictionary<XElement, IrHash>? result = null;
         IrContentHashBuilder? pending = null;
-        foreach (var child in tbl.Elements())
+        void Read(XElement container, int depth)
         {
-            XElement? first = child.Name == W + "tr" ? child
-                : child.Name == W + "sdt" ? UnwrapSdtChildren(child, W + "tr").FirstOrDefault() : null;
-            if (first is not null)
+            foreach (var child in container.Elements())
             {
-                if (pending is not null)
-                    (result ??= new Dictionary<XElement, IrHash>())[first] = pending.Build();
-                pending = null;
+                if (child.Name == W + "tr")
+                {
+                    if (pending is not null) (result ??= new())[child] = pending.Build();
+                    pending = null;
+                }
+                else if (child.Name == W + "sdt")
+                {
+                    if (UnwrapSdtChildren(child, W + "tr", depth).Any())
+                        Read(child.Element(W + "sdtContent")!, depth + 1);
+                    else
+                    {
+                        pending ??= new IrContentHashBuilder();
+                        foreach (var parent in child.Ancestors().TakeWhile(a => a != tbl).Where(a => a.Name == W + "sdt").Reverse())
+                        {
+                            pending.AppendStructure(IrContentHashBuilder.StructureSdt);
+                            pending.AppendHash(ControlShellDigest(parent));
+                        }
+                        pending.AppendHash(IrHasher.CanonicalHash(child));
+                    }
+                }
             }
-            else if (child.Name == W + "sdt")
-                (pending ??= new IrContentHashBuilder()).AppendHash(IrHasher.CanonicalHash(child));
         }
+        Read(tbl, 0);
         trailing = pending?.Build() ?? default;
         return result;
     }

@@ -3172,12 +3172,22 @@ internal static partial class IrMarkupRenderer
             {
                 // A control the inserting reviewer keeps before the row it adds goes before it, as in that reviewer's table.
                 var kept = new HashSet<IrHash>();
-                foreach (var sibling in inserted.ElementsBeforeSelf().Reverse())
+                // Only table-level controls are extras here. A first row inside a nested
+                // control can still have an empty control before its enclosing table child.
+                for (var child = inserted; child is not null; child = child.Parent?.Parent)
                 {
-                    if (sibling.Name == W.tr || sibling.Name == W.sdt && IrReader.UnwrapSdtChildren(sibling, W.tr).Any())
-                        break;
-                    if (sibling.Name == W.sdt)
-                        kept.Add(IrHasher.CanonicalHash(sibling));
+                    bool crossedRow = false;
+                    foreach (var sibling in child.ElementsBeforeSelf().Reverse())
+                    {
+                        if (sibling.Name == W.tr || sibling.Name == W.sdt && IrReader.UnwrapSdtChildren(sibling, W.tr).Any())
+                        {
+                            crossedRow = true;
+                            break;
+                        }
+                        if (child.Parent?.Name == W.tbl && sibling.Name == W.sdt)
+                            kept.Add(IrHasher.CanonicalHash(sibling));
+                    }
+                    if (crossedRow || child.Parent?.Name != W.sdtContent) break;
                 }
                 for (; extrasPlaced < extras.Count && extras[extrasPlaced].RowsBefore == boundary &&
                        kept.Contains(IrHasher.CanonicalHash(extras[extrasPlaced].Element)); extrasPlaced++)
@@ -3296,15 +3306,8 @@ internal static partial class IrMarkupRenderer
     }
 
     /// <summary>The source <c>w:tr</c> a row anchor resolves to in <paramref name="ir"/>, or null.</summary>
-    private static XElement? FindRowSource(IrDocument ir, string rowAnchor)
-    {
-        foreach (var block in ir.AnchorIndex.Values)
-            if (block is IrTable tbl)
-                foreach (var row in tbl.Rows)
-                    if (row.Anchor.ToString() == rowAnchor)
-                        return row.Source.Element;
-        return null;
-    }
+    private static XElement? FindRowSource(IrDocument ir, string rowAnchor) =>
+        IrCompositeMerger.RowIndex(ir).GetValueOrDefault(rowAnchor)?.Source.Element;
 
     /// <summary>The source <c>w:tc</c> a cell anchor resolves to in <paramref name="ir"/> (cells are not in
     /// AnchorIndex): walk every indexed table's rows/cells, recursing into nested tables. Null if unknown.</summary>
@@ -3345,7 +3348,7 @@ internal static partial class IrMarkupRenderer
         // Properties lead; the base row's other non-cell children (a row-level bookmark, say) go back between
         // the same base cells, as in the two-way RenderModifyRow (issue #864).
         var baseShell = SplitRowShell(baseRowSrc);
-        var baseCellOrdinal = baseRowSrc.Elements(W.tc).Select((cell, index) => (cell, index))
+        var baseCellOrdinal = RowCells(baseRowSrc).Select((cell, index) => (cell, index))
             .ToDictionary(pair => pair.cell, pair => pair.index);
         var newRow = new XElement(W.tr);
         foreach (var pre in baseShell.Properties)
