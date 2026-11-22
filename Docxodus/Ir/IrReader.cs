@@ -182,6 +182,8 @@ internal static class IrReader
         // Each paragraph finishes itself (BuildParagraph), so any range still open at end-of-body has
         // its provisional spans buffered but never committed — an orphan start, discarded (totality).
 
+        if (retain) bodyCtx.RelResolver.RetainReferencedTokens(mainXDoc);
+
         // 5. Anchor index over ALL scopes' blocks (rows/cells are positional, not blocks). Collision
         // checking spans scopes, and IndexBlock throws on any duplicate kind:scope:unid string.
         // INVARIANT: collision-safety depends on every scope emitting a unique scope-name prefix.
@@ -3315,7 +3317,11 @@ internal static class IrReader
             }
 
             if (retain)
-                sources[part.Uri] = part.GetXDocument();
+            {
+                var source = part.GetXDocument();
+                sources[part.Uri] = source;
+                ctx.RelResolver.RetainReferencedTokens(source);
+            }
             return new IrNoteStore(notes, noteUnids);
         }
         catch (Exception e) when (IsTolerableRegistryException(e))

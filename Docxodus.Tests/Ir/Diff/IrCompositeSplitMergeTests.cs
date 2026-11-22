@@ -1,6 +1,7 @@
 #nullable enable
 using System.Linq;
 using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
 using Docxodus.Ir;
 using Docxodus.Ir.Diff;
@@ -312,6 +313,77 @@ public class IrCompositeSplitMergeTests
         var results = reviewers.Select(r => string.Join("\n", Docs.PlainText(r.Document).Split('\n').SkipLast(1))).ToArray();
         AssertSplitConflict(original, reviewers, new DocxDiffConsolidateSettings { ConflictResolution = policy },
             SplitSrc, results, Anchor);
+    }
+
+    [Theory]
+    [InlineData(ConflictResolution.BaseWins)]
+    [InlineData(ConflictResolution.FirstReviewerWins)]
+    [InlineData(ConflictResolution.StackAll)]
+    public void Identical_controlled_splits_reach_consensus(ConflictResolution policy)
+    {
+        var controlled = "<w:sdt><w:sdtPr><w:tag w:val=\"A\"/></w:sdtPr><w:sdtContent>" + TextRun(SplitA) + "</w:sdtContent></w:sdt>";
+        var tail = Paragraph(TextRun(Anchor));
+        var original = IrTestDocuments.FromBodyXml(Paragraph(controlled + TextRun(SplitB)) + tail);
+        var split = IrTestDocuments.FromBodyXml(Paragraph(controlled) + Paragraph(TextRun(SplitB)) + tail);
+        var reviewers = new[] { ("First", split), ("Second", split) };
+        Assert.Empty(Conflicts(original, policy, reviewers));
+        var marked = Consolidate(original, policy, reviewers);
+        Assert.Equal(Docs.PlainText(split), Docs.PlainText(RevisionProcessor.AcceptRevisions(marked)));
+        Assert.Equal(Docs.PlainText(original), Docs.PlainText(RevisionProcessor.RejectRevisions(marked)));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Split_consensus_compares_the_target_of_a_relationship_in_its_own_part(bool inNote, bool sameTarget)
+    {
+        const string first = "https://example.org/first";
+        const string second = "https://example.org/second";
+        WmlDocument Linked(string id, string target, bool split = true)
+        {
+            var secondMember = TextRun("eee fff ggg ") + TextRun("hhh.") + (inNote ? "<w:r><w:footnoteReference w:id=\"1\"/></w:r>" : "");
+            var body = (split ? Paragraph(TextRun(SplitA)) + Paragraph(secondMember) : Paragraph(TextRun(SplitA) + secondMember)) + Paragraph(TextRun(Anchor));
+            var source = inNote ? IrTestDocuments.FromBodyXmlWithFootnote(body, "See the ferry schedule.", false)
+                                : IrTestDocuments.FromBodyXml(body);
+            using var stream = new System.IO.MemoryStream();
+            stream.Write(source.DocumentByteArray);
+            using (var package = WordprocessingDocument.Open(stream, true))
+            {
+                var main = package.MainDocumentPart!;
+                OpenXmlPart part = inNote ? main.FootnotesPart! : main;
+                var root = part.GetXDocument();
+                var run = inNote ? root.Descendants(W.footnote).Single(n => (string?)n.Attribute(W.id) == "1").Descendants(W.r).First()
+                                 : root.Descendants(W.r).Single(r => (string?)r.Element(W.t) == "hhh.");
+                run.ReplaceWith(new XElement(W.hyperlink, new XAttribute(R.id, id), new XElement(run)));
+                part.AddHyperlinkRelationship(new System.Uri(target), true, id);
+                part.PutXDocument();
+            }
+            return new WmlDocument("linked.docx", stream.ToArray());
+        }
+        var original = inNote ? Docs.Para(SplitSrc, Anchor) : Linked("rBase", first, split: false);
+        var reviewers = new[] { ("First", Linked("rLink1", first)), ("Second", Linked(sameTarget ? "rLink2" : "rLink1", sameTarget ? first : second)) };
+        var conflicts = Conflicts(original, ConflictResolution.StackAll, reviewers);
+        Assert.Equal(!sameTarget, conflicts.Any(c => c.Competitors.Any(v => v.ResultText.Contains("eee"))));
+        var marked = Consolidate(original, ConflictResolution.StackAll, reviewers);
+        var accepted = RevisionProcessor.AcceptRevisions(marked);
+        var rejected = RevisionProcessor.RejectRevisions(marked);
+        foreach (var doc in new[] { marked, accepted, rejected })
+            PackageValidation.AssertValid(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
+        Assert.Equal(Docs.PlainText(original), Docs.PlainText(rejected));
+        using var acceptedStream = new System.IO.MemoryStream(accepted.DocumentByteArray);
+        using var acceptedPackage = WordprocessingDocument.Open(acceptedStream, false);
+        var main = acceptedPackage.MainDocumentPart!;
+        OpenXmlPart owner = inNote ? main.FootnotesPart! : main;
+        var sourceXml = owner.GetXDocument();
+        var scopes = inNote
+            ? main.GetXDocument().Descendants(W.footnoteReference).Select(reference =>
+                sourceXml.Descendants(W.footnote).Single(n => (string?)n.Attribute(W.id) == (string?)reference.Attribute(W.id)))
+            : new[] { sourceXml.Root! }.AsEnumerable();
+        var targets = scopes.SelectMany(scope => scope.Descendants(W.hyperlink)).Select(link =>
+            owner.HyperlinkRelationships.Single(rel => rel.Id == (string?)link.Attribute(R.id)).Uri.AbsoluteUri);
+        Assert.Equal(sameTarget ? new[] { first } : new[] { first, second }, targets);
     }
 
     [Fact]

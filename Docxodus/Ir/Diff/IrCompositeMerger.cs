@@ -1537,17 +1537,6 @@ internal static class IrCompositeMerger
         if (touched.Any(e => e.Op.Kind != kind))
             return false;
 
-        // A flagged paragraph carries an inline envelope or non-hyperlink field-carrier delta. Text-only
-        // equivalence would falsely collapse distinct tags, bindings, field codes, or field state, so permit
-        // consensus only when every toucher is flagged and their whole structural paragraph signatures agree.
-        // Everything else falls to the block-conflict path rather than token-span composition.
-        if (touched.Any(e => e.Op.RequiresWholeParagraphReplace))
-        {
-            if (kind != IrEditOpKind.ModifyBlock || touched.Any(e => !e.Op.RequiresWholeParagraphReplace))
-                return false;
-            return StructuralCarrierResultsEqual(touched, reviewers, settings);
-        }
-
         if (kind == IrEditOpKind.SplitBlock)
         {
             // Paragraph boundaries are part of a split. Text hashes alone also omit bookmarks
@@ -1567,6 +1556,17 @@ internal static class IrCompositeMerger
             }
             var first = Signature(touched[0]);
             return first is not null && touched.Skip(1).All(entry => Signature(entry) is { } other && first.SequenceEqual(other));
+        }
+
+        // A flagged paragraph carries an inline envelope or non-hyperlink field-carrier delta. Text-only
+        // equivalence would falsely collapse distinct tags, bindings, field codes, or field state, so permit
+        // consensus only when every toucher is flagged and their whole structural paragraph signatures agree.
+        // Everything else falls to the block-conflict path rather than token-span composition.
+        if (touched.Any(e => e.Op.RequiresWholeParagraphReplace))
+        {
+            if (kind != IrEditOpKind.ModifyBlock || touched.Any(e => !e.Op.RequiresWholeParagraphReplace))
+                return false;
+            return StructuralCarrierResultsEqual(touched, reviewers, settings);
         }
 
         if (kind == IrEditOpKind.DeleteBlock)
@@ -1708,14 +1708,16 @@ internal static class IrCompositeMerger
                 var notes = source.Name == W.footnoteReference ? document.Footnotes : document.Endnotes;
                 if ((string?)source.Attribute(W.id) is { } id && notes.Notes.TryGetValue(id, out var note))
                 {
-                    var contents = new XElement("note", note.Blocks.Select(b => b.Source.Element));
+                    var contents = new XElement("note", note.Blocks.Select(b =>
+                        new XElement("block", new XAttribute("content", b.ContentHash.ToHex()),
+                            new XAttribute("format", b.FormatFingerprint.ToHex()), b.Source.Element)));
                     contents.Descendants().Attributes(W14.paraId).Remove();
                     contents.Descendants().Attributes(W14.textId).Remove();
-                    target.SetAttributeValue(W.id, IrHasher.CanonicalHash(contents).ToHex());
+                    target.SetAttributeValue(W.id, IrHasher.RetainedMarkupHash(contents, note.Blocks.FirstOrDefault()?.Source.Element).ToHex());
                 }
             }
         }
-        return IrHasher.CanonicalHash(copy);
+        return IrHasher.RetainedMarkupHash(copy, paragraph);
     }
 
     // A split produces an ordered sequence of paragraphs. Both StackAll and conflict reports
