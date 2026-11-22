@@ -311,7 +311,7 @@ internal static class IrTableDiffer
             if (rightMatch[j] == -1)
                 freeRight.Add(j);
 
-        if (TryAlignOrdinaryRowGap(leftRows, rightRows, freeLeft, freeRight, settings, out var alignment) ||
+        if (TryAlignUnitGridRowGap(leftRows, rightRows, freeLeft, freeRight, settings, out var alignment) ||
             TryAlignControlledRowGap(leftRows, rightRows, freeLeft, freeRight, out alignment))
         {
             foreach (var step in alignment)
@@ -383,11 +383,10 @@ internal static class IrTableDiffer
     }
 
     /// <summary>
-    /// Direct, unit-span rows have a physical-cell order that is safe to align independently of the table
-    /// shell.  The renderer can represent every row-level insert/delete, so unlike cells this alignment may
-    /// legitimately produce unmatched units on either side.
+    /// For rows with direct, unit-span cells, score legal pairs by content. Enclosing row controls
+    /// constrain which rows may pair while preserving the order of the cells being compared.
     /// </summary>
-    private static bool TryAlignOrdinaryRowGap(
+    private static bool TryAlignUnitGridRowGap(
         IrNodeList<IrRow> leftRows, IrNodeList<IrRow> rightRows,
         List<int> freeLeft, List<int> freeRight, IrDiffSettings settings,
         out List<MonotoneStep> alignment)
@@ -398,10 +397,10 @@ internal static class IrTableDiffer
             return false;
 
         foreach (int index in freeLeft)
-            if (!CanUseOrdinaryRowAlignment(leftRows[index]))
+            if (!HasUnitCellGrid(leftRows[index]))
                 return false;
         foreach (int index in freeRight)
-            if (!CanUseOrdinaryRowAlignment(rightRows[index]))
+            if (!HasUnitCellGrid(rightRows[index]))
                 return false;
 
         var leftBodies = new IrHash[freeLeft.Count];
@@ -432,14 +431,15 @@ internal static class IrTableDiffer
         // slides every base row down one slot. The bias is tiny per row of displacement, so any real
         // body affinity still wins — it only decides otherwise-noise-tied gaps.
         alignment = BuildMonotoneAlignment(freeLeft.Count, freeRight.Count,
-            (i, j) => BodyAffinity(leftBodies[i], rightBodies[j], leftSignatures[i], rightSignatures[j])
-                      - CellPositionalTieBreak * Math.Abs(i - j));
+            (i, j) => RowsMayPair(leftRows[freeLeft[i]], rightRows[freeRight[j]])
+                ? BodyAffinity(leftBodies[i], rightBodies[j], leftSignatures[i], rightSignatures[j]) - CellPositionalTieBreak * Math.Abs(i - j)
+                : ForbiddenPair);
         return true;
     }
 
-    private static bool CanUseOrdinaryRowAlignment(IrRow row)
+    private static bool HasUnitCellGrid(IrRow row)
     {
-        if (row.FromTableSdt || row.ControlDigest != default || row.GridBefore != 0 || row.GridAfter != 0)
+        if (row.GridBefore != 0 || row.GridAfter != 0)
             return false;
         foreach (var cell in row.Cells)
             if (cell.GridSpan != 1 || cell.VMerge != IrVMerge.None || cell.FromRowSdt)
@@ -890,7 +890,8 @@ internal static class IrTableDiffer
     /// </summary>
     private static bool CanUseOrdinaryGridAlignment(IrRow left, IrRow right)
     {
-        return CanUseOrdinaryRowAlignment(left) && CanUseOrdinaryRowAlignment(right);
+        return !left.FromTableSdt && !right.FromTableSdt && left.ControlDigest == default && right.ControlDigest == default &&
+            HasUnitCellGrid(left) && HasUnitCellGrid(right);
     }
 
     /// <summary>

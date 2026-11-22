@@ -231,6 +231,7 @@ internal static class IrTableControlPlanner
             }
         }
         var chains = new IrTableControlId[rows.Count][];
+        int[]? precedingControls = null;
         var authors = new Dictionary<IrTableControlId, string>();
         var surviving = new HashSet<IrTableControlId>();
         var cells = new Dictionary<string, (int Row, IrControlLayout Layout)>(StringComparer.Ordinal);
@@ -242,6 +243,8 @@ internal static class IrTableControlPlanner
                 int reviewer = row.SourceReviewer;
                 if (!tables.TryGetValue(reviewer, out var table) || row.RightRowAnchor is not { } anchor ||
                     !reviewRows[reviewer].TryGetValue(anchor, out var ordinal)) return null;
+                if (table.Rows[ordinal].PrecedingEmptyControls > 0)
+                    (precedingControls ??= new int[rows.Count])[i] = table.Rows[ordinal].PrecedingEmptyControls;
                 var chain = Chain(table.ChildOrder, ordinal, reviewer);
                 for (int j = 0; j < chain.Length; j++)
                     if (baseForReviewer.TryGetValue(reviewer, out var pairs) && pairs.TryGetValue(chain[j].Entry, out int shared))
@@ -285,7 +288,9 @@ internal static class IrTableControlPlanner
         List<int>? order = null;
         if (!StayTogether(chains))
             order = KeepInsertsTogether(rows, chains);
-        var children = PlaceTableChildren(original, rows, baseRows, tables, reviewRows, ref order);
+        if (precedingControls is not null)
+            OrderInsertsAtEmptyControls(rows, precedingControls, ref order);
+        var children = PlaceTableChildren(original, rows, baseRows, precedingControls, order);
         if (order is not null)
         {
             chains = order.Select(i => chains[i]).ToArray();
@@ -299,8 +304,7 @@ internal static class IrTableControlPlanner
     /// sequence identifies the same control in each reviewer. Two rows inserted into one base gap
     /// can therefore lie on opposite sides of a control, regardless of reviewer order.</summary>
     private static List<(int Child, int Before)>? PlaceTableChildren(IrTable original,
-        List<IrAuthoredRowOp> rows, Dictionary<string, int> baseRows, IReadOnlyDictionary<int, IrTable> tables,
-        Dictionary<int, Dictionary<string, int>> reviewRows, ref List<int>? order)
+        List<IrAuthoredRowOp> rows, Dictionary<string, int> baseRows, int[]? precedingControls, List<int>? order)
     {
         if (original.ChildOrder is not { } source) return null;
         var extras = new List<int>();
@@ -315,51 +319,44 @@ internal static class IrTableControlPlanner
         }
         if (extras.Count == 0) return null;
 
-        var boundary = new int[rows.Count];
+        var placed = new List<(int, int)>(extras.Count);
+        int next = 0;
         for (int i = 0; i < rows.Count; i++)
         {
-            var row = rows[i];
-            if (row.BaseRowAnchor is { } anchor)
-                boundary[i] = source.Members[baseRows[anchor]];
-            else
-            {
-                boundary[i] = -1;
-                if (empty.Count == 0 || tables[row.SourceReviewer].ChildOrder is not { } other) continue;
-                int position = reviewRows[row.SourceReviewer][row.RightRowAnchor!];
-                int prior = 0;
-                foreach (var control in other.EmptyControls)
-                    if (control.FirstMember <= position) prior++;
-                if (prior > 0 && prior <= empty.Count)
-                    boundary[i] = empty[prior - 1];
-            }
-        }
-        var placed = new List<(int, int)>(extras.Count);
-        var drawOrder = order;
-        int SourceIndex(int i) => drawOrder?[i] ?? i;
-        int next = 0;
-        for (int i = 0; i < rows.Count;)
-        {
-            int end = i + 1;
-            if (rows[SourceIndex(i)].Kind == IrRowOpKind.InsertRow)
-            {
-                while (end < rows.Count && rows[SourceIndex(end)].Kind == IrRowOpKind.InsertRow) end++;
-                bool inverted = false;
-                for (int j = i + 1; j < end; j++)
-                    if (boundary[SourceIndex(j - 1)] > boundary[SourceIndex(j)]) inverted = true;
-                if (inverted)
-                {
-                    drawOrder ??= Enumerable.Range(0, rows.Count).ToList();
-                    var sorted = drawOrder.GetRange(i, end - i).OrderBy(index => boundary[index]).ToArray();
-                    for (int j = 0; j < sorted.Length; j++) drawOrder[i + j] = sorted[j];
-                }
-            }
-            for (; i < end; i++)
-                while (next < extras.Count && extras[next] <= boundary[SourceIndex(i)])
-                    placed.Add((extras[next++], i));
+            int row = order?[i] ?? i;
+            int preceding = precedingControls?[row] ?? 0;
+            int boundary = rows[row].BaseRowAnchor is { } anchor ? source.Members[baseRows[anchor]]
+                : preceding > 0 && preceding <= empty.Count ? empty[preceding - 1] : -1;
+            while (next < extras.Count && extras[next] <= boundary)
+                placed.Add((extras[next++], i));
         }
         while (next < extras.Count) placed.Add((extras[next++], rows.Count));
-        order = drawOrder;
         return placed;
+    }
+
+    // Within a base gap, each retained rowless control divides insertions on its two sides.
+    // A stable sort preserves the control-chain and reviewer order within each such interval.
+    private static void OrderInsertsAtEmptyControls(IReadOnlyList<IrAuthoredRowOp> rows, int[] preceding,
+        ref List<int>? order)
+    {
+        for (int i = 0; i < rows.Count;)
+        {
+            if (rows[i].Kind != IrRowOpKind.InsertRow) { i++; continue; }
+            int end = i + 1;
+            bool inverted = false;
+            while (end < rows.Count && rows[end].Kind == IrRowOpKind.InsertRow)
+            {
+                if (preceding[order?[end - 1] ?? end - 1] > preceding[order?[end] ?? end]) inverted = true;
+                end++;
+            }
+            if (inverted)
+            {
+                order ??= Enumerable.Range(0, rows.Count).ToList();
+                var sorted = order.GetRange(i, end - i).OrderBy(index => preceding[index]).ToArray();
+                for (int j = i; j < end; j++) order[j] = sorted[j - i];
+            }
+            i = end;
+        }
     }
 
     /// <summary>
