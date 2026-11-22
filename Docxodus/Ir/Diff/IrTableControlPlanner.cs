@@ -291,13 +291,48 @@ internal static class IrTableControlPlanner
             order = KeepInsertsTogether(rows, chains);
         if (precedingControls is not null)
             OrderInsertsAtEmptyControls(rows, precedingControls, ref order);
+        var children = PlaceTableChildren(original, rows, baseRows, precedingControls, order);
         if (order is not null)
         {
             chains = order.Select(i => chains[i]).ToArray();
             if (!StayTogether(chains)) return null;
         }
         var layout = chains.Any(c => c.Length > 0) ? new IrControlLayout(chains, authors.Keys.ToHashSet(), Authors: authors) : null;
-        return new IrComposedTableControls(layout, cells, order, tables.ToDictionary(t => t.Key, t => t.Value.Anchor.ToString()));
+        return new IrComposedTableControls(layout, cells, order, tables.ToDictionary(t => t.Key, t => t.Value.Anchor.ToString()), children);
+    }
+
+    /// <summary>Place each non-row child once. An empty control's position in the paired control
+    /// sequence identifies the same control in each reviewer. Two rows inserted into one base gap
+    /// can therefore lie on opposite sides of a control, regardless of reviewer order.</summary>
+    private static List<(int Child, int Before)>? PlaceTableChildren(IrTable original,
+        List<IrAuthoredRowOp> rows, Dictionary<string, int> baseRows, int[]? precedingControls, List<int>? order)
+    {
+        if (original.ChildOrder is not { } source) return null;
+        var extras = new List<int>();
+        var empty = new List<int>();
+        for (int i = 0; i < source.Children.Count; i++)
+        {
+            var child = source.Children[i];
+            if (child.Parent >= 0 || child.MemberCount > 0 || child.Name == W.tblPr || child.Name == W.tblGrid)
+                continue;
+            extras.Add(i);
+            if (child.Name == W.sdt) empty.Add(i);
+        }
+        if (extras.Count == 0) return null;
+
+        var placed = new List<(int, int)>(extras.Count);
+        int next = 0;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            int row = order?[i] ?? i;
+            int preceding = precedingControls?[row] ?? 0;
+            int boundary = rows[row].BaseRowAnchor is { } anchor ? source.Members[baseRows[anchor]]
+                : preceding > 0 && preceding <= empty.Count ? empty[preceding - 1] : -1;
+            while (next < extras.Count && extras[next] <= boundary)
+                placed.Add((extras[next++], i));
+        }
+        while (next < extras.Count) placed.Add((extras[next++], rows.Count));
+        return placed;
     }
 
     // Within a base gap, each retained rowless control divides insertions on its two sides.
@@ -363,4 +398,5 @@ internal static class IrTableControlPlanner
 }
 
 internal sealed record IrComposedTableControls(IrControlLayout? Rows,
-    Dictionary<string, (int Row, IrControlLayout Layout)> Cells, List<int>? Order, Dictionary<int, string> TableAnchors);
+    Dictionary<string, (int Row, IrControlLayout Layout)> Cells, List<int>? Order, Dictionary<int, string> TableAnchors,
+    List<(int Child, int Before)>? Children);

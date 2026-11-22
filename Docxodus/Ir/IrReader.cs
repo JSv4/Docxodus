@@ -3229,6 +3229,9 @@ internal static class IrReader
         // Row-level table property exceptions (w:tblPrEx), tracked independently of w:trPr.
         var trPrExDigest = ShellChildrenDigest(tr.Elements(W + "tblPrEx"));
 
+        // The writers may bind an edit script to a separately read snapshot. Its retained row
+        // carries that snapshot's ordered children, just as a paragraph carries its source runs.
+        if (ctx.RetainSources && order is not null) tr.AddAnnotation(order);
         var row = new IrRow(AnchorFor(IrAnchorKind.Tr, tr, ctx), IrNodeList.From(cells), rowBuilder.Build())
         {
             Source = ctx.Provenance(tr),

@@ -254,7 +254,7 @@ public class ContentControlTableTests
 
     public static IEnumerable<object[]> BookmarkAndEditCases()
     {
-        foreach (var policy in Enum.GetValues<ConflictResolution>())
+        foreach (var policy in Policies)
         foreach (bool controlled in new[] { false, true })
         foreach (bool editorFirst in new[] { false, true })
             yield return new object[] { policy, controlled, editorFirst };
@@ -1053,6 +1053,30 @@ public class ContentControlTableTests
                 if (policy == ConflictResolution.FirstReviewerWins)
                     Assert.Equal(Layout(reviewers[0].Document), Layout(accepted));
                 AssertValid(merged, accepted, rejected);
+            }
+    }
+
+    [Fact]
+    public void Insertions_on_opposite_sides_of_an_empty_control_keep_their_source_positions()
+    {
+        string first = Row("Dock", "Berth one"), last = Row("Crane", "Hook two");
+        string before = Row("Barge", "Rope three"), after = Row("Mast", "Sail four");
+        var original = Table(first, EmptyControl, last);
+        var leftOfControl = Table(first, before, EmptyControl, last);
+        var rightOfControl = Table(first, EmptyControl, after, last);
+        var expected = Table(first, before, EmptyControl, after, last);
+        foreach (var reviewers in new[] { Reviewers(leftOfControl, rightOfControl), Reviewers(rightOfControl, leftOfControl) })
+            foreach (var policy in Policies)
+            {
+                var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+                var merged = DocxDiff.Consolidate(original, reviewers, settings);
+                Assert.Empty(DocxDiff.GetConflicts(original, reviewers, settings));
+                Assert.Equal(Layout(expected), Layout(RevisionProcessor.AcceptRevisions(merged)));
+                Assert.Equal(Layout(original), Layout(RevisionProcessor.RejectRevisions(merged)));
+                var insertions = Body(merged).Descendants(W + "trPr").Elements(W + "ins").ToArray();
+                Assert.Equal(2, insertions.Length);
+                Assert.Equal(reviewers.Select(r => r.Author).Order(), insertions.Select(e => (string)e.Attribute(W + "author")).Order());
+                AssertValid(merged);
             }
     }
 

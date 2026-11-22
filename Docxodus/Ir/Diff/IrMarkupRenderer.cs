@@ -2260,10 +2260,8 @@ internal static partial class IrMarkupRenderer
             var sources = rowOps.Select(row => (
                 row.Kind == IrRowOpKind.MovedRow && row.IsMoveSource != true ? null : leftRowsByAnchor.GetValueOrDefault(row.LeftRowAnchor ?? ""),
                 row.Kind == IrRowOpKind.MovedRow && row.IsMoveSource == true ? null : rightRowsByAnchor.GetValueOrDefault(row.RightRowAnchor ?? ""))).ToList();
-            if (extras.Count > 0)
-                foreach (var (left, right) in TopLevelRowlessControls(leftIrTable!).Zip(extras).Reverse())
-                    sources.Insert(right.Before, (left.Element, right.Element));
-            ReconcileTableStreamMarkers(newTbl, sources, state, extras.Count > 0);
+            if (plan is not null && extras.Count != 0) IncludeEmptyControls(sources, leftIrTable, rightIrTable, plan);
+            ReconcileTableStreamMarkers(newTbl, sources, state, extras.Count != 0);
         }
         RewrapInControls(newTbl, W.tr, rowControls, state);
         sink.Add(newTbl);
@@ -2404,7 +2402,9 @@ internal static partial class IrMarkupRenderer
 
     /// <summary>A row's cells in source order, including those its content controls deliver, as the reader lists
     /// them.</summary>
-    private static List<XElement> RowCells(XElement row) => DeliveredChildren(row, W.tc);
+    private static List<XElement> RowCells(XElement row) => row.Annotation<IrTableOrder>() is { } order
+        ? order.Members.Select(i => order.Children[i].Source.Element!).ToList()
+        : DeliveredChildren(row, W.tc);
 
     /// <summary>A table's rows in source order, including those its content controls deliver.</summary>
     private static List<XElement> TableRows(XElement table) => DeliveredChildren(table, W.tr);
@@ -2578,19 +2578,20 @@ internal static partial class IrMarkupRenderer
     private static RowShell SplitRowShell(XElement row)
     {
         var shell = new RowShell(new List<XElement>(), new List<(XElement, int)>());
-        int cells = 0;
-        foreach (var child in row.Elements())
+        if (row.Annotation<IrTableOrder>() is { } order)
         {
-            if (child.Name == W.tc)
-                cells++;
-            else if (child.Name == W.sdt && IrReader.DeliversAny(child, W.tc))
-                foreach (var _ in IrReader.UnwrapSdtChildren(child, W.tc))
-                    cells++;
-            else if (child.Name == W.tblPrEx || child.Name == W.trPr)
-                shell.Properties.Add(child);
-            else
-                shell.Markers.Add((child, cells));
+            foreach (var child in order.Children)
+            {
+                if (child.Parent >= 0 || child.MemberCount != 0) continue;
+                var element = child.Source.Element!;
+                if (child.Name == W.tblPrEx || child.Name == W.trPr)
+                    shell.Properties.Add(element);
+                else
+                    shell.Markers.Add((element, child.FirstMember));
+            }
         }
+        else
+            shell.Properties.AddRange(row.Elements().TakeWhile(e => e.Name != W.tc));
         return shell;
     }
 
@@ -2724,63 +2725,27 @@ internal static partial class IrMarkupRenderer
         // The table's properties and grid lead. Its other non-row children (a content control that holds no row, a
         // bookmark) go back before the same base row, as a composed row's go back between its cells (issue #1812).
         var newTbl = new XElement(W.tbl);
-        var extras = new List<(XElement Element, int RowsBefore)>();
-        Dictionary<string, int>? baseRowOrdinals = null;
-        if (baseTblBlock.ChildOrder is { } tableOrder)
+        foreach (var property in baseTbl.Elements().Where(e => e.Name == W.tblPr || e.Name == W.tblGrid))
+            newTbl.Add(StripUnids(new XElement(property)));
+        var extras = op.ControlPlacement?.Children;
+        int extrasPlaced = 0;
+        void PlaceExtrasBefore(int row)
         {
-            foreach (var child in tableOrder.Children)
+            while (extras is not null && extrasPlaced < extras.Count && extras[extrasPlaced].Before <= row)
             {
-                if (child.Parent >= 0 || child.MemberCount > 0 || child.Source.Element is not { } source)
-                    continue;
-                if (child.Name == W.tblPr || child.Name == W.tblGrid)
-                    newTbl.Add(StripUnids(new XElement(source)));
-                else
-                    extras.Add((source, child.FirstMember));
+                var child = baseTblBlock.ChildOrder!.Children[extras[extrasPlaced++].Child];
+                newTbl.Add(StripUnids(new XElement(child.Source.Element!)));
             }
-            if (extras.Count > 0)
-            {
-                baseRowOrdinals = new(StringComparer.Ordinal);
-                for (int i = 0; i < baseTblBlock.Rows.Count; i++)
-                    baseRowOrdinals[baseTblBlock.Rows[i].Anchor.ToString()] = i;
-            }
-        }
-        else
-            foreach (var property in baseTbl.Elements().TakeWhile(child => child.Name != W.tr))
-                newTbl.Add(StripUnids(new XElement(property)));
-        int extrasPlaced = 0, emptyControlsPlaced = 0;
-        void PlaceNextExtra()
-        {
-            var element = extras[extrasPlaced++].Element;
-            newTbl.Add(StripUnids(new XElement(element)));
-            if (element.Name == W.sdt) emptyControlsPlaced++;
-        }
-        void PlaceExtrasBefore(int baseRow)
-        {
-            while (extrasPlaced < extras.Count && extras[extrasPlaced].RowsBefore <= baseRow)
-                PlaceNextExtra();
         }
 
         // B2: the table-level shells (tblPr/tblGrid) were base-cloned above; swap in the composed winner's and
         // stamp native w:tblPrChange/w:tblGridChange (inner = base) so a table-shell edit round-trips.
         ApplyComposedTableShell(newTbl, baseTbl, op.TableShell, reviewerIrs, state);
 
-        int boundary = 0;
-        foreach (var rowOp in authoredRows)
+        for (int i = 0; i < authoredRows.Count; i++)
         {
-            if (rowOp.Kind != IrRowOpKind.InsertRow && rowOp.BaseRowAnchor is { } baseAnchor &&
-                baseRowOrdinals is not null && baseRowOrdinals.TryGetValue(baseAnchor, out var ordinal))
-            {
-                PlaceExtrasBefore(ordinal);
-                boundary = ordinal + 1;
-            }
-            else if (rowOp.Kind == IrRowOpKind.InsertRow && extrasPlaced < extras.Count && extras[extrasPlaced].RowsBefore == boundary &&
-                     rowOp.SourceReviewer >= 0 && rowOp.SourceReviewer < reviewerIrs.Count && rowOp.RightRowAnchor is { } insertedAnchor &&
-                     IrCompositeMerger.RowIndex(reviewerIrs[rowOp.SourceReviewer]).TryGetValue(insertedAnchor, out var inserted))
-            {
-                while (extrasPlaced < extras.Count && extras[extrasPlaced].RowsBefore == boundary &&
-                       emptyControlsPlaced < inserted.PrecedingEmptyControls)
-                    PlaceNextExtra();
-            }
+            var rowOp = authoredRows[i];
+            PlaceExtrasBefore(i);
             switch (rowOp.Kind)
             {
                 case IrRowOpKind.EqualRow:

@@ -116,7 +116,12 @@ internal static class IrTableDiffer
 
         // --- Emit row ops in right order with left-anchored deletion interleave (+ a move group id pass).
         var rowOps = EmitRowOps(leftRows, rightRows, leftKind, rightKind, leftMatch, rightMatch, settings);
-        var diff = new IrTableDiff(IrNodeList.From(rowOps));
+        return PlanRows(left, right, IrNodeList.From(rowOps));
+    }
+
+    internal static IrTableDiff PlanRows(IrTable left, IrTable right, IrNodeList<IrRowOp> rowOps)
+    {
+        var diff = new IrTableDiff(rowOps);
         if (left.ControlDigest == default && right.ControlDigest == default)
             return diff;
         var plan = IrTableControlPlanner.Plan(left, right, rowOps);
