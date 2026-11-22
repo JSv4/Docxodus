@@ -594,6 +594,81 @@ public class DocxDiffCommentStructureTests
             PackageValidation.AssertValid(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
     }
 
+    [Theory]
+    [InlineData("format", false)]
+    [InlineData("format", true)]
+    [InlineData("equal-row", false)]
+    [InlineData("equal-row", true)]
+    [InlineData("deleted-row", false)]
+    [InlineData("deleted-row", true)]
+    [InlineData("deleted-cell", false)]
+    [InlineData("deleted-cell", true)]
+    public void A_comment_can_leave_a_copied_or_deleted_container_paragraph(string shape, bool consolidate)
+    {
+        WmlDocument Form(bool revised)
+        {
+            string P(string text) => "<w:p>" + text + "</w:p>";
+            string Cell(string paragraphs) => "<w:tc>" + paragraphs + "</w:tc>";
+            string Row(string cells) => "<w:tr>" + cells + "</w:tr>";
+            var origin = P((revised && shape == "format" ? "<w:pPr><w:jc w:val='center'/></w:pPr>" : "") +
+                CommentRun("Original term.", revised ? null : "0"));
+            var target = P(CommentRun("Destination", revised ? "0" : null) +
+                CommentRun(revised ? " on Mondays." : " on Fridays.", null));
+            string contents = shape switch
+            {
+                "format" => origin + target,
+                "deleted-cell" => Row((revised ? "" : Cell(origin)) + Cell(P(CommentRun("Stable cell.", null)))) + Row(Cell(target)),
+                "deleted-row" => (revised ? "" : Row(Cell(origin))) + Row(Cell(target)),
+                _ => Row(Cell(origin)) + Row(Cell(target))
+            };
+            if (shape != "format")
+                contents = "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='3000'/>" +
+                    (shape == "deleted-cell" ? "<w:gridCol w:w='3000'/>" : "") + "</w:tblGrid>" + contents + "</w:tbl>";
+            return IrTestDocuments.WithComment("Cedar", "C", "2026-01-01T00:00:00Z", "Check the term.", contents);
+        }
+        var original = Form(false);
+        var revised = Form(true);
+        var marked = consolidate ? DocxCompare.Consolidate(original, new[] { new DocxDiffReviewer { Author = "Mover", Document = revised } })
+            : DocxCompare.Compare(original, revised);
+        var accepted = RevisionProcessor.AcceptRevisions(marked);
+        var rejected = RevisionProcessor.RejectRevisions(marked);
+        Assert.Equal(RangeCoverage(original, true), RangeCoverage(rejected, true));
+        Assert.Equal(RangeCoverage(revised, true), RangeCoverage(accepted, true));
+        foreach (var doc in new[] { marked, accepted, rejected })
+            PackageValidation.AssertValid(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
+    }
+
+    [Theory]
+    [InlineData(ConflictResolution.BaseWins, true)]
+    [InlineData(ConflictResolution.BaseWins, false)]
+    [InlineData(ConflictResolution.FirstReviewerWins, true)]
+    [InlineData(ConflictResolution.FirstReviewerWins, false)]
+    [InlineData(ConflictResolution.StackAll, true)]
+    [InlineData(ConflictResolution.StackAll, false)]
+    public void Competing_reattachments_have_one_accepted_destination(ConflictResolution policy, bool firstToNorth)
+    {
+        WmlDocument Form(int destination, bool northEdit, bool southEdit) => IrTestDocuments.WithComment(
+            "Cedar", "C", "2026-01-01T00:00:00Z", "Check the term.",
+            "<w:p>" + CommentRun(northEdit ? "Early alpha " : "Original alpha ", null) + CommentRun("beta", destination == 0 ? "0" : null) +
+            CommentRun(southEdit ? " gamma concludes." : " gamma ends.", null) + "</w:p>" +
+            "<w:p>" + CommentRun("North.", destination == 1 ? "0" : null) + "</w:p>" +
+            "<w:p>" + CommentRun("South.", destination == 2 ? "0" : null) + "</w:p>");
+        var original = Form(0, false, false);
+        var north = new DocxDiffReviewer { Author = "North reviewer", Document = Form(1, true, false) };
+        var south = new DocxDiffReviewer { Author = "South reviewer", Document = Form(2, false, true) };
+        var reviewers = firstToNorth ? new[] { north, south } : new[] { south, north };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+        var marked = DocxCompare.Consolidate(original, reviewers, settings);
+        var accepted = RevisionProcessor.AcceptRevisions(marked);
+        var rejected = RevisionProcessor.RejectRevisions(marked);
+        Assert.Equal(RangeCoverage(original, true), RangeCoverage(rejected, true));
+        var expected = Form(policy == ConflictResolution.BaseWins ? 0 : firstToNorth ? 1 : 2, true, true);
+        Assert.Equal(RangeCoverage(expected, true), RangeCoverage(accepted, true));
+        Assert.Single(DocxDiff.GetConflicts(original, reviewers, settings));
+        foreach (var doc in new[] { marked, accepted, rejected })
+            PackageValidation.AssertValid(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
+    }
+
     private static string CommentRun(string text, string? id) => id is null ? $"<w:r><w:t>{text}</w:t></w:r>"
         : $"<w:commentRangeStart w:id=\"{id}\"/><w:r><w:t>{text}</w:t></w:r>"
             + $"<w:commentRangeEnd w:id=\"{id}\"/><w:r><w:commentReference w:id=\"{id}\"/></w:r>";

@@ -1608,14 +1608,21 @@ internal static partial class IrMarkupRenderer
     {
         if (state.CommentAttachments?.For(anchor) is not { } placements) return;
         var savedAuthor = state.AuthorOverride;
-        foreach (var (id, insert, author) in placements)
+        var fromBase = placements.Where(p => p.View != IrCommentAttachments.View.Revised)
+            .Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
+        if (fromBase.Count != 0)
+            CarryMissingComments(new[] { paragraph }, SourceElement(anchor, state.Left), originalView: true,
+                textBoxes: false, nextId: state.NextId, notCarried: id => !fromBase.Contains(id));
+        foreach (var (id, view, author) in placements)
         {
             state.AuthorOverride = author ?? state.AttachmentAuthor ?? savedAuthor;
-            var kind = insert ? RevKind.Ins : RevKind.Del;
+            var kind = view == IrCommentAttachments.View.Revised ? RevKind.Ins : RevKind.Del;
             var markers = paragraph.Descendants().Where(e => IsCommentMarker(e) && e.Ancestors(W.p).FirstOrDefault() == paragraph &&
                 (string?)e.Attribute(W.id) == id && IsRunLevelCommentMarker(e)).ToList();
             foreach (var marker in markers)
-                if (CommentMarkerView(marker) is null)
+                if (view == IrCommentAttachments.View.Both)
+                    LiftCommentMarkerBare(marker);
+                else if (CommentMarkerView(marker) is null)
                     WrapMarkerInRevision(marker, kind, state);
         }
         state.AuthorOverride = savedAuthor;

@@ -98,7 +98,7 @@ internal static class IrCompositeMerger
         var bookmarks = IrMarkupRenderer.PlanCompositeBookmarks(baseIr, reviewers, scripts,
             policy, settings, conflicts, ref nextConflictId);
 
-        var attachments = IrCommentAttachments.Compose(baseIr, rawScripts, reviewers, ops);
+        var attachments = IrCommentAttachments.Compose(baseIr, rawScripts, reviewers, ops, policy, conflicts, ref nextConflictId);
 
         // Each reviewer's own comparison rides along for the renderer: the composite ops say nothing about the
         // bookmarks and comment ranges a reviewer has between blocks (rule N3), and placing them needs that

@@ -8,8 +8,10 @@ namespace Docxodus.Ir.Diff;
 /// A comment attached to a paragraph that itself moved follows the paragraph's existing move plan.</summary>
 internal sealed class IrCommentAttachments
 {
+    internal enum View { Original, Revised, Both }
+
     internal static readonly IrCommentAttachments Empty = new();
-    private Dictionary<string, List<(string Id, bool Insert, string? Author)>>? _byBase;
+    private Dictionary<string, List<(string Id, View View, string? Author)>>? _byBase;
 
     private Dictionary<string, string>? _anchorByUnid;
     private HashSet<IrAnchor>? _unchanged;
@@ -18,7 +20,7 @@ internal sealed class IrCommentAttachments
     internal bool HasPlacements => _byBase is not null;
     internal string? AnchorForCopy(string? unid) => unid is null ? null : _anchorByUnid?.GetValueOrDefault(unid);
 
-    internal IReadOnlyList<(string Id, bool Insert, string? Author)>? For(string? anchor) =>
+    internal IReadOnlyList<(string Id, View View, string? Author)>? For(string? anchor) =>
         anchor is null ? null : _byBase?.GetValueOrDefault(anchor);
 
     internal static IrCommentAttachments Plan(IrDocument original, IrDocument revised, IReadOnlyList<IrEditOp> operations)
@@ -80,6 +82,10 @@ internal sealed class IrCommentAttachments
                 if (op.TableDiff is not { } table) continue;
                 foreach (var row in table.RowOps)
                 {
+                    if (row.Kind == IrRowOpKind.DeleteRow && row.LeftRowAnchor is { } deletedRow &&
+                        IrCompositeMerger.RowIndex(original).TryGetValue(deletedRow, out var removed))
+                        foreach (var paragraph in removed.Cells.SelectMany(c => c.Blocks).SelectMany(Paragraphs))
+                            Pair(paragraph, null, false, true);
                     if (row.Kind == IrRowOpKind.EqualRow && row.LeftRowAnchor is { } lr && row.RightRowAnchor is { } rr &&
                         IrCompositeMerger.RowIndex(original).TryGetValue(lr, out var leftRow) &&
                         IrCompositeMerger.RowIndex(revised).TryGetValue(rr, out var rightRow))
@@ -87,6 +93,12 @@ internal sealed class IrCommentAttachments
                     if (row.CellOps is not { } cells) continue;
                     foreach (var cell in cells)
                         if (cell.BlockOps is { } blocks) Walk(blocks);
+                        else if (cell.RightCellAnchor is null && cell.LeftCellAnchor is { } deletedCell &&
+                            IrCompositeMerger.CellIndex(original).TryGetValue(deletedCell, out var removedCell))
+                        {
+                            foreach (var paragraph in removedCell.Blocks.SelectMany(Paragraphs))
+                                Pair(paragraph, null, false, true);
+                        }
                         else if (cell.LeftCellAnchor is { } lc && cell.RightCellAnchor is { } rc &&
                             IrCompositeMerger.CellIndex(original).TryGetValue(lc, out var leftCell) &&
                             IrCompositeMerger.CellIndex(revised).TryGetValue(rc, out var rightCell))
@@ -100,8 +112,8 @@ internal sealed class IrCommentAttachments
             if (!revisedTargets.TryGetValue(id, out var revisedParent) ||
                 !pairs.TryGetValue(revisedParent, out var newParent) || oldParent == newParent || !sources.Contains(oldParent))
                 continue;
-            plan.Add(oldParent, id, false);
-            plan.Add(newParent, id, true);
+            plan.Add(oldParent, id, View.Original);
+            plan.Add(newParent, id, View.Revised);
         }
         return plan;
     }
@@ -127,7 +139,7 @@ internal sealed class IrCommentAttachments
     /// paragraph when its new target is a surviving base copy. An edited target's owner
     /// supplies its comments. A reviewer who only moves an existing base comment leaves it with the base.</summary>
     internal static IrCommentAttachments? Compose(IrDocument original, IReadOnlyList<IrEditScript> comparisons,
-        IReadOnlyList<(string Author, IrDocument Ir)> reviewers, IReadOnlyList<IrCompositeOp> operations)
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers, IReadOnlyList<IrCompositeOp> operations, ConflictResolution policy, List<IrConflict> conflicts, ref int nextConflictId)
     {
         if (comparisons.Count == 1) return comparisons[0].CommentAttachments;
         if (!comparisons.Any(c => c.CommentAttachments?._byBase is not null)) return null;
@@ -150,45 +162,68 @@ internal sealed class IrCommentAttachments
             var equal = op with { Op = op.Op with { Kind = IrEditOpKind.EqualBlock } };
             foreach (var row in rows)
             {
-                if (row.Kind == IrRowOpKind.EqualRow && row.BaseRowAnchor is { } rowId &&
+                if (row.Kind is IrRowOpKind.EqualRow or IrRowOpKind.DeleteRow && row.BaseRowAnchor is { } rowId &&
                     IrCompositeMerger.RowIndex(original).TryGetValue(rowId, out var source))
                     foreach (var paragraph in source.Cells.SelectMany(c => c.Blocks).SelectMany(Paragraphs))
-                        owners.TryAdd(paragraph.Anchor.ToString(), equal);
+                        owners.TryAdd(paragraph.Anchor.ToString(), row.Kind == IrRowOpKind.EqualRow ? equal
+                            : op with { Op = op.Op with { Kind = IrEditOpKind.DeleteBlock }, SourceReviewer = row.SourceReviewer });
                 if (row.ComposedCells is not { } cells) continue;
                 foreach (var cell in cells)
                     if (cell.ComposedBlockOps is { } ops)
                         foreach (var child in ops) Index(child);
-                    else if (cell.Kind == IrAuthoredCellKind.Content && cell.BaseCellAnchor is { } cellId &&
+                    else if (cell.Kind is IrAuthoredCellKind.Content or IrAuthoredCellKind.DeleteCell && cell.BaseCellAnchor is { } cellId &&
                         IrCompositeMerger.CellIndex(original).TryGetValue(cellId, out var sourceCell))
                         foreach (var paragraph in sourceCell.Blocks.SelectMany(Paragraphs))
-                            owners.TryAdd(paragraph.Anchor.ToString(), equal);
+                            owners.TryAdd(paragraph.Anchor.ToString(), cell.Kind == IrAuthoredCellKind.Content ? equal
+                                : op with { Op = op.Op with { Kind = IrEditOpKind.DeleteBlock }, SourceReviewer = cell.ShellSourceReviewer });
             }
         }
         foreach (var op in operations) Index(op);
-        IrCommentAttachments? result = null;
+        var candidates = new Dictionary<string, List<(int Reviewer, IrAnchor Origin, IrAnchor Destination)>>(StringComparer.Ordinal);
         for (int r = 0; r < comparisons.Count; r++)
         {
             if (comparisons[r].CommentAttachments?._byBase is not { } placements) continue;
             foreach (var (destination, entries) in placements)
             {
-                if (!owners.TryGetValue(destination, out var target) || target.Op.Kind != IrEditOpKind.EqualBlock) continue;
-                foreach (var (id, insert, _) in entries)
+                if (!owners.TryGetValue(destination, out var target) ||
+                    target.Op.Kind != IrEditOpKind.EqualBlock && !(target.Op.Kind == IrEditOpKind.ModifyBlock && Contributes(target, r))) continue;
+                foreach (var (id, view, _) in entries)
                 {
-                    if (!insert || !originalTargets.TryGetValue(id, out var origin) || !owners.TryGetValue(origin.ToString(), out var source) ||
+                    if (view != View.Revised || !originalTargets.TryGetValue(id, out var origin) || !owners.TryGetValue(origin.ToString(), out var source) ||
                         source.Op.Kind is not (IrEditOpKind.DeleteBlock or IrEditOpKind.ModifyBlock)) continue;
-                    bool contributes = source.AuthoredTokens is { } tokens
-                        ? tokens.Any(t => t.SourceReviewer == r && t.Op.Kind != IrTokenOpKind.Equal)
-                        : source.SourceReviewer == r;
-                    if (!contributes) continue;
-                    result ??= new IrCommentAttachments();
-                    (result._selectedReattachments ??= new()).Add((r, id));
-                    result.Add(origin, id, false, reviewers[r].Author);
-                    result.Add(original.AnchorIndex[destination].Anchor, id, true, reviewers[r].Author);
+                    if (!Contributes(source, r)) continue;
+                    if (!candidates.TryGetValue(id, out var entriesForId)) candidates.Add(id, entriesForId = new());
+                    entriesForId.Add((r, origin, original.AnchorIndex[destination].Anchor));
                 }
             }
         }
+        IrCommentAttachments? result = null;
+        foreach (var (id, choices) in candidates)
+        {
+            result ??= new IrCommentAttachments();
+            var first = choices[0];
+            if (choices.Any(c => c.Destination != first.Destination))
+            {
+                // One logical comment has one accepted range. Resolve competing destinations
+                // like other single-valued properties in a composite document.
+                conflicts.Add(new IrConflict(nextConflictId++, first.Origin.ToString(), 0, 0, policy,
+                    IrNodeList.From(choices.Select(c => new IrConflictCompetitor(reviewers[c.Reviewer].Author, c.Destination.ToString())))));
+                if (policy == ConflictResolution.BaseWins)
+                {
+                    result.Add(first.Origin, id, View.Both);
+                    continue;
+                }
+            }
+            (result._selectedReattachments ??= new()).Add((first.Reviewer, id));
+            result.Add(first.Origin, id, View.Original, reviewers[first.Reviewer].Author);
+            result.Add(first.Destination, id, View.Revised, reviewers[first.Reviewer].Author);
+        }
         return result;
     }
+
+    private static bool Contributes(IrCompositeOp source, int reviewer) => source.AuthoredTokens is { } tokens
+        ? tokens.Any(t => t.SourceReviewer == reviewer && t.Op.Kind != IrTokenOpKind.Equal)
+        : source.SourceReviewer == reviewer;
 
     /// <summary>For each base body comment, decide whether this reviewer kept the original
     /// anchor paragraphs. An unchanged paragraph elsewhere with identical text has its own anchor.</summary>
@@ -204,7 +239,7 @@ internal sealed class IrCommentAttachments
             if (comment.PackageId is not { } id || comment.BodyMarkerParagraphs is not { } range ||
                 range.First.Scope != "body") continue;
             var start = range.First.ToString();
-            bool reattached = comparison.CommentAttachments?.For(start)?.Any(p => p.Id == id && !p.Insert) == true;
+            bool reattached = comparison.CommentAttachments?.For(start)?.Any(p => p.Id == id && p.View == View.Original) == true;
             if (soleReviewer && reattached) continue;
             bool suppressed = reattached && selected?._selectedReattachments?.Contains((reviewer, id)) != true;
             (result ??= new(StringComparer.Ordinal))[id] =
@@ -213,13 +248,13 @@ internal sealed class IrCommentAttachments
         return result;
     }
 
-    private void Add(IrAnchor paragraph, string id, bool insert, string? author = null)
+    private void Add(IrAnchor paragraph, string id, View view, string? author = null)
     {
         var anchor = paragraph.ToString();
         (_anchorByUnid ??= new(StringComparer.Ordinal))[paragraph.Unid] = anchor;
         _byBase ??= new(StringComparer.Ordinal);
         if (!_byBase.TryGetValue(anchor, out var list))
             _byBase.Add(anchor, list = new());
-        list.Add((id, insert, author));
+        list.Add((id, view, author));
     }
 }
