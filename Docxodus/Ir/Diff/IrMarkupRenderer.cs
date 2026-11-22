@@ -5633,7 +5633,6 @@ internal static partial class IrMarkupRenderer
     internal static void WriteReplacementAnnotations(XElement target, IEnumerable<IrEqualReviewerMarkers> reviewers,
         IrDocument baseIr, IReadOnlyList<IrDocument> reviewerIrs, RenderState state)
     {
-        var baseComments = BaseCommentAnchors(baseIr, state);
         state.BaseBookmarkNames ??= BodyBookmarkNames(baseIr);
         var savedAuthor = state.AuthorOverride;
         foreach (var reviewer in reviewers)
@@ -5643,8 +5642,9 @@ internal static partial class IrMarkupRenderer
                 continue;
             var markers = IrReplacementAnnotations.Markers(source).Select(m => m.Element).ToArray();
             var projected = positions.Select(p => (Element: markers[p.Ordinal], p.Offset)).ToList();
+            var baseComments = state.ReviewerComparisons?[reviewer.Reviewer].BaseCommentAnchors;
             var comments = projected.Where(p => IsCommentMarker(p.Element) &&
-                (string?)p.Element.Attribute(W.id) is { } id && !baseComments.ContainsKey(id));
+                (string?)p.Element.Attribute(W.id) is { } id && baseComments?.ContainsKey(id) != true);
             state.AuthorOverride = reviewer.Author;
             CarryCommentMarkers(target, comments.Select(p => (p.Element, p.Offset, false)), nextId: state.NextId);
 
