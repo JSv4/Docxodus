@@ -1,6 +1,8 @@
 #nullable enable
 
+using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace Docxodus.Internal;
@@ -1156,8 +1158,12 @@ internal static class DocxSessionOps
     public static string SetContentControlDate(int handle, string anchorId, string value,
         string? displayText, string optionsJson)
     {
-        if (!System.DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+        // A calendar date has no time zone. Preserve the existing timestamp parsing rules
+        // for inputs that specify a time, including their explicit or local offset.
+        if (!DateTimeOffset.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AllowLeadingWhite | DateTimeStyles.AllowTrailingWhite,
+                out var parsed) &&
+            !DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out parsed))
             return DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidContentControlValue,
                 "date value must be an ISO-8601 timestamp", anchorId));
         return ContentControlOptions(anchorId, optionsJson, options =>

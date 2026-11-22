@@ -13,6 +13,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Filling a date control with an ISO calendar date stores midnight UTC in every host time zone (#1842).
+
 - `SemanticDiff.Compare` reports changes to the controls around table rows and cells, including changes to control properties, grouping, and the position of empty controls (#1814).
 
 - Revision lists include the text of an inserted or deleted row in a nested table or a table inside a content control (#1813).

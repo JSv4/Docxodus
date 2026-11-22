@@ -192,7 +192,9 @@ is `docxodus_content_controls`; it advertises the same optional optimistic
 `preconditions` guard as the other mutating tools, and its mutating actions participate in
 `docxodus_mutations` apply/preview rollback, while `list` is read-only and rejected as
 a batch step. Picture bytes cross JSON transports only as base64.
-An omitted date `displayText` selects the invariant default; an explicitly empty
+A date-only ISO string (`yyyy-MM-dd`) is stored at midnight UTC. A timestamp with an
+explicit offset is converted to its UTC instant. An omitted date `displayText` selects
+the invariant calendar date of the input; an explicitly empty
 string remains empty through the JSON, WASM, and TypeScript layers.
 
 Failures are structured `EditErrorCode` values, including not found, malformed,
