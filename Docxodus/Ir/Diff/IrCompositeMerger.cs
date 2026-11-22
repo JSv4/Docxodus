@@ -1813,15 +1813,14 @@ internal static class IrCompositeMerger
         // Content composition over the CONTENT (ModifyBlock w/TableDiff) touchers — a pure shell
         // (FormatOnlyBlock) toucher contributes no row ops, so with only shell touchers ComposeTableDiffs
         // yields an all-EqualRow authored table onto which the shell attribution below layers the markup.
-        var reviewerTableDiffs = touched
+        var reviewerTables = IrNodeList.From(touched
             .Where(e => e.Op.Kind == IrEditOpKind.ModifyBlock && e.Op.TableDiff != null)
-            .Select(e => (e.Reviewer, reviewers[e.Reviewer].Author, e.Op.TableDiff!))
-            .ToList();
+            .Select(e => new IrReviewerTable(e.Reviewer, reviewers[e.Reviewer].Author, e.Op.TableDiff!) { RevisedTable = RightTable(e) }));
+        var reviewerTableDiffs = reviewerTables.Select(t => (t.Reviewer, t.Author, t.Diff)).ToList();
         int firstConflictId = nextConflictId;
         var merged = ComposeTableDiffs(
             anchor, baseTable, reviewerTableDiffs, reviewers, baseIr, policy, settings,
             ref nextConflictId, out var tableConflicts, out var authoredRows);
-        var reviewerTables = IrNodeList.From(reviewerTableDiffs.Select(r => new IrReviewerTable(r.Reviewer, r.Author, r.Item3)));
         List<int>? order = null;
         if (controlled && !ComposedControlsRebuild(baseTable, authoredRows, reviewerTables, reviewers, out order))
         {
@@ -1957,18 +1956,26 @@ internal static class IrCompositeMerger
         // controls: it must gain or lose no cell, and each side's row must let the controls be rebuilt.
         foreach (var row in authoredRows)
         {
-            if (row.ComposedCells is not { } cells || row.BaseRowAnchor is not { } anchor ||
-                !controlledRows.TryGetValue(anchor, out var baseRow))
+            if (row.BaseRowAnchor is not { } anchor || !controlledRows.TryGetValue(anchor, out var baseRow))
                 continue;
+            if (row.ComposedCells is not { } cells)
+            {
+                controlledRows.Remove(anchor);
+                continue;
+            }
             if (cells.Any(c => c.Kind != IrAuthoredCellKind.Content) || !IrTableDiffer.ControlsDrawable(baseRow.Controls, baseRow.Controls))
                 return false;
-            foreach (var table in reviewerTables)
-                foreach (var op in table.Diff.RowOps)
-                    if (op.LeftRowAnchor == anchor && op.RightRowAnchor is { } right &&
-                        RowIndex(reviewers[table.Reviewer].Ir).TryGetValue(right, out var reviewerRow) &&
-                        !IrTableDiffer.ControlsDrawable(baseRow.Controls, reviewerRow.Controls))
-                        return false;
         }
+        if (controlledRows.Count > 0)
+            foreach (var table in reviewerTables)
+            {
+                var reviewerRows = RowIndex(reviewers[table.Reviewer].Ir);
+                foreach (var op in table.Diff.RowOps)
+                    if (op.LeftRowAnchor is { } left && controlledRows.TryGetValue(left, out var source) &&
+                        op.RightRowAnchor is { } right && reviewerRows.TryGetValue(right, out var reviewerRow) &&
+                        !IrTableDiffer.ControlsDrawable(source.Controls, reviewerRow.Controls))
+                        return false;
+            }
         return IrMarkupRenderer.PlanComposedControls(baseTable.Source.Element!, baseTable, authoredRows, reviewerTables,
             reviewers.Select(r => r.Ir).ToList(), out order) is not null;
     }
