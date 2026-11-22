@@ -112,6 +112,15 @@ internal static class IrHasher
         return IrHash.ComputeUtf8(clone.ToXmlString(SaveOptions.DisableFormatting));
     }
 
+    // Compare retained markup after the reader has closed its source package.
+    internal static IrHash RetainedMarkupHash(XElement markup, XElement? source)
+    {
+        var tokens = source?.Document?.Annotation<IrRelResolver.RetainedTokens>();
+        return tokens is null ? CanonicalHash(markup) : CanonicalHashWithAttributeRewrite(markup,
+            attribute => attribute.Name.Namespace == R && tokens.Values.TryGetValue(attribute.Value, out var value)
+                ? new XAttribute(attribute.Name, value) : attribute);
+    }
+
     /// <summary>
     /// Canonical SHA-256 with a caller-supplied attribute rewriter. This keeps the shared XML-noise
     /// normalization rules while allowing a narrowly scoped owner (currently the drawing relationship-graph
@@ -504,6 +513,21 @@ internal sealed class IrRelResolver
         var token = Classify(relId);
         _cache[relId] = token;
         return token;
+    }
+
+    internal sealed record RetainedTokens(IReadOnlyDictionary<string, string> Values);
+
+    internal void RetainReferencedTokens(XDocument source)
+    {
+        Dictionary<string, string>? tokens = null;
+        foreach (var attribute in source.Descendants().Attributes())
+        {
+            if (attribute.Name.Namespace != R.r) continue;
+            tokens ??= new Dictionary<string, string>(StringComparer.Ordinal);
+            if (!tokens.ContainsKey(attribute.Value))
+                tokens.Add(attribute.Value, ResolveToken(attribute.Value));
+        }
+        if (tokens is not null) source.AddAnnotation(new RetainedTokens(tokens));
     }
 
     private string Classify(string relId)

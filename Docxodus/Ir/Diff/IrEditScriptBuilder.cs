@@ -1338,6 +1338,13 @@ internal static class IrEditScriptBuilder
                     var diffs = structural ? null : IrSplitSegmenter.ComputeSegmentDiffs(lp, members, settings, singularIsLeft: true);
                     if (structural || SplitMergeSplitsSourceCarrier(lp, members, diffs!, settings))
                     {
+                        if (settings.KeepSplitContributions)
+                        {
+                            ops.Add(new IrEditOp(IrEditOpKind.SplitBlock, lp.Anchor.ToString(), null, null, null, null,
+                                SplitMergeAnchors: IrNodeList.From(members.Select(m => m.Anchor.ToString())),
+                                RequiresWholeParagraphReplace: true));
+                            break;
+                        }
                         // A split has no one-to-one paragraph shell in which to place an atomic inline carrier
                         // or a non-tokenizable field carrier. Lower it to the existing whole-block pair.
                         ops.Add(new IrEditOp(IrEditOpKind.DeleteBlock,
