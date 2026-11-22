@@ -76,7 +76,7 @@ internal static class IrEditScriptBuilder
         var headerFooterOps = BuildHeaderFooterOps(left, right, settings, bodyOps);
         return UniqueMoveGroupIds.Apply(new IrEditScript(IrNodeList.From(bodyOps),
             noteOps.Count == 0 ? null : IrNodeList.From(noteOps),
-            headerFooterOps));
+            headerFooterOps) { CommentAttachments = IrCommentAttachments.Plan(left, right, bodyOps) });
     }
 
     // Relocation pairing runs after Build and can turn an ordinary deletion into a gap barrier, and a redline that
@@ -324,12 +324,25 @@ internal static class IrEditScriptBuilder
         var gap = new List<IrEditOp>();
         bool FlushGap()
         {
+            // Both copies of a replaced section end remain in the marked document. Match the
+            // source boundaries within this replacement gap in order. The inserted copy owns the
+            // story comparison, while the deleted copy only needs the original story on reject.
+            // Unmatched endings keep their existing visibility for actual section additions/removals.
+            int first = sections.Count;
             foreach (var op in gap)
                 if (op.Kind == IrEditOpKind.InsertBlock && !DrawOp(op))
                     return false;
+            int firstDeleted = sections.Count;
             foreach (var op in gap)
                 if (op.Kind == IrEditOpKind.DeleteBlock && !DrawOp(op))
                     return false;
+            int pairs = Math.Min(firstDeleted - first, sections.Count - firstDeleted);
+            for (int i = 0; i < pairs; i++)
+            {
+                int original = sections[firstDeleted + i].Item1;
+                sections[first + i] = (original, sections[first + i].Item2);
+                sections[firstDeleted + i] = (original, -1);
+            }
             gap.Clear();
             return true;
         }

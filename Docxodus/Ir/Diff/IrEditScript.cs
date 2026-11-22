@@ -409,4 +409,11 @@ internal sealed record IrTableDiff(IrNodeList<IrRowOp> RowOps, bool ReplaceWhole
 internal sealed record IrEditScript(
     IrNodeList<IrEditOp> Operations,
     IrNodeList<IrNoteDiff>? NoteOps = null,
-    IrNodeList<IrHeaderFooterDiff>? HeaderFooterOps = null);
+    IrNodeList<IrHeaderFooterDiff>? HeaderFooterOps = null)
+{
+    // Derived annotation placement can be rebound to the sources of an older wire script.
+    internal IrCommentAttachments? CommentAttachments { get; init; }
+    public bool Equals(IrEditScript? other) => other is not null && Operations.Equals(other.Operations) &&
+        Equals(NoteOps, other.NoteOps) && Equals(HeaderFooterOps, other.HeaderFooterOps);
+    public override int GetHashCode() => System.HashCode.Combine(Operations, NoteOps, HeaderFooterOps);
+}

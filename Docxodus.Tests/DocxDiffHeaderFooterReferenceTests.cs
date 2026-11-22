@@ -661,6 +661,55 @@ public class DocxDiffHeaderFooterReferenceTests
             r => (r.LeftAnchor ?? r.RightAnchor ?? "").Contains(header ? "hdr" : "ftr"));
     }
 
+    [Theory]
+    [InlineData("rewritten", false)]
+    [InlineData("split", false)]
+    [InlineData("body-edit", false)]
+    [InlineData("rewritten", true)]
+    public void A_replaced_section_boundary_reports_only_genuine_story_edits(string shape, bool editFooter)
+    {
+        const string last = "Stone is weighed at the gate.";
+        const string originalText = "The quarry opens at dawn every day of the week.";
+        const string middle = "Carts leave by noon.";
+        static Section WithStories(string[] paras, string id) =>
+            new(paras, Headers: new[] { ("default", "h" + id) }, Footers: new[] { ("default", "f" + id) });
+        WmlDocument Build(string[] first, string[] second, string receipt) => HeaderFooterFixtures.Build(
+            new[] { WithStories(first, "A"), WithStories(second, "B") },
+            new Dictionary<string, string[]> { ["hA"] = new[] { "Alpha head" }, ["hB"] = new[] { "Bravo head" } },
+            new Dictionary<string, string[]> { ["fA"] = new[] { "Alpha receipt" }, ["fB"] = new[] { receipt } });
+        var original = Build(new[] { shape == "split" ? "The quarry opens at dawn. " + middle : originalText },
+            new[] { last }, "Bravo receipt");
+        WmlDocument Revision(string receipt) => Build(new[] { shape switch
+            {
+                "split" => "The quarry opens at dawn.",
+                "body-edit" => originalText,
+                _ => "Masons sharpen chisels before the bell rings twice.",
+            } }, shape == "body-edit" ? new[] { "Stone is weighed at the east gate." } : new[] { middle, last },
+            receipt);
+        var revised = Revision(editFooter ? "Bravo voucher" : "Bravo receipt");
+        var reviewers = new[] { new DocxDiffReviewer { Document = revised, Author = "Reviewer" } };
+        foreach (bool compare in new[] { true, false })
+        {
+            var redline = compare ? DocxCompare.Compare(original, revised) : DocxCompare.Consolidate(original, reviewers);
+            AssertStoryEndpoints(original, revised, redline, true, "default");
+            // Consolidate v1 reviews body and note content and keeps base header/footer parts.
+            AssertStoryEndpoints(original, compare || !editFooter ? revised : Revision("Bravo receipt"), redline, false, "default");
+            using var stream = new MemoryStream(redline.DocumentByteArray);
+            using var doc = WordprocessingDocument.Open(stream, false);
+            var main = doc.MainDocumentPart!;
+            bool HasEdits(OpenXmlPart part) => part.GetXDocument().Descendants().Any(e => e.Name == W + "ins" || e.Name == W + "del");
+            Assert.DoesNotContain(main.HeaderParts, HasEdits);
+            Assert.Equal(editFooter && compare ? 1 : 0, main.FooterParts.Count(HasEdits));
+        }
+        var revisions = DocxDiff.GetRevisions(original, revised);
+        Assert.DoesNotContain(revisions, r => (r.LeftAnchor ?? r.RightAnchor ?? "").Contains("hdr"));
+        var footer = revisions.Where(r => (r.LeftAnchor ?? r.RightAnchor ?? "").Contains("ftr")).ToArray();
+        Assert.Equal(editFooter, footer.Length > 0);
+        Assert.DoesNotContain(footer, r => r.Text?.Contains("Alpha") == true);
+        Assert.DoesNotContain(DocxDiff.GetConsolidatedRevisions(original, reviewers), r =>
+            (r.LeftAnchor ?? r.RightAnchor ?? "").Contains("hdr") || (r.LeftAnchor ?? r.RightAnchor ?? "").Contains("ftr"));
+    }
+
     [Fact]
     public void PreservingInputRevisionsLeavesCleanInputsMappedAsWithout()
     {
