@@ -152,7 +152,7 @@ internal sealed class AutomaticParagraphSpacing
         }
         var item = listParagraph.Annotation<ListItemRetriever.ListItemInfo>();
         var list = item is { IsListItem: true, IsZeroNumId: false } && item.NumId > 0 ? item : null;
-        var levelProperties = list?.Lvl(ListItemRetriever.GetEffectiveLevel(listParagraph))?.Element(W.pPr);
+        var levelProperties = list?.Lvl(ListItemRetriever.GetParagraphLevel(listParagraph))?.Element(W.pPr);
         // Borders and section breaks keep the automatic gap. Frames sit outside the text flow,
         // and a tracked paragraph mark joins or splits paragraphs, so neither has one neighbor.
         var mark = paragraph.Element(W.pPr)?.Element(W.rPr);
