@@ -238,6 +238,14 @@ namespace Docxodus
         public bool StampPageNumberFields;
 
         /// <summary>
+        /// If true, wrap every REF / PAGEREF / NOTEREF field result in a
+        /// <c>&lt;span data-field="REF" data-field-target="bookmark"&gt;</c> (plus
+        /// <c>data-field-hyperlink="true"</c> for a <c>\h</c> switch), so an editor can treat the
+        /// cross-reference as one unit and follow it. Default false: the output is unchanged.
+        /// </summary>
+        public bool StampReferenceFields;
+
+        /// <summary>
         /// If not None, render document with page containers in PDF.js style.
         /// Default: None (continuous scrolling layout).
         /// </summary>
@@ -412,6 +420,7 @@ namespace Docxodus
             CommentCssClassPrefix = "comment-";
             IncludeCommentMetadata = true;
             StampPageNumberFields = false;
+            StampReferenceFields = false;
             RenderPagination = PaginationMode.None;
             PaginationScale = 1.0;
             PaginationCssClassPrefix = "page-";
@@ -457,6 +466,7 @@ namespace Docxodus
             CommentCssClassPrefix = htmlConverterSettings.CommentCssClassPrefix;
             IncludeCommentMetadata = htmlConverterSettings.IncludeCommentMetadata;
             StampPageNumberFields = htmlConverterSettings.StampPageNumberFields;
+            StampReferenceFields = htmlConverterSettings.StampReferenceFields;
             RenderPagination = htmlConverterSettings.RenderPagination;
             PaginationScale = htmlConverterSettings.PaginationScale;
             PaginationCssClassPrefix = htmlConverterSettings.PaginationCssClassPrefix;
@@ -581,6 +591,14 @@ namespace Docxodus
         public bool StampPageNumberFields;
 
         /// <summary>
+        /// If true, wrap every REF / PAGEREF / NOTEREF field result in a
+        /// <c>&lt;span data-field="REF" data-field-target="bookmark"&gt;</c> (plus
+        /// <c>data-field-hyperlink="true"</c> for a <c>\h</c> switch), so an editor can treat the
+        /// cross-reference as one unit and follow it. Default false: the output is unchanged.
+        /// </summary>
+        public bool StampReferenceFields;
+
+        /// <summary>
         /// If not None, render document with page containers in PDF.js style.
         /// Default: None (continuous scrolling layout).
         /// </summary>
@@ -684,6 +702,7 @@ namespace Docxodus
             CommentCssClassPrefix = "comment-";
             IncludeCommentMetadata = true;
             StampPageNumberFields = false;
+            StampReferenceFields = false;
             RenderPagination = PaginationMode.None;
             PaginationScale = 1.0;
             PaginationCssClassPrefix = "page-";
@@ -3926,6 +3945,13 @@ namespace Docxodus
                         ? null
                         : new XAttribute("data-field-format", simplePageField.FormatSwitch),
                     CreateBorderDivs(wordDoc, settings, element.Elements()));
+            }
+
+            // A simple cross-reference field, for an editor that keeps it whole.
+            if (element.Name == W.fldSimple && settings.StampReferenceFields
+                && Internal.ReferenceFieldInstr.TryParse((string?)element.Attribute(W.instr)) is { } simpleReference)
+            {
+                return ReferenceFieldSpan(simpleReference, CreateBorderDivs(wordDoc, settings, element.Elements()));
             }
 
             // Transform smart tags and simple fields.
@@ -12593,6 +12619,15 @@ namespace Docxodus
                 new XElement(Xhtml.span, new XAttribute("aria-hidden", "true"), new XAttribute("style", boxStyle), cross));
         }
 
+        /// <summary>The marker <see cref="WmlToHtmlConverterSettings.StampReferenceFields"/> puts around a
+        /// REF / PAGEREF / NOTEREF result.</summary>
+        private static XElement ReferenceFieldSpan((string Kind, string Target, bool Hyperlink) field, object content) =>
+            new XElement(Xhtml.span,
+                new XAttribute("data-field", field.Kind),
+                new XAttribute("data-field-target", field.Target),
+                field.Hyperlink ? new XAttribute("data-field-hyperlink", "true") : null,
+                content);
+
         private static object ConvertContentThatCanContainFields(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             IEnumerable<XElement> elements)
         {
@@ -12633,6 +12668,15 @@ namespace Docxodus
                                 ? null
                                 : new XAttribute("data-field-format", pageField.FormatSwitch),
                             fieldContent)));
+                    }
+
+                    // A cross-reference field, for an editor that keeps it whole (StampReferenceFields).
+                    if (settings.StampReferenceFields && Internal.ReferenceFieldInstr.TryParse(instrText) is { } reference)
+                    {
+                        var referenceContent = g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m));
+                        if (!settings.ShowDeletedRevisionContent && FieldRetriever.IsDeletedField(g.First().Ancestors().Last(), (int)key))
+                            return referenceContent;
+                        return PreserveJoinedFieldSources(InsideRevision(ReferenceFieldSpan(reference, referenceContent)));
                     }
 
                     // A HYPERLINK field already inside a w:hyperlink renders as that link's content:

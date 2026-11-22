@@ -35,6 +35,28 @@ public sealed record CrossReferenceOptions
     /// rules. When the bookmark lives in a different story than the field, no position word
     /// is cached (Word recomputes on open either way).</summary>
     public bool IncludePosition { get; init; }
+
+    /// <summary>Write a <c>PAGEREF</c> field (the page the bookmark is on) instead of a
+    /// <c>REF</c>; <see cref="ReferenceNumber"/>, <see cref="NumberNoContext"/> and
+    /// <see cref="NumberFullContext"/> do not apply to it. The session has no page layout, so the
+    /// cached result is <see cref="CachedPage"/> when the caller knows it (an editor showing pages
+    /// does), else <c>1</c> with the field marked dirty so Word recomputes it on open. With
+    /// <see cref="IncludePosition"/> the cached result is <c>on page N</c>.</summary>
+    public bool PageNumber { get; init; }
+
+    /// <summary>Emit the <c>\n</c> switch: the bookmarked paragraph's number without the context
+    /// of higher levels. Cached as the target's resolved number without trailing periods, or
+    /// <c>0</c>. Wins over <see cref="ReferenceNumber"/>.</summary>
+    public bool NumberNoContext { get; init; }
+
+    /// <summary>Emit the <c>\w</c> switch: the bookmarked paragraph's number in full context.
+    /// Cached as the target's resolved number without trailing periods, or <c>0</c>. Wins over
+    /// <see cref="ReferenceNumber"/> and <see cref="NumberNoContext"/>.</summary>
+    public bool NumberFullContext { get; init; }
+
+    /// <summary>With <see cref="PageNumber"/>: the page number to cache as the field's result.
+    /// Null or empty caches <c>1</c> and marks the field dirty.</summary>
+    public string? CachedPage { get; init; }
 }
 
 public sealed partial class DocxSession
@@ -348,13 +370,27 @@ public sealed partial class DocxSession
             return pairError;
 
         var opts = options ?? new CrossReferenceOptions();
+        // One number switch at most: full context wins over no context over relative.
+        string? numberSwitch = opts.PageNumber ? null
+            : opts.NumberFullContext ? "\\w"
+            : opts.NumberNoContext ? "\\n"
+            : opts.ReferenceNumber ? "\\r"
+            : null;
+        bool dirty = false;
         string cached;
-        if (opts.ReferenceNumber)
+        if (opts.PageNumber)
+        {
+            dirty = string.IsNullOrEmpty(opts.CachedPage);
+            cached = dirty ? "1" : opts.CachedPage!;
+        }
+        else if (numberSwitch is not null)
         {
             var prefix = ResolveBookmarkAnchors(bookmarkName)
                 .Select(covered => covered.AutoNumberPrefix)
                 .FirstOrDefault(value => !string.IsNullOrEmpty(value));
             cached = prefix ?? "0";
+            // \n and \w show the number without its trailing period, as Word does.
+            if (numberSwitch != "\\r" && cached.Length > 1) cached = cached.TrimEnd('.');
         }
         else
         {
@@ -367,17 +403,22 @@ public sealed partial class DocxSession
             // to Word's field refresh (the instruction still carries \p either way).
             var fieldRoot = element.AncestorsAndSelf().Last();
             var bookmarkRoot = bookmarkStart.AncestorsAndSelf().Last();
-            if (ReferenceEquals(fieldRoot, bookmarkRoot))
+            if (opts.PageNumber)
+            {
+                cached = "on page " + cached;
+            }
+            else if (ReferenceEquals(fieldRoot, bookmarkRoot))
             {
                 var word = XNode.DocumentOrderComparer.Compare(bookmarkStart, element) < 0
                     ? "above"
                     : "below";
-                cached = opts.ReferenceNumber ? cached + " " + word : word;
+                cached = numberSwitch is not null ? cached + " " + word : word;
             }
         }
 
-        var instruction = new StringBuilder(" REF ").Append(bookmarkName).Append(' ');
-        if (opts.ReferenceNumber) instruction.Append("\\r ");
+        var instruction = new StringBuilder(opts.PageNumber ? " PAGEREF " : " REF ")
+            .Append(bookmarkName).Append(' ');
+        if (numberSwitch is not null) instruction.Append(numberSwitch).Append(' ');
         if (opts.IncludePosition) instruction.Append("\\p ");
         if (opts.Hyperlink) instruction.Append("\\h ");
 
@@ -395,6 +436,11 @@ public sealed partial class DocxSession
                 : new XElement(W.fldSimple,
                     new XAttribute(W.instr, instruction.ToString()),
                     new XElement(W.r, cachedText));
+            if (dirty)
+            {
+                if (field.Name == W.fldSimple) field.Add(new XAttribute(W.dirty, "true"));
+                else field.Descendants(W.fldChar).First().Add(new XAttribute(W.dirty, "true"));
+            }
             UnidHelper.AssignToSelfAndDescendants(field);
             InsertInlineAtOffset(element, characterOffset, field);
 
@@ -419,6 +465,57 @@ public sealed partial class DocxSession
         ListBookmarks().FirstOrDefault(bookmark =>
             string.Equals(bookmark.Name, bookmarkName, StringComparison.Ordinal))?.Text
         ?? string.Empty;
+
+    private static readonly Regex ReferenceBookmarkNamePattern = new(@"^_Ref\d+$", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The hidden bookmark a cross-reference to a whole paragraph targets — what Word allocates
+    /// when its Cross-reference dialog inserts a reference to a heading or a numbered item: a
+    /// <c>_Ref</c> name with nine digits, spanning the paragraph's text (the list number is not
+    /// text, so it stays outside). A <c>_Ref</c> bookmark that already spans exactly that text is
+    /// reused and nothing changes; otherwise one is created as one undoable edit. The name is in
+    /// <see cref="EditResult.BookmarkName"/>, ready for <see cref="InsertCrossReference"/>.
+    /// </summary>
+    public EditResult AddReferenceBookmark(string anchorId)
+    {
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        var paragraph = target.Resolve(_doc!);
+        if (paragraph is null || paragraph.Name != W.p)
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                "AddReferenceBookmark requires a paragraph/heading/list-item anchor", anchorId);
+        int length = RunTextMap.Build(paragraph).FlatText.Length;
+        var id = target.Anchor.Id;
+        var existing = ListBookmarks().FirstOrDefault(bookmark =>
+            ReferenceBookmarkNamePattern.IsMatch(bookmark.Name) && bookmark.IsPaired && bookmark.IsValid
+            && bookmark.Range is { } r && r.StartAnchorId == id && r.EndAnchorId == id
+            && r.StartOffset == 0 && r.EndOffset == length);
+        if (existing is not null)
+            return new EditResult { Success = true, BookmarkName = existing.Name, Modified = new[] { target.Anchor } };
+
+        string name;
+        do name = "_Ref" + Random.Shared.Next(100_000_000, 1_000_000_000)
+            .ToString(System.Globalization.CultureInfo.InvariantCulture);
+        while (BookmarkStarts(name).Count != 0);
+        var common = ValidateBookmarkMutation(name, requireValidName: false);
+        if (common is not null) return common;
+        var endpoints = ValidateDocumentRange(new DocumentRange(id, 0, id, length));
+        if (endpoints.Error is not null) return endpoints.Error;
+        var bookmarkId = NextGlobalBookmarkId();
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            InsertRangeMarkers(endpoints, bookmarkId, name);
+            InvalidateProjectionCache();
+            return new EditResult { Success = true, BookmarkName = name, Modified = EndpointAnchors(endpoints) };
+        }
+        catch (Exception ex)
+        {
+            return FailInternal(ex);
+        }
+    }
 
     public EditResult AddBookmark(string name, DocumentRange range)
     {

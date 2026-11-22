@@ -1570,6 +1570,16 @@ export class DocxSession {
     return JSON.parse(this.wasm.ListBookmarks(this.handle, scopes)) as BookmarkInfo[];
   }
 
+  /**
+   * The hidden `_Ref…` bookmark over the whole paragraph `anchorId` (its text, not its list
+   * number), what Word makes for a cross-reference to a heading or numbered item. One that
+   * already spans it is reused. `bookmarkName` carries the name for {@link insertCrossReference}.
+   */
+  addReferenceBookmark(anchorId: string): EditResult {
+    if (!this.wasm.AddReferenceBookmark) throw new Error("addReferenceBookmark needs a newer WASM bundle");
+    return JSON.parse(this.wasm.AddReferenceBookmark(this.handle, anchorId)) as EditResult;
+  }
+
   addBookmark(name: string, range: DocumentRange): EditResult {
     return JSON.parse(this.wasm.AddBookmark(this.handle, name,
       range.startAnchorId, range.startOffset, range.endAnchorId, range.endOffset)) as EditResult;

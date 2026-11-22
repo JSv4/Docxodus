@@ -1941,6 +1941,8 @@ export interface DocxodusWasmExports {
       bookmarkName: string,
       optionsJson: string
     ) => string;
+    /** Optional: absent on older WASM bundles. */
+    AddReferenceBookmark?: (handle: number, anchor: string) => string;
     InsertEndnote: (handle: number, anchor: string, characterOffset: number, markdown: string) => string;
     // Native Word comment authoring (issue #300). spanJson: "" = whole block, else
     // {"start":n,"length":n}; initials/date: "" = absent (date is ISO-8601).
@@ -3489,6 +3491,14 @@ export interface CrossReferenceOptions {
   referenceNumber?: boolean;
   hyperlink?: boolean;
   includePosition?: boolean;
+  /** A `PAGEREF` (the target's page) instead of a `REF`; the number switches do not apply. */
+  pageNumber?: boolean;
+  /** The `\n` switch: the target's number without the context of higher levels. */
+  numberNoContext?: boolean;
+  /** The `\w` switch: the target's number in full context. */
+  numberFullContext?: boolean;
+  /** With `pageNumber`: the page to cache as the result (else `1`, and the field is dirty). */
+  cachedPage?: string;
 }
 
 /**
