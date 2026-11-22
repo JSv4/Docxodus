@@ -40,6 +40,31 @@ LibreOffice can validate; its observed rotated-text behavior is not used as an a
 
 This document tracks edge cases and quirks in Open XML document processing where Word's behavior differs from a strict interpretation of the specification, or where the specification is ambiguous.
 
+## Comparing a cross-reference's cached result (#1844)
+
+A reference can be stored as a simple field, for example
+`<w:fldSimple w:instr=" REF RidgeMarker "><w:r><w:t>16.4</w:t></w:r></w:fldSimple>`,
+or as runs containing a field begin, instruction, separator, the same text, and an end.
+Two independently authored survey documents changed the cached value to `21.8` in the
+middle of an otherwise identical sentence. A literal-text control changed the same characters.
+
+| Input form | Docxodus default comparison | LibreOffice Writer 25.8.7.3 Compare Documents |
+| --- | --- | --- |
+| Simple REF | Tracks the containing paragraph as deleted and inserted | No revision |
+| Complex REF | Tracks the old and new result text | No revision |
+| Literal text | Tracks the old and new numbers | Tracks the old and new numbers |
+
+Writer retained the revised cached value in both field cases and exported the simple
+field as a complex field. Both locked and unlocked reference pairs gave the same
+Writer result. A desktop Word comparison on these inputs is still needed.
+
+Docxodus treats the simple field and its cached result as a single carrier.
+A changed carrier takes the whole-paragraph path so accepting or rejecting restores
+one live field with its instruction and the selected result. The complex-field
+renderer can track text between the separator and end individually. Authors who
+need a result-only redline can use the complex form in both inputs.
+
+
 ## Table of Contents
 
 1. [Numbering and Lists](#numbering-and-lists)

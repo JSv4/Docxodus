@@ -168,23 +168,45 @@ public class IrFieldEnvelopeMarkupRendererTests
         AssertNoRevisionMarkup(rejected);
     }
 
-    [Fact]
-    public void Render_SimpleFieldCachedResultChange_UsesWholeCarrierFallback()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CachedReferenceResult_ResolvesToOneLiveFieldAndPreservesSurroundingProse(bool simple)
     {
-        var left = Doc(SimpleField(" REF customer ", "Customer A", "false", "false", "AQID"));
-        var right = Doc(SimpleField(" REF customer ", "Customer B", "false", "false", "AQID"));
-        var script = IrEditScriptBuilder.Build(IrReader.Read(left), IrReader.Read(right), new IrDiffSettings());
+        const string code = " REF RidgeMarker ";
+        const string prefix = "Record the survey at point ";
+        const string suffix = " before leaving the ridge.";
+        WmlDocument Version(string result)
+        {
+            var field = simple ? SimpleFieldInner(code, result, "false", "false", "AQID")
+                : ComplexFieldInner(code, result);
+            return Doc($"<w:p><w:r><w:t xml:space=\"preserve\">{prefix}</w:t></w:r>{field}" +
+                $"<w:r><w:t xml:space=\"preserve\">{suffix}</w:t></w:r></w:p>" +
+                """<w:p><w:bookmarkStart w:id="0" w:name="RidgeMarker"/><w:r><w:t>Survey checkpoint</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p>""");
+        }
 
-        var op = Assert.Single(script.Operations);
-        Assert.Equal(IrEditOpKind.ModifyBlock, op.Kind);
-        Assert.True(op.RequiresWholeParagraphReplace);
-
-        var redline = DocxDiff.Compare(left, right);
+        var redline = DocxDiff.Compare(Version("16.4"), Version("21.8"));
         AssertSchemaValid(redline);
-        Assert.Equal("Customer B", string.Concat(MainXml(RevisionProcessor.AcceptRevisions(redline))
-            .Descendants(W + "t").Select(element => element.Value)));
-        Assert.Equal("Customer A", string.Concat(MainXml(RevisionProcessor.RejectRevisions(redline))
-            .Descendants(W + "t").Select(element => element.Value)));
+        var xml = MainXml(redline);
+        string Tracked(string edit, string text) => string.Concat(xml.Descendants(W + edit)
+            .SelectMany(e => e.Descendants(W + text)).Select(e => e.Value));
+        Assert.Equal(simple ? prefix + "16.4" + suffix : "16.4", Tracked("del", "delText"));
+        Assert.Equal(simple ? prefix + "21.8" + suffix : "21.8", Tracked("ins", "t"));
+
+        foreach (var (doc, result) in new[] { (RevisionProcessor.AcceptRevisions(redline), "21.8"),
+            (RevisionProcessor.RejectRevisions(redline), "16.4") })
+        {
+            AssertSchemaValid(doc);
+            AssertOneFieldInstruction(doc, code);
+            AssertNoRevisionMarkup(doc);
+            var paragraph = IrReader.Read(doc).Body.Blocks.OfType<IrParagraph>().First();
+            var field = Assert.Single(paragraph.Inlines.OfType<IrFieldRun>());
+            Assert.Equal(result, Assert.IsType<IrTextRun>(Assert.Single(field.CachedResult)).Text);
+            var xmlView = MainXml(doc);
+            Assert.Equal("RidgeMarker", (string?)Assert.Single(xmlView.Descendants(W + "bookmarkStart")).Attribute(W + "name"));
+            Assert.Equal(new[] { prefix + result + suffix, "Survey checkpoint" }, xmlView.Descendants(W + "p")
+                .Select(p => string.Concat(p.Descendants(W + "t").Select(e => e.Value))));
+        }
     }
 
     [Fact]
