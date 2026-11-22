@@ -75,6 +75,12 @@ public sealed partial class DocxSession
         string? PageOf(XElement paragraph) =>
             (string?)paragraph.Attribute(PtOpenXml.Unid) is { } unid && pages.TryGetValue(unid, out var page) ? page : null;
 
+        // (no field this updates: no edit, and no undo step, as when printing a document without any)
+        var updatable = o.TablesOfContentsOnly ? new[] { "TOC" } : new[] { "TOC", "REF", "PAGEREF", "SEQ" };
+        if (!ScanFields(body).Any(f => updatable.Contains(f.Kind) && (inRange is null || inRange.Contains(f.Paragraph)
+                || (f.Kind == "TOC" && f.Paragraphs().Any(inRange.Contains)))))
+            return new EditResult { Success = true };
+
         _history.RecordPreOp(TakeSnapshot());
         try
         {
