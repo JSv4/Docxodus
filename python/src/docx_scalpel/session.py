@@ -1409,7 +1409,9 @@ class DocxSession:
 
         The control stores the calendar day the value is written with at midnight UTC and
         keeps no time of day, so ``"2032-03-04T01:00:00+05:00"`` stores ``2032-03-04``.
-        ``display_text`` defaults to that day as ``yyyy-MM-dd``.
+        Without ``display_text`` the control shows that day in its own format and language, as the
+        desktop word processor shows a picked date (for example "15 December 2026"); a non-Gregorian
+        calendar, or a language whose usual calendar is another one, shows ``yyyy-MM-dd``.
         """
         return EditResult._from_wire(self._call("set_content_control_date", {
             "anchorId": anchor_id, "value": value, "displayText": display_text,

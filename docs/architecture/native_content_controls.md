@@ -192,13 +192,23 @@ is `docxodus_content_controls`; it advertises the same optional optimistic
 `preconditions` guard as the other mutating tools, and its mutating actions participate in
 `docxodus_mutations` apply/preview rollback, while `list` is read-only and rejected as
 a batch step. Picture bytes cross JSON transports only as base64.
-A date fill stores the calendar day at midnight UTC; the time of day is not kept, as the
-desktop word processor stores it. The day is the one written in the input: `2032-03-04`,
-`2032-03-04T01:00:00+05:00` and `2032-03-04T23:30:00-12:00` all store
-`2032-03-04T00:00:00Z`, on every host, and a `DateTimeOffset` passed to the session keeps
-its own day rather than the day its UTC instant falls on. An omitted date `displayText`
-shows that day as `yyyy-MM-dd`; an explicitly empty
-string remains empty through the JSON, WASM, and TypeScript layers.
+
+A date control holds a day, not a time, so filling one saves only the day, as the desktop word
+processor does. The day saved is the day written in the value, whatever the computer's time zone.
+Each of these saves 4 March 2032:
+
+```python
+session.set_content_control_date(anchor, "2032-03-04")
+session.set_content_control_date(anchor, "2032-03-04T01:00:00+05:00")
+session.set_content_control_date(anchor, "2032-03-04T23:30:00-12:00")
+```
+
+A .NET caller passing a date with an offset gets the day as written too. Without display text the
+control shows the day the way it is set up to show dates, as the desktop word processor does when a
+date is picked: a control showing the month's name in British English reads "4 March 2032", and one
+with no language set uses US English. A control on a calendar other than the Gregorian one, or in a
+language whose usual calendar is another one (such as Thai), shows 2032-03-04, and so does, in the
+browser build, a format that needs month or day names in a language other than English. Empty display text leaves the control showing nothing.
 
 Failures are structured `EditErrorCode` values, including not found, malformed,
 unsupported family/placement, wrong type, locked, bound, invalid value, unsafe nested
