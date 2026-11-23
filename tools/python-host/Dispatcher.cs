@@ -149,6 +149,9 @@ internal static partial class Dispatcher
         "move_block" => DocxSessionOps.MoveBlock(
             Handle(args), Str(args, "sourceAnchorId"), Str(args, "targetAnchorId"),
             OptPos(args)),
+        "move_block_range" => DocxSessionOps.MoveBlockRange(
+            Handle(args), Str(args, "firstAnchorId"), Str(args, "lastAnchorId"), Str(args, "targetAnchorId"),
+            OptPos(args)),
         "delete_range" => DocxSessionOps.DeleteRange(
             Handle(args), Str(args, "fromAnchorId"), Str(args, "toAnchorIdExclusive")),
         "delete_section" => DocxSessionOps.DeleteSection(
@@ -426,6 +429,7 @@ internal static partial class Dispatcher
         "get_list_levels" => DocxSessionOps.GetListLevels(Handle(args), Str(args, "anchorId")),
         "get_section_info" => DocxSessionOps.GetSectionInfo(Handle(args), Str(args, "anchorId")),
         "list_styles" => DocxSessionOps.ListStyles(Handle(args)),
+        "list_outline" => DocxSessionOps.ListOutline(Handle(args)),
         "get_formatting" => DocxSessionOps.GetFormatting(Handle(args), Str(args, "anchorId")),
         "list_inline_spans" => DocxSessionOps.ListInlineSpans(Handle(args), Str(args, "anchorId")),
         "find_by_text" => DocxSessionOps.FindByText(Handle(args), Str(args, "needle"), ParseFindOptions(args)),
@@ -1168,7 +1172,7 @@ internal static partial class Dispatcher
             : null;
 
     private static bool IsMutation(string op) => op is
-        "replace_text" or "delete_block" or "move_block" or "delete_range" or "delete_section"
+        "replace_text" or "delete_block" or "move_block" or "move_block_range" or "delete_range" or "delete_section"
         or "replace_text_range" or "replace_text_at_span" or "replace_text_at_span_with_format" or "replace_inner"
         or "insert_paragraph" or "split_paragraph" or "merge_paragraphs" or "insert_horizontal_rule"
         or "set_header_text" or "set_footer_text" or "insert_page_number_field"

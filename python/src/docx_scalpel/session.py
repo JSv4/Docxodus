@@ -123,6 +123,7 @@ from .types import (
     SectionInfo,
     SemanticChangeSet,
     StyleInfo,
+    OutlineEntry,
     TemplatePlaceholder,
     TextMatch,
     TableBorderSpec,
@@ -1586,6 +1587,14 @@ class DocxSession:
         result = self._call("list_styles", {})
         return tuple(StyleInfo._from_wire(style) for style in result)
 
+    def list_outline(self) -> tuple[OutlineEntry, ...]:
+        """The body's headings in document order, as Word's Navigation Pane lists them: each
+        top-level body paragraph (not one in a table cell or text box) with an outline level 1-9,
+        resolved as Word does (the paragraph's own ``w:outlineLvl``, else its style chain's), so a
+        localized heading style counts by its outline level, not its name."""
+        result = self._call("list_outline", {})
+        return tuple(OutlineEntry._from_wire(entry) for entry in result)
+
     def get_formatting(self, anchor_id: str) -> FormattingInspection | None:
         """Inspect explicitly separated direct/effective formatting for a paragraph."""
         result = self._call("get_formatting", {"anchorId": anchor_id})
@@ -1710,6 +1719,31 @@ class DocxSession:
                 "move_block",
                 {
                     "sourceAnchorId": source_anchor_id,
+                    "targetAnchorId": target_anchor_id,
+                    "position": position.value,
+                },
+            )
+        )
+
+    def move_block_range(
+        self,
+        first_anchor_id: str,
+        last_anchor_id: str,
+        target_anchor_id: str,
+        position: Position,
+    ) -> EditResult:
+        """Move the top-level blocks from ``first_anchor_id`` to ``last_anchor_id`` (inclusive,
+        in document order) before or after ``target_anchor_id`` as one edit: a heading and
+        everything under it, as Word's Navigation Pane drags it (``OutlineEntry.last_anchor_id``
+        gives the end). One undo step. Refused across a section break, when it would cut a
+        bookmark or comment range running into the run, onto a target inside the run, and under
+        tracked changes."""
+        return EditResult._from_wire(
+            self._call(
+                "move_block_range",
+                {
+                    "firstAnchorId": first_anchor_id,
+                    "lastAnchorId": last_anchor_id,
                     "targetAnchorId": target_anchor_id,
                     "position": position.value,
                 },
