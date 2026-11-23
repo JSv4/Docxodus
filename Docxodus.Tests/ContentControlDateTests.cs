@@ -82,6 +82,7 @@ public class ContentControlDateTests
     [InlineData("d/M/yy", "en-GB", "gregorian", "15/12/26")]
     [InlineData(@"d MMM yyyy \x", "en-GB", "gregorian", @"15 Dec 2026 \x")]
     [InlineData("d MMMM yyyy", null, "gregorian", "15 December 2026")]
+    [InlineData("d MMMM yyyy", "0809", "gregorian", "15 December 2026")]
     [InlineData("d MMMM yyyy", "en-GB", null, "15 December 2026")]
     [InlineData(null, "en-GB", "gregorian", "15/12/2026")]
     // The reference shows a Hijri date (06/07/1448); Docxodus formats only the Gregorian calendar.
@@ -101,12 +102,21 @@ public class ContentControlDateTests
     }
 
     // Without the language's month and day names (the browser build has none), an English or
-    // all-number format still formats, and another language's names fall back to the ISO day.
+    // all-number format still formats, and another language's names fall back to the ISO day. A
+    // language whose usual calendar is another one keeps the ISO day here too, as it does with names,
+    // and English given as a hexadecimal language code is still English.
     [Theory]
     [InlineData("dddd, d MMMM yyyy", "en-GB", "Tuesday, 15 December 2026")]
     [InlineData("d MMMM yyyy", null, "15 December 2026")]
+    [InlineData("d MMMM yyyy", "0809", "15 December 2026")]
+    [InlineData("d MMMM yyyy", "0409", "15 December 2026")]
     [InlineData("dd.MM.yyyy", "de-DE", "15.12.2026")]
     [InlineData("d MMMM yyyy", "de-DE", "2026-12-15")]
+    [InlineData("dd/MM/yyyy", "th-TH", "2026-12-15")]
+    [InlineData("dd/MM/yyyy", "041E", "2026-12-15")]
+    [InlineData("dd/MM/yyyy", "ar-SA", "2026-12-15")]
+    [InlineData("dd/MM/yyyy", "fa-IR", "2026-12-15")]
+    [InlineData("dd/MM/yyyy", "ar-EG", "15/12/2026")]
     [InlineData(null, "en-GB", "2026-12-15")]
     public void DefaultDisplayWithoutLanguageDataStaysReadable(string? format, string? language, string expectedText)
     {

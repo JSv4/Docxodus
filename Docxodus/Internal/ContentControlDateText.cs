@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Xml.Linq;
@@ -30,7 +31,7 @@ internal static class ContentControlDateText
         // A language whose usual calendar is another one (Thai, Saudi Arabic) is shown there through
         // calendar variants this formatter does not model, such as English month names or a Buddhist
         // year in the short date.
-        if (culture is not null && culture.Calendar is not GregorianCalendar)
+        if (culture is not null ? culture.Calendar is not GregorianCalendar : UsesAnotherCalendar(language))
             return iso;
         if (string.IsNullOrEmpty(picture))
             return culture is null ? iso : day.ToString(culture.DateTimeFormat.ShortDatePattern, culture);
@@ -38,7 +39,7 @@ internal static class ContentControlDateText
         if (culture is null)
         {
             // English names are the invariant culture's; numbers need no names at all.
-            if (usesNames && !language.StartsWith("en", StringComparison.OrdinalIgnoreCase))
+            if (usesNames && !IsEnglish(language))
                 return iso;
             culture = CultureInfo.InvariantCulture;
         }
@@ -53,16 +54,39 @@ internal static class ContentControlDateText
             return null;
         try
         {
-            return language.Length == 4 && int.TryParse(language, NumberStyles.HexNumber,
-                CultureInfo.InvariantCulture, out int lcid)
-                ? CultureInfo.GetCultureInfo(lcid)
-                : CultureInfo.GetCultureInfo(language);
+            return TryLcid(language, out int lcid) ? CultureInfo.GetCultureInfo(lcid) : CultureInfo.GetCultureInfo(language);
         }
         catch (ArgumentException)
         {
             return null;
         }
     }
+
+    private static bool TryLcid(string language, out int lcid) =>
+        int.TryParse(language, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out lcid) && language.Length == 4;
+
+    // English by language tag (en, en-GB) or by LCID, whose low ten bits are the language (0x09 is English).
+    private static bool IsEnglish(string language) =>
+        TryLcid(language, out int lcid)
+            ? (lcid & 0x3FF) == 0x09
+            : language.Equals("en", StringComparison.OrdinalIgnoreCase)
+              || language.StartsWith("en-", StringComparison.OrdinalIgnoreCase);
+
+    // Without culture data, the languages whose usual calendar in .NET's culture data is not the
+    // Gregorian one: Umm al-Qura for Saudi Arabic, Persian for Persian, Pashto and their relatives,
+    // and Thai Buddhist for Thai. Other Arabic regions use the Gregorian calendar.
+    private static bool UsesAnotherCalendar(string language) =>
+        TryLcid(language, out int lcid) ? OtherCalendarLcids.Contains(lcid) : OtherCalendarLanguages.Contains(language);
+
+    private static readonly HashSet<string> OtherCalendarLanguages =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "ar", "ar-SA", "fa", "fa-AF", "fa-IR", "ku-Arab-IR", "lrc", "lrc-IR", "mzn", "mzn-IR",
+            "ps", "ps-AF", "th", "th-TH", "uz-Arab", "uz-Arab-AF",
+        };
+
+    private static readonly HashSet<int> OtherCalendarLcids =
+        new() { 0x0001, 0x0401, 0x0029, 0x0429, 0x048C, 0x0063, 0x0463, 0x001E, 0x041E };
 
     // A date picture as a .NET custom format. Day, month, year, hour, minute and second letters and
     // AM/PM (either case, shown as the culture's designator) become specifiers; text in single quotes
