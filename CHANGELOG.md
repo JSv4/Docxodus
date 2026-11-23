@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [17.0.0] - 2026-11-23
+
 ### Added
 
 - Word's Table Properties: `SetTableProperties` sets a table's preferred width (automatic, twips or percent), alignment, indent from the left margin, default cell margins and alt text (`w:tblCaption`, `w:tblDescription`); `SetCellProperties` sets the vertical alignment of a cell, its row, its grid column (merged cells that cover it included) or the whole table; `GetTableProperties` reads them back with the row's options and the grid's column widths. One undo step each; with changes tracked, a `w:tblPrChange` or `w:tcPrChange`. On the .NET API, WASM, npm (`setTableProperties`, `setCellProperties`, `getTableProperties`), Python (`set_table_properties`, `set_cell_properties`, `get_table_properties`, with `TablePropertiesOp`, `CellPropertiesOp`, `TableCellMargins` and `TablePropertiesInfo`), the stdio host and MCP (`docxodus_table` actions `set_properties`, `set_cell_properties`, `get_properties`).
