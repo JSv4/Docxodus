@@ -280,14 +280,14 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_edit",
-            "Insert, replace, move, delete, or undo/redo text and blocks, addressed by anchor id. move_block_range moves a run of top-level blocks as one edit, as Word's Navigation Pane drags a heading with its text (lastAnchorId from docxodus_get_content format=outline).",
+            "Insert, replace, move, delete, or undo/redo text and blocks, addressed by anchor id. move_block_range moves a run of top-level blocks as one edit, as Word's Navigation Pane drags a heading with its text (lastAnchorId from docxodus_get_content format=outline). update_fields is Word's Update Field (F9): tables of contents rebuilt from the headings, REF fields given their bookmark's current text or number, PAGEREF fields the page from pages, SEQ fields renumbered; one undo step, refused while changes are tracked.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic guards evaluated immediately before the mutation: expectedVersion, anchorId, expectedContentHash, expectedText/expectedTextRange, expectedKind, expectedScope, expectedMatchCount." },
-                "action": { "type": "string", "enum": ["insert_paragraph", "replace_text", "replace_text_range", "replace_text_at_span_with_format", "delete_block", "move_block", "move_block_range", "delete_range", "delete_section", "split_paragraph", "merge_paragraphs", "undo", "redo"] },
+                "action": { "type": "string", "enum": ["insert_paragraph", "replace_text", "replace_text_range", "replace_text_at_span_with_format", "delete_block", "move_block", "move_block_range", "delete_range", "delete_section", "split_paragraph", "merge_paragraphs", "update_fields", "undo", "redo"] },
                 "anchorId": { "type": "string", "description": "Target block. Required for every action except delete_range, delete_section, undo, redo." },
                 "position": { "type": "string", "enum": ["before", "after"], "description": "insert_paragraph/move_block/move_block_range only." },
                 "markdown": { "type": "string", "description": "insert_paragraph/replace_text payload, in the supported markdown subset (headings, bullet/ordered lists, bold/italic/code/strike, links, hard breaks)." },
@@ -315,7 +315,18 @@ internal static class ToolCatalog
                 "sourceAnchorId": { "type": "string", "description": "move_block: block to relocate." },
                 "targetAnchorId": { "type": "string", "description": "move_block/move_block_range: reference block used with position." },
                 "firstAnchorId": { "type": "string", "description": "move_block_range: first top-level block of the run (inclusive)." },
-                "lastAnchorId": { "type": "string", "description": "move_block_range: last top-level block of the run (inclusive, after firstAnchorId). Refused across a section break, when it would cut a bookmark or comment range, onto a target inside the run, and under tracked changes." }
+                "lastAnchorId": { "type": "string", "description": "move_block_range: last top-level block of the run (inclusive, after firstAnchorId). Refused across a section break, when it would cut a bookmark or comment range, onto a target inside the run, and under tracked changes." },
+                "range": {
+                  "type": "object",
+                  "description": "update_fields: only the fields that start in these paragraphs. Omitted: every field in the body, and the document no longer asks Word to update its fields on open.",
+                  "properties": {
+                    "startAnchorId": { "type": "string" }, "startOffset": { "type": "integer" },
+                    "endAnchorId": { "type": "string" }, "endOffset": { "type": "integer" }
+                  },
+                  "required": ["startAnchorId", "startOffset", "endAnchorId", "endOffset"]
+                },
+                "pages": { "type": "object", "additionalProperties": { "type": ["string", "integer"] }, "description": "update_fields: the page each paragraph is on, keyed by anchor id or unid, for contents entries and PAGEREF results (a paragraph missing here keeps its cached page)." },
+                "tablesOfContentsOnly": { "type": "boolean", "description": "update_fields: only tables of contents (Word's Update Table)." }
               },
               "required": ["sessionId", "action"]
             }
