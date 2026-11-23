@@ -29,6 +29,7 @@ redline <original.docx> <modified.docx> <output.docx> [--author=<name>]
 | Option | Description |
 |--------|-------------|
 | `--author=<name>` | Author name for tracked changes (default: "Redline") |
+| `--minimum-anchor-word-count=<n>` | How many words a paragraph needs before the comparison uses it to line the two documents up (default: 0). Use 2 for documents whose entries each start with a one-word number label on its own line; see the example below. |
 | `-h, --help` | Show help message |
 | `-v, --version` | Show version information |
 
@@ -42,6 +43,15 @@ redline contract-v1.docx contract-v2.docx redline.docx
 With custom author tag:
 ```bash
 redline draft.docx final.docx changes.docx --author="Legal Review"
+```
+
+Numbered entries. Some documents put a short label on its own line before each entry: "P1", then the
+entry's text, then "P2", and so on. Adding or removing an entry changes every later label, and the
+comparison can then report the entries' unchanged text as moved. Requiring two words before a paragraph
+is used to line the documents up makes it match the entries by their text instead, so each label just
+shows its number changing:
+```bash
+redline schedule-v1.docx schedule-v2.docx changes.docx --minimum-anchor-word-count=2
 ```
 
 ## Output

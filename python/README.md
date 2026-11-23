@@ -302,14 +302,15 @@ footers, unchanged notes) verbatim, so pending tracked changes in an input's hea
 survive into the redline under their original authors. To compare as Word's Compare does (and as the
 front door does), pass `DocxDiffSettings(pre_accept_input_revisions=True)`. Tune pairwise comparisons with `DocxDiffSettings` and N-way consolidation with `DocxDiffConsolidateSettings` (whose `conflict_resolution` takes a `ConflictResolution` value). `DetectMoves`/format-change tracking, header/footer comparison, and per-reviewer attribution all round-trip through these calls.
 
-Consolidation reports a conflict when reviewers compete for the same span of base tokens.
-With the default word boundaries, one reviewer can change the first word of a quantity
-and another can add words after it. Accepting both edits can then produce a quantity
-neither reviewer proposed. A desktop word processor's own combine feature does the same, in
-either reviewer order (see `docs/ooxml_corner_cases.md`).
+**Two reviewers editing one phrase.** Consolidation reports a conflict when two reviewers make
+different changes to the same words, or add different text at the same spot. Reviewers who make
+the identical change agree, and that is not a conflict. Edits to different words are all kept. So
+if one reviewer changes "six dozen" to "nine dozen" and another adds "extra" after "dozen", there
+is no conflict, and accepting everything reads "nine dozen extra", which neither of them wrote.
+The desktop word processor's own combine feature does the same.
 
-For plain prose, a punctuation-only separator set keeps words joined across ordinary
-spaces. Pass the same settings to the conflict query and to consolidation:
+If you would rather see that as a conflict, split the text only at sentence punctuation, so a
+whole sentence counts as one piece. Pass the same settings to both calls:
 
 ```python
 from docx_scalpel import (
@@ -325,9 +326,24 @@ conflicts = docx_diff_get_conflicts(base, reviewers, settings)
 redline = docx_diff_consolidate(base, reviewers, settings)
 ```
 
-This changes tokenization throughout the comparison, so unrelated edits can also
-conflict. Punctuation, formatting boundaries and non-text content can still divide a
-sentence. Inspect the reported conflicts before relying on the accepted wording.
+This applies to the whole document, so two different edits to the same unbroken stretch of a
+sentence now conflict (reviewers who make the identical edit still agree). A change of
+formatting, punctuation or a picture still splits a sentence into separate pieces, and edits to
+different pieces do not conflict. Read the conflicts before you rely on the merged wording.
+
+**Numbered entries.** Some documents put a short label on its own line before each entry: "P1",
+then the entry's text, then "P2", and so on. Adding or removing an entry changes every later
+label, and the comparison can then report the entries' unchanged text as moved. Telling it that
+a paragraph needs at least two words before it is used to line the documents up makes it match
+the entries by their text instead, so each label just shows its number changing:
+
+```python
+from docx_scalpel import DocxDiffSettings, docx_diff_compare
+
+redline = docx_diff_compare(left, right, DocxDiffSettings(minimum_anchor_word_count=2))
+```
+
+Leave it at the default, 0, for other documents.
 
 For an open session, `session.get_semantic_changes()` compares the exact opening package with the
 current logical checkpoint. It requires the default

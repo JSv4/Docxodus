@@ -208,7 +208,8 @@ control shows the day the way it is set up to show dates, as the desktop word pr
 date is picked: a control showing the month's name in British English reads "4 March 2032", and one
 with no language set uses US English. A control on a calendar other than the Gregorian one, or in a
 language whose usual calendar is another one (such as Thai), shows 2032-03-04, and so does, in the
-browser build, a format that needs month or day names in a language other than English. Empty display text leaves the control showing nothing.
+browser build, a format that needs month or day names in a language other than English. Empty
+display text leaves the control showing nothing.
 
 Failures are structured `EditErrorCode` values, including not found, malformed,
 unsupported family/placement, wrong type, locked, bound, invalid value, unsafe nested

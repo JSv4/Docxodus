@@ -643,6 +643,18 @@ the read is the largest stage of a comparison, so a loop pays for the baseline o
 counterparty. A revised version that fails carries its `error` and the rest of the fan-out still
 completes.
 
+Some documents put a one-word number label on its own line before each entry: "P1", then the
+entry's text, then "P2", and so on. Adding or removing an entry changes every later label, and the
+comparison can then report the entries' unchanged text as moved. A minimum anchor word count of 2
+tells it that a paragraph needs at least two words before it is used to line the documents up. The
+entries are then matched by their text, and each label shows only its number changing. It works in
+all three forms, and the default is 0:
+
+```json
+{ "baselinePath": "schedule-v1.docx", "revisedPath": "schedule-v2.docx",
+  "outputPath": "changes.docx", "minimumAnchorWordCount": 2 }
+```
+
 It is sessionless because it operates on stored documents, not the open session's state, and it
 is not a `docxodus_mutations` step for the same reason a proof is not: a batch is a sequence of
 session mutations, and this mutates no session.

@@ -467,7 +467,12 @@ export interface DocxDiffSettings {
   moveSimilarityThreshold?: number;
   /** Minimum word tokens for a fuzzy move (default 3). */
   moveMinimumWordCount?: number;
-  /** Minimum words for a paragraph to anchor alignment (default 0). Use 2 for one-word positional labels. */
+  /**
+   * How many words a paragraph needs before the comparison uses it to line the two documents up
+   * (default 0). Set 2 when each entry starts with a one-word number label on its own line, such as
+   * "P1": the entries are then matched by their text and each label shows only its number changing.
+   * @example docxDiffCompare(original, revised, { minimumAnchorWordCount: 2 })
+   */
   minimumAnchorWordCount?: number;
   /** Revision projection grain (default Fine). */
   revisionGranularity?: DocxDiffRevisionGranularity;
