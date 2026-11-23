@@ -108,6 +108,8 @@ __all__ = [
     "PageMapRegistrationResult",
     "PageMapStatus",
     "ParagraphFormatting",
+    "TabStop",
+    "TabStopsInfo",
     "RunFormattingInfo",
     "TableStyleFormatting",
     "StyleInfo",
@@ -3174,6 +3176,50 @@ class ParagraphFormatting:
             bottom_border=(ParagraphBorderEdge._from_wire(d["bottomBorder"]) if "bottomBorder" in d else None),
             widow_control=d.get("widowControl"),
             contextual_spacing=d.get("contextualSpacing"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TabStop:
+    """One tab stop (``DocxSession.set_tab_stops``, ``get_tab_stops``). ``position_twips`` is
+    measured from the paragraph's leading text edge, not its indent (1440 = 1 inch).
+    ``alignment`` is ``"left"``, ``"center"``, ``"right"``, ``"decimal"`` or ``"bar"`` (a bar
+    tab draws a vertical line); ``leader`` is ``"none"``, ``"dot"``, ``"hyphen"``,
+    ``"underscore"``, ``"heavy"`` or ``"middleDot"``."""
+
+    position_twips: int
+    alignment: str = "left"
+    leader: str = "none"
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"positionTwips": self.position_twips, "alignment": self.alignment, "leader": self.leader}
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TabStop":
+        return cls(
+            position_twips=int(d["positionTwips"]),
+            alignment=d.get("alignment", "left"),
+            leader=d.get("leader", "none"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TabStopsInfo:
+    """A paragraph's tab stops as Word's Tabs dialog shows them (``DocxSession.get_tab_stops``):
+    ``stops`` in effect (its style chain and its own, cleared ones removed), ``style_stops``
+    its styles give it, and the document's default tab interval. Numbering-level tabs are not
+    included."""
+
+    stops: tuple[TabStop, ...] = ()
+    style_stops: tuple[TabStop, ...] = ()
+    default_tab_stop_twips: int = 720
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TabStopsInfo":
+        return cls(
+            stops=tuple(TabStop._from_wire(s) for s in d.get("stops", ())),
+            style_stops=tuple(TabStop._from_wire(s) for s in d.get("styleStops", ())),
+            default_tab_stop_twips=int(d.get("defaultTabStopTwips", 720)),
         )
 
 
