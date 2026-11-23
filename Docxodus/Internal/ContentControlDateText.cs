@@ -30,8 +30,9 @@ internal static class ContentControlDateText
         var culture = resolve(language);
         // A language whose usual calendar is another one (Thai, Saudi Arabic) is shown there through
         // calendar variants this formatter does not model, such as English month names or a Buddhist
-        // year in the short date.
-        if (culture is not null ? culture.Calendar is not GregorianCalendar : UsesAnotherCalendar(language))
+        // year in the short date. The fixed list decides on every platform, because culture data
+        // differs between them (ICU on Linux gives Saudi Arabic the Gregorian calendar, Windows does not).
+        if (UsesAnotherCalendar(language) || culture is not null && culture.Calendar is not GregorianCalendar)
             return iso;
         if (string.IsNullOrEmpty(picture))
             return culture is null ? iso : day.ToString(culture.DateTimeFormat.ShortDatePattern, culture);
@@ -72,7 +73,7 @@ internal static class ContentControlDateText
             : language.Equals("en", StringComparison.OrdinalIgnoreCase)
               || language.StartsWith("en-", StringComparison.OrdinalIgnoreCase);
 
-    // Without culture data, the languages whose usual calendar in .NET's culture data is not the
+    // The languages whose usual calendar in Windows' culture data is not the
     // Gregorian one: Umm al-Qura for Saudi Arabic, Persian for Persian, Pashto and their relatives,
     // and Thai Buddhist for Thai. Other Arabic regions use the Gregorian calendar.
     private static bool UsesAnotherCalendar(string language) =>
