@@ -368,6 +368,9 @@ internal static partial class Dispatcher
             case "styles":
                 return $"{{\"styles\":{DocxSessionOps.ListStyles(session.Handle)}}}";
 
+            case "outline":
+                return $"{{\"outline\":{DocxSessionOps.ListOutline(session.Handle)}}}";
+
             case "formatting":
                 if (anchorId is null)
                     throw new McpToolException("formatting requires anchorId");
@@ -540,6 +543,9 @@ internal static partial class Dispatcher
         "delete_block" => DocxSessionOps.DeleteBlock(session.Handle, Str(args, "anchorId")),
         "move_block" => DocxSessionOps.MoveBlock(
             session.Handle, Str(args, "sourceAnchorId"), Str(args, "targetAnchorId"), ParsePos(args)),
+        "move_block_range" => DocxSessionOps.MoveBlockRange(
+            session.Handle, Str(args, "firstAnchorId"), Str(args, "lastAnchorId"), Str(args, "targetAnchorId"),
+            ParsePos(args)),
         "delete_range" => DocxSessionOps.DeleteRange(
             session.Handle, Str(args, "fromAnchorId"), Str(args, "toAnchorIdExclusive")),
         "delete_section" => DocxSessionOps.DeleteSection(session.Handle, Str(args, "headingAnchorId")),
@@ -1473,7 +1479,7 @@ internal static partial class Dispatcher
         {
             "docxodus_edit" => action is "insert_paragraph" or "replace_text" or "replace_text_range"
                 or "replace_text_at_span_with_format"
-                or "delete_block" or "move_block" or "delete_range" or "delete_section"
+                or "delete_block" or "move_block" or "move_block_range" or "delete_range" or "delete_section"
                 or "split_paragraph" or "merge_paragraphs",
             "docxodus_format" => action is "apply_format" or "apply_format_by_substring"
                 or "set_paragraph_style" or "set_paragraph_format" or "set_list_level"
@@ -1571,6 +1577,10 @@ internal static partial class Dispatcher
                 break;
             case ("docxodus_edit", "move_block"):
                 RequireStrings(args, "sourceAnchorId", "targetAnchorId");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                break;
+            case ("docxodus_edit", "move_block_range"):
+                RequireStrings(args, "firstAnchorId", "lastAnchorId", "targetAnchorId");
                 ValidateOptionalEnum(args, "position", "before", "after");
                 break;
             case ("docxodus_edit", "delete_range"):

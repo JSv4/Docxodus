@@ -370,6 +370,45 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Equal("anchor_not_found", result.GetProperty("error").GetProperty("code").GetString());
     }
 
+    [Fact]
+    public void MCP022_Edit_OutlineAndMoveBlockRange()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        var inserted = Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"insert_paragraph","anchorId":"{{anchor}}","position":"before","markdown":"Alpha\n\nalpha text\n\nBeta\n\nbeta text"}""")));
+        Assert.True(inserted.GetProperty("success").GetBoolean());
+        foreach (var index in new[] { 0, 2 })
+        {
+            var heading = inserted.GetProperty("created")[index].GetProperty("id").GetString();
+            Assert.True(Parse(Dispatcher.Call(_store, "docxodus_format", J(
+                $$"""{"sessionId":{{sessionArg}},"action":"set_paragraph_style","anchorId":"{{heading}}","styleId":"Heading1"}""")))
+                .GetProperty("success").GetBoolean());
+        }
+
+        JsonElement Entry(string text)
+        {
+            var outline = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+                $$"""{"sessionId":{{sessionArg}},"format":"outline"}"""))).GetProperty("outline");
+            return outline.EnumerateArray().First(e => e.GetProperty("text").GetString() == text);
+        }
+        var alpha = Entry("Alpha");
+        var beta = Entry("Beta");
+        Assert.Equal(1, alpha.GetProperty("level").GetInt32());
+        var alphaId = alpha.GetProperty("anchorId").GetString();
+
+        var moved = Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"move_block_range","firstAnchorId":"{{alphaId}}","lastAnchorId":"{{alpha.GetProperty("lastAnchorId").GetString()}}","targetAnchorId":"{{beta.GetProperty("lastAnchorId").GetString()}}","position":"after"}"""));
+        Assert.True(Parse(moved).GetProperty("success").GetBoolean(), moved);
+        var outlineText = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"outline"}"""))).GetProperty("outline").GetRawText();
+        Assert.True(outlineText.IndexOf("\"Beta\"", StringComparison.Ordinal) < outlineText.IndexOf("\"Alpha\"", StringComparison.Ordinal), outlineText);
+
+        Assert.Throws<McpToolException>(() => Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"move_block_range","firstAnchorId":"{{alphaId}}","targetAnchorId":"{{alphaId}}"}""")));
+    }
+
     // ─── Search ─────────────────────────────────────────────────────────
 
     [Fact]

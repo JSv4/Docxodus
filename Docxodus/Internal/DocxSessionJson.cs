@@ -3204,6 +3204,22 @@ internal static class DocxSessionJson
         return sb.ToString();
     }
 
+    public static string SerializeOutline(IReadOnlyList<OutlineEntry> outline)
+    {
+        var sb = new StringBuilder(outline.Count * 120 + 2).Append('[');
+        for (int i = 0; i < outline.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var e = outline[i];
+            sb.Append("{\"anchorId\":").Append(JsonString(e.AnchorId))
+              .Append(",\"level\":").Append(e.Level)
+              .Append(",\"text\":").Append(JsonString(e.Text));
+            if (e.StyleId is not null) sb.Append(",\"styleId\":").Append(JsonString(e.StyleId));
+            sb.Append(",\"lastAnchorId\":").Append(JsonString(e.LastAnchorId)).Append('}');
+        }
+        return sb.Append(']').ToString();
+    }
+
     public static string SerializeStyles(IReadOnlyList<StyleInfo> styles)
     {
         var sb = new StringBuilder(styles.Count * 400 + 2);
