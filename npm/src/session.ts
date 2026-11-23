@@ -1534,7 +1534,10 @@ export class DocxSession {
    * Fill a date control. The control stores a calendar day at midnight UTC and keeps no time
    * of day: a string keeps the day it is written with (`"2032-03-04"`,
    * `"2032-03-04T01:00:00+05:00"`), and a `Date` is sent as its UTC instant, so it stores its
-   * UTC day. `displayText` defaults to that day as `yyyy-MM-dd`.
+   * UTC day. Without `displayText` the control shows that day in its own format and language, as the
+   * desktop word processor shows a picked date (for example "15 December 2026"). In the browser a
+   * format that needs non-English month or day names, and anywhere a non-Gregorian calendar or a
+   * language whose usual calendar is another one, shows `yyyy-MM-dd`.
    */
   setContentControlDate(anchorId: string, value: string | Date, displayText?: string,
     options: ContentControlFillOptions = {}): EditResult {
