@@ -4583,7 +4583,10 @@ class DocxDiffSettings:
     #: keeps cell-level revisions regardless.
     track_cell_insertions_and_deletions: bool = True
 
-    #: Minimum word tokens for a paragraph to anchor alignment. Use 2 for one-word positional labels.
+    #: How many words a paragraph needs before the comparison uses it to line the two documents up
+    #: (default 0). Set 2 when each entry starts with a one-word number label on its own line, such as
+    #: "P1": the entries are then matched by their text and each label shows only its number changing.
+    #: Example: ``DocxDiffSettings(minimum_anchor_word_count=2)``.
     minimum_anchor_word_count: int = 0
 
     def to_wire(self) -> dict[str, Any]:

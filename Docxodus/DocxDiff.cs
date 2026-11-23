@@ -771,10 +771,20 @@ public sealed class DocxDiffSettings
     /// </summary>
     public int MoveMinimumWordCount { get; set; } = 3;
 
-    /// <summary>Minimum word tokens for a paragraph to anchor the block alignment.
-    /// Zero (the default) allows short paragraphs to anchor. Set to two when stand-alone
-    /// one-word labels renumber after an entry is inserted or removed. A shorter paragraph
-    /// that is unique in both documents and relocates unchanged is still reported as moved.</summary>
+    /// <summary>
+    /// How many words a paragraph needs before the comparison uses it to line the two documents up.
+    /// The default, 0, lets any paragraph that appears once in each document do so.
+    /// Set it to 2 when each entry starts with a one-word number label on its own line, such as "P1".
+    /// Adding or removing an entry changes every later label, and with the default the comparison can
+    /// then report the entries' unchanged text as moved. With 2 it matches the entries by their text,
+    /// and each label shows only its number changing. A short paragraph that moved without changing is
+    /// still shown as moved.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// var redline = DocxDiff.Compare(original, revised, new DocxDiffSettings { MinimumAnchorWordCount = 2 });
+    /// </code>
+    /// </example>
     public int MinimumAnchorWordCount
     {
         get;
