@@ -1576,7 +1576,6 @@ export class DocxSession {
    * already spans it is reused. `bookmarkName` carries the name for {@link insertCrossReference}.
    */
   addReferenceBookmark(anchorId: string): EditResult {
-    if (!this.wasm.AddReferenceBookmark) throw new Error("addReferenceBookmark needs a newer WASM bundle");
     return JSON.parse(this.wasm.AddReferenceBookmark(this.handle, anchorId)) as EditResult;
   }
 

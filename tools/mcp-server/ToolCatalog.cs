@@ -558,9 +558,9 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "action": { "type": "string", "enum": ["list_hyperlinks", "add_hyperlink", "update_hyperlink", "remove_hyperlink", "list_bookmarks", "add_bookmark", "rename_bookmark", "move_bookmark", "remove_bookmark", "insert_cross_reference"] },
+                "action": { "type": "string", "enum": ["list_hyperlinks", "add_hyperlink", "update_hyperlink", "remove_hyperlink", "list_bookmarks", "add_bookmark", "rename_bookmark", "move_bookmark", "remove_bookmark", "add_reference_bookmark", "insert_cross_reference"] },
                 "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"], "description": "Listing only; default all." },
-                "anchorId": { "type": "string", "description": "add_hyperlink: containing paragraph anchor." },
+                "anchorId": { "type": "string", "description": "add_hyperlink: containing paragraph anchor. insert_cross_reference: the paragraph the field goes into. add_reference_bookmark: the paragraph (a heading or numbered item) a cross-reference will target." },
                 "startOffset": { "type": "integer", "description": "add_hyperlink/add_bookmark/move_bookmark: zero-based character boundary." },
                 "length": { "type": "integer", "minimum": 1, "description": "add_hyperlink: selected text length." },
                 "kind": { "type": "string", "enum": ["external", "internal"], "description": "add/update_hyperlink target representation." },
@@ -579,7 +579,11 @@ internal static class ToolCatalog
                   "properties": {
                     "referenceNumber": { "type": "boolean", "description": "Emit the \\r switch — show the target's auto-number instead of its text (cached 0 when the target is unnumbered)." },
                     "hyperlink": { "type": "boolean", "description": "Emit the \\h switch — the field jumps to the bookmark like a link." },
-                    "includePosition": { "type": "boolean", "description": "Emit the \\p switch — show above/below relative position (appended to the number under referenceNumber)." }
+                    "includePosition": { "type": "boolean", "description": "Emit the \\p switch — show above/below relative position (appended to the number under referenceNumber)." },
+                    "pageNumber": { "type": "boolean", "description": "Insert a PAGEREF (the target's page number) instead of a REF; the number switches do not apply." },
+                    "numberNoContext": { "type": "boolean", "description": "Emit the \\n switch — the target's number without the context of higher levels." },
+                    "numberFullContext": { "type": "boolean", "description": "Emit the \\w switch — the target's number in full context." },
+                    "cachedPage": { "type": "string", "description": "With pageNumber: the page to cache as the result; omitted caches 1 and marks the field dirty so Word updates it." }
                   }
                 },
                 "referenceNumber": { "type": "boolean", "description": "insert_cross_reference. Deprecated: use options.referenceNumber." },

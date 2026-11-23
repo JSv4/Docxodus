@@ -1941,8 +1941,7 @@ export interface DocxodusWasmExports {
       bookmarkName: string,
       optionsJson: string
     ) => string;
-    /** Optional: absent on older WASM bundles. */
-    AddReferenceBookmark?: (handle: number, anchor: string) => string;
+    AddReferenceBookmark: (handle: number, anchor: string) => string;
     InsertEndnote: (handle: number, anchor: string, characterOffset: number, markdown: string) => string;
     // Native Word comment authoring (issue #300). spanJson: "" = whole block, else
     // {"start":n,"length":n}; initials/date: "" = absent (date is ISO-8601).

@@ -138,6 +138,21 @@
       }
     },
     {
+      "op": "addReferenceBookmark",
+      "facade": "AddReferenceBookmark",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "AddReferenceBookmark" },
+        "npm": { "method": "addReferenceBookmark" },
+        "python": { "method": "add_reference_bookmark" },
+        "stdio": { "op": "add_reference_bookmark" },
+        "mcp": { "tool": "docxodus_links", "action": "add_reference_bookmark" }
+      }
+    },
+    {
       "op": "listBookmarks",
       "facade": "ListBookmarks",
       "result": "BookmarkInfo[]",

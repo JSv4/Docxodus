@@ -282,3 +282,28 @@ def test_insert_cross_reference_writes_ref_field_with_typed_failures(
     assert not missing.success
     assert missing.error is not None
     assert missing.error.code is EditErrorCode.MISSING_BOOKMARK_TARGET
+
+
+def test_reference_bookmark_and_page_and_number_references(
+    session: DocxSession, paragraphs: list[str]
+) -> None:
+    """A cross-reference to a whole paragraph, as Word's Cross-reference dialog makes one: a
+    hidden _Ref bookmark (reused the second time), then a PAGEREF and a REF with \\n."""
+    first = session.add_reference_bookmark(paragraphs[0])
+    assert first.success, first.error
+    name = first.bookmark_name
+    assert name is not None and name.startswith("_Ref") and name[4:].isdigit()
+    again = session.add_reference_bookmark(paragraphs[0])
+    assert again.success and again.bookmark_name == name
+
+    page = session.insert_cross_reference(
+        paragraphs[1], 0, name, CrossReferenceOptions(page_number=True, cached_page="3"),
+    )
+    assert page.success, page.error
+    number = session.insert_cross_reference(
+        paragraphs[1], 0, name, CrossReferenceOptions(number_no_context=True),
+    )
+    assert number.success, number.error
+    xml = session.raw.get_xml(paragraphs[1])
+    assert f"PAGEREF {name}" in xml and ">3<" in xml
+    assert f"REF {name}" in xml and "\\n" in xml
