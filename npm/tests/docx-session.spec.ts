@@ -112,6 +112,38 @@ test.describe('DocxSession (WASM bridge)', () => {
     expect(result.restored).toBe(true);
   });
 
+  test('tab stops round-trip through the typed session, and undo', async ({ page }) => {
+    const result = await page.evaluate((bytes: number[]) => {
+      const open = (b: Uint8Array) => (window as any).Docxodus.openTypedSession(b) as DocxSession;
+      const firstParagraph = (s: DocxSession) =>
+        Object.entries(s.project().anchorIndex).find(([, a]) => a.scope === 'body' && a.kind === 'p')![0];
+      const session = open(new Uint8Array(bytes));
+      try {
+        const anchor = firstParagraph(session);
+        const before = session.getTabStops(anchor)!;
+        const set = session.setTabStops(anchor, [{ positionTwips: 1440 }, { positionTwips: 4320, alignment: 'right', leader: 'dot' }]);
+        const interval = session.setDefaultTabStop(1080);
+        const after = session.getTabStops(anchor)!;
+        const reopened = open(session.save());
+        const saved = reopened.getTabStops(firstParagraph(reopened))!;
+        reopened.close();
+        const undone = session.undo() && session.undo();
+        return { set: set.success, interval: interval.success, before, after, saved, undone, restored: session.getTabStops(anchor),
+          refused: session.setDefaultTabStop(0).error?.code, notAParagraph: session.getTabStops('p:body:none') };
+      } finally { session.close(); }
+    }, Array.from(readTestFile('HC001-5DayTourPlanTemplate.docx')));
+    expect(result.set && result.interval && result.undone).toBe(true);
+    expect(result.after.stops).toEqual([
+      { positionTwips: 1440, alignment: 'left', leader: 'none' },
+      { positionTwips: 4320, alignment: 'right', leader: 'dot' },
+    ]);
+    expect(result.after.defaultTabStopTwips).toBe(1080);
+    expect(result.saved).toEqual(result.after);
+    expect(result.restored).toEqual(result.before);
+    expect(result.refused).toBe('invalid_paragraph_format');
+    expect(result.notAParagraph).toBeNull();
+  });
+
   test('block insertion refuses cell anchors before recording history', async ({ page }) => {
     const results = await page.evaluate((bytes: number[]) => {
       const open = (input: Uint8Array) => (window as any).Docxodus.openTypedSession(input) as DocxSession;
