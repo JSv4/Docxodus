@@ -217,11 +217,16 @@ du -sh "$WASM_DIST"
 # main at 6,101,383 on the same job, which had 5,753 bytes of room under 5964 KiB, so the branch
 # was 258 bytes over. 8 KiB more covers it and the spread between runners; assembly roots,
 # dependencies and the AOT profile are unchanged.
-# Update Fields (UpdateFields with its TOC, REF, PAGEREF and SEQ rebuilders, and their JSON and
-# bridge exports), stacked on the outline and cross-reference changes: CI measured the branch at
-# 6,115,382 bytes, 54 over 5972 KiB (a local build measured 6,103,448). 8 KiB more covers it and the
-# spread between runners; assembly roots, dependencies and the AOT profile are unchanged.
-WIRE_BUDGET_BYTES=$((5980 * 1024))
+# Tab stops (GetTabStops, SetTabStops, SetDefaultTabStop, their JSON and bridge exports), with main's
+# content-control date formats (#1853) below it: CI measured the branch at 6,111,407 bytes on build and
+# build-npm and 6,115,564 on compare, up to 236 over 5972 KiB, and the outline on top of it at 6,118,046.
+# 8 KiB more covers both and the cross-references landing beside them; assembly roots, dependencies and
+# the AOT profile are unchanged.
+# Update Fields (UpdateFields with its TOC, REF, PAGEREF and SEQ rebuilders, and their JSON and bridge
+# exports), on top of tab stops, the outline and cross-references: CI measured the branch at 6,123,332
+# bytes, 188 under 5980 KiB, and its jobs differ by up to 4,157 for the same code (above). 12 KiB more
+# covers it and that spread; assembly roots, dependencies and the AOT profile are unchanged.
+WIRE_BUDGET_BYTES=$((5992 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""
