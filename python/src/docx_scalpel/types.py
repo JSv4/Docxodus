@@ -113,6 +113,7 @@ __all__ = [
     "RunFormattingInfo",
     "TableStyleFormatting",
     "StyleInfo",
+    "OutlineEntry",
     "InlineSpan",
     "FormattingInspection",
     "RunFormatting",
@@ -3273,6 +3274,27 @@ class TableStyleFormatting:
             indent_twips=int(d["indentTwips"]) if "indentTwips" in d else None,
             layout=d.get("layout"), has_borders=d.get("hasBorders"),
             cell_shading_fill=d.get("cellShadingFill"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OutlineEntry:
+    """One heading of the document's outline (``DocxSession.list_outline``). ``level`` is 1-9
+    (Word's Level 1 is ``w:outlineLvl w:val="0"``); ``last_anchor_id`` is the last top-level
+    block of the heading's part, up to the next heading of its level or a higher one: what
+    ``move_block_range`` moves with the heading."""
+
+    anchor_id: str
+    level: int
+    text: str
+    last_anchor_id: str
+    style_id: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "OutlineEntry":
+        return cls(
+            anchor_id=d["anchorId"], level=int(d["level"]), text=d.get("text", ""),
+            last_anchor_id=d["lastAnchorId"], style_id=d.get("styleId"),
         )
 
 

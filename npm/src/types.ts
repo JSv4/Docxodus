@@ -1884,6 +1884,8 @@ export interface DocxodusWasmExports {
     ReplaceText: (handle: number, anchor: string, md: string) => string;
     DeleteBlock: (handle: number, anchor: string) => string;
     MoveBlock: (handle: number, sourceAnchor: string, targetAnchor: string, pos: string) => string;
+    MoveBlockRange: (handle: number, firstAnchor: string, lastAnchor: string, targetAnchor: string, pos: string) => string;
+    ListOutline: (handle: number) => string;
     /** JSON `{anchorId, before, after}[]` — the blocks a block may legally be moved next to and
      *  on which side, which is what a drag UI gates its drop targets on. The two sides are
      *  reported separately because a cross-block range or a section break between the blocks can
@@ -2639,6 +2641,18 @@ export interface BookmarkRangeSegment {
   anchorId: string;
   span: CharSpan;
   text: string;
+}
+
+/** One heading of the document's outline — see {@link DocxSession.listOutline}. */
+export interface OutlineEntry {
+  anchorId: string;
+  /** 1-9: Word's Level 1 is `w:outlineLvl w:val="0"`. */
+  level: number;
+  text: string;
+  styleId?: string;
+  /** The last top-level block of the heading's part (up to the next heading at its level or
+   *  above): what `moveBlockRange` moves with it. */
+  lastAnchorId: string;
 }
 
 export interface BookmarkInfo {

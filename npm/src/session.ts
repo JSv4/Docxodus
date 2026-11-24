@@ -10,6 +10,7 @@ import type {
   AnnotationUpdate,
   BlockMetadata,
   BookmarkInfo,
+  OutlineEntry,
   BulkEditResult,
   CharSpan,
   CommentListEntry,
@@ -832,6 +833,27 @@ export class DocxSession {
     return JSON.parse(
       this.wasm.MoveBlock(this.handle, sourceAnchorId, targetAnchorId, position),
     ) as EditResult;
+  }
+
+  /**
+   * Move the top-level blocks from `firstAnchorId` to `lastAnchorId` (inclusive) before or after
+   * `targetAnchorId` as one edit — a heading and everything under it, as Word's Navigation Pane
+   * drags it. One undo step. Refused across a section break, when it would cut a cross-block
+   * range, onto a target inside the run, and under tracked changes.
+   */
+  moveBlockRange(firstAnchorId: string, lastAnchorId: string, targetAnchorId: string, position: "before" | "after"): EditResult {
+    return JSON.parse(
+      this.wasm.MoveBlockRange(this.handle, firstAnchorId, lastAnchorId, targetAnchorId, position),
+    ) as EditResult;
+  }
+
+  /**
+   * The body's headings in document order, as Word's Navigation Pane lists them: each top-level
+   * paragraph with an outline level 1-9, resolved as Word does (the paragraph's own, else its
+   * style chain's).
+   */
+  listOutline(): OutlineEntry[] {
+    return JSON.parse(this.wasm.ListOutline(this.handle)) as OutlineEntry[];
   }
 
   /**

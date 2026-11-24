@@ -74,7 +74,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "format": { "type": "string", "enum": ["markdown", "html", "text", "blocks", "info", "version", "anchor_locations", "semantic_changes", "verification", "check_preconditions", "styles", "formatting", "spans", "manifest"], "description": "markdown/text: anchor-addressed projection; html: rendered HTML; blocks: structural metadata; info: version plus edit and per-anchor section facts; version: monotonic document version; anchor_locations: read-only versioned anchor-to-part and element-child XPath lookup without saving; omit anchorIds for all keys, [] for none; semantic_changes: stable versioned changes from the session's opening package to its current state; verification: bounded default deliverable gate over the session's clean-save checkpoint, using opening bytes as baseline; check_preconditions: read-only guard evaluation; styles: explicit style catalog and resolved properties; formatting: direct/effective paragraph and run formatting for anchorId; spans: mutation-compatible inline spans for anchorId; manifest: deterministic package entries, hashes, relationships, facts, and validation findings for the full logical package." },
+                "format": { "type": "string", "enum": ["markdown", "html", "text", "blocks", "info", "version", "anchor_locations", "semantic_changes", "verification", "check_preconditions", "styles", "outline", "formatting", "spans", "manifest"], "description": "markdown/text: anchor-addressed projection; html: rendered HTML; blocks: structural metadata; info: version plus edit and per-anchor section facts; version: monotonic document version; anchor_locations: read-only versioned anchor-to-part and element-child XPath lookup without saving; omit anchorIds for all keys, [] for none; semantic_changes: stable versioned changes from the session's opening package to its current state; verification: bounded default deliverable gate over the session's clean-save checkpoint, using opening bytes as baseline; check_preconditions: read-only guard evaluation; styles: explicit style catalog and resolved properties; outline: the body's headings as Word's Navigation Pane lists them (anchorId, level 1-9, text, styleId, lastAnchorId); formatting: direct/effective paragraph and run formatting for anchorId; spans: mutation-compatible inline spans for anchorId; manifest: deterministic package entries, hashes, relationships, facts, and validation findings for the full logical package." },
                 "anchorIds": { "type": ["array", "null"], "items": { "type": "string" }, "description": "anchor_locations only: requested projected keys. Omitted/null selects all; [] selects none. Unknown keys map to null. Paths are namespace-independent one-based element-child XPaths." },
                 "anchorId": { "type": "string", "description": "Optional for markdown/html/text/info and guard evaluation; required for formatting/spans; not accepted for manifest, semantic_changes, verification, or anchor_locations. Those formats always describe the complete package/document. Returned formatting/list/section anchors and span ranges can be passed unchanged to mutation tools." },
                 "citation": {
@@ -280,16 +280,16 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_edit",
-            "Insert, replace, move, delete, or undo/redo text and blocks, addressed by anchor id.",
+            "Insert, replace, move, delete, or undo/redo text and blocks, addressed by anchor id. move_block_range moves a run of top-level blocks as one edit, as Word's Navigation Pane drags a heading with its text (lastAnchorId from docxodus_get_content format=outline).",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic guards evaluated immediately before the mutation: expectedVersion, anchorId, expectedContentHash, expectedText/expectedTextRange, expectedKind, expectedScope, expectedMatchCount." },
-                "action": { "type": "string", "enum": ["insert_paragraph", "replace_text", "replace_text_range", "replace_text_at_span_with_format", "delete_block", "move_block", "delete_range", "delete_section", "split_paragraph", "merge_paragraphs", "undo", "redo"] },
+                "action": { "type": "string", "enum": ["insert_paragraph", "replace_text", "replace_text_range", "replace_text_at_span_with_format", "delete_block", "move_block", "move_block_range", "delete_range", "delete_section", "split_paragraph", "merge_paragraphs", "undo", "redo"] },
                 "anchorId": { "type": "string", "description": "Target block. Required for every action except delete_range, delete_section, undo, redo." },
-                "position": { "type": "string", "enum": ["before", "after"], "description": "insert_paragraph/move_block only." },
+                "position": { "type": "string", "enum": ["before", "after"], "description": "insert_paragraph/move_block/move_block_range only." },
                 "markdown": { "type": "string", "description": "insert_paragraph/replace_text payload, in the supported markdown subset (headings, bullet/ordered lists, bold/italic/code/strike, links, hard breaks)." },
                 "find": { "type": "string", "description": "replace_text_range: literal text to find within the block. A find that matches nothing fails with text_not_found (both directly and as a batch step); pass preconditions.expectedMatchCount 0 to assert absence as a successful no-op instead." },
                 "replace": { "type": "string", "description": "replace_text_range / replace_text_at_span_with_format: replacement text." },
@@ -313,7 +313,9 @@ internal static class ToolCatalog
                 "characterOffset": { "type": "integer", "description": "split_paragraph: character offset to split at." },
                 "secondAnchorId": { "type": "string", "description": "merge_paragraphs: the paragraph absorbed into anchorId." },
                 "sourceAnchorId": { "type": "string", "description": "move_block: block to relocate." },
-                "targetAnchorId": { "type": "string", "description": "move_block: reference block used with position." }
+                "targetAnchorId": { "type": "string", "description": "move_block/move_block_range: reference block used with position." },
+                "firstAnchorId": { "type": "string", "description": "move_block_range: first top-level block of the run (inclusive)." },
+                "lastAnchorId": { "type": "string", "description": "move_block_range: last top-level block of the run (inclusive, after firstAnchorId). Refused across a section break, when it would cut a bookmark or comment range, onto a target inside the run, and under tracked changes." }
               },
               "required": ["sessionId", "action"]
             }

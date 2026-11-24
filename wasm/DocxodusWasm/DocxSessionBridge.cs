@@ -385,6 +385,15 @@ public static partial class DocxSessionBridge
     public static string MoveBlock(int h, string sourceAnchor, string targetAnchor, string posStr) =>
         DocxSessionOps.MoveBlock(h, sourceAnchor, targetAnchor, DocxSessionJson.ParseOptionalPos(posStr));
 
+    /// <summary>Bridge for <see cref="DocxSession.MoveBlockRange"/>.</summary>
+    [JSExport]
+    public static string MoveBlockRange(int h, string firstAnchor, string lastAnchor, string targetAnchor, string posStr) =>
+        DocxSessionOps.MoveBlockRange(h, firstAnchor, lastAnchor, targetAnchor, DocxSessionJson.ParseOptionalPos(posStr));
+
+    /// <summary>Bridge for <see cref="DocxSession.ListOutline"/>.</summary>
+    [JSExport]
+    public static string ListOutline(int h) => DocxSessionOps.ListOutline(h);
+
     /// <summary>
     /// Bridge for <see cref="DocxSession.ValidMoveTargets"/>. Returns a JSON array of the anchor
     /// ids <paramref name="sourceAnchor"/> may legally be moved next to, so the editor's drag UI
