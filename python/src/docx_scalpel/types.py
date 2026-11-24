@@ -108,9 +108,12 @@ __all__ = [
     "PageMapRegistrationResult",
     "PageMapStatus",
     "ParagraphFormatting",
+    "TabStop",
+    "TabStopsInfo",
     "RunFormattingInfo",
     "TableStyleFormatting",
     "StyleInfo",
+    "OutlineEntry",
     "InlineSpan",
     "FormattingInspection",
     "RunFormatting",
@@ -3178,6 +3181,50 @@ class ParagraphFormatting:
 
 
 @dataclass(frozen=True, slots=True)
+class TabStop:
+    """One tab stop (``DocxSession.set_tab_stops``, ``get_tab_stops``). ``position_twips`` is
+    measured from the paragraph's leading text edge, not its indent (1440 = 1 inch).
+    ``alignment`` is ``"left"``, ``"center"``, ``"right"``, ``"decimal"`` or ``"bar"`` (a bar
+    tab draws a vertical line); ``leader`` is ``"none"``, ``"dot"``, ``"hyphen"``,
+    ``"underscore"``, ``"heavy"`` or ``"middleDot"``."""
+
+    position_twips: int
+    alignment: str = "left"
+    leader: str = "none"
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"positionTwips": self.position_twips, "alignment": self.alignment, "leader": self.leader}
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TabStop":
+        return cls(
+            position_twips=int(d["positionTwips"]),
+            alignment=d.get("alignment", "left"),
+            leader=d.get("leader", "none"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TabStopsInfo:
+    """A paragraph's tab stops as Word's Tabs dialog shows them (``DocxSession.get_tab_stops``):
+    ``stops`` in effect (its style chain and its own, cleared ones removed), ``style_stops``
+    its styles give it, and the document's default tab interval. Numbering-level tabs are not
+    included."""
+
+    stops: tuple[TabStop, ...] = ()
+    style_stops: tuple[TabStop, ...] = ()
+    default_tab_stop_twips: int = 720
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TabStopsInfo":
+        return cls(
+            stops=tuple(TabStop._from_wire(s) for s in d.get("stops", ())),
+            style_stops=tuple(TabStop._from_wire(s) for s in d.get("styleStops", ())),
+            default_tab_stop_twips=int(d.get("defaultTabStopTwips", 720)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class RunFormattingInfo:
     """High-signal character properties; absent direct values remain ``None``."""
 
@@ -3227,6 +3274,27 @@ class TableStyleFormatting:
             indent_twips=int(d["indentTwips"]) if "indentTwips" in d else None,
             layout=d.get("layout"), has_borders=d.get("hasBorders"),
             cell_shading_fill=d.get("cellShadingFill"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OutlineEntry:
+    """One heading of the document's outline (``DocxSession.list_outline``). ``level`` is 1-9
+    (Word's Level 1 is ``w:outlineLvl w:val="0"``); ``last_anchor_id`` is the last top-level
+    block of the heading's part, up to the next heading of its level or a higher one: what
+    ``move_block_range`` moves with the heading."""
+
+    anchor_id: str
+    level: int
+    text: str
+    last_anchor_id: str
+    style_id: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "OutlineEntry":
+        return cls(
+            anchor_id=d["anchorId"], level=int(d["level"]), text=d.get("text", ""),
+            last_anchor_id=d["lastAnchorId"], style_id=d.get("styleId"),
         )
 
 

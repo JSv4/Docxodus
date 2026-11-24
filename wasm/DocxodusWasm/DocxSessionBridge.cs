@@ -385,6 +385,15 @@ public static partial class DocxSessionBridge
     public static string MoveBlock(int h, string sourceAnchor, string targetAnchor, string posStr) =>
         DocxSessionOps.MoveBlock(h, sourceAnchor, targetAnchor, DocxSessionJson.ParseOptionalPos(posStr));
 
+    /// <summary>Bridge for <see cref="DocxSession.MoveBlockRange"/>.</summary>
+    [JSExport]
+    public static string MoveBlockRange(int h, string firstAnchor, string lastAnchor, string targetAnchor, string posStr) =>
+        DocxSessionOps.MoveBlockRange(h, firstAnchor, lastAnchor, targetAnchor, DocxSessionJson.ParseOptionalPos(posStr));
+
+    /// <summary>Bridge for <see cref="DocxSession.ListOutline"/>.</summary>
+    [JSExport]
+    public static string ListOutline(int h) => DocxSessionOps.ListOutline(h);
+
     /// <summary>
     /// Bridge for <see cref="DocxSession.ValidMoveTargets"/>. Returns a JSON array of the anchor
     /// ids <paramref name="sourceAnchor"/> may legally be moved next to, so the editor's drag UI
@@ -532,6 +541,19 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string GetTableProperties(int h, string cellAnchor) =>
         DocxSessionOps.GetTableProperties(h, cellAnchor);
+
+    /// <summary>Make a JSON array of tab stops the paragraph's tab stops in effect.</summary>
+    [JSExport]
+    public static string SetTabStops(int h, string anchorId, string stopsJson) =>
+        DocxSessionOps.SetTabStops(h, anchorId, stopsJson);
+
+    /// <summary>A paragraph's tab stops (in effect, from its styles) and the default tab interval, or "null".</summary>
+    [JSExport]
+    public static string GetTabStops(int h, string anchorId) => DocxSessionOps.GetTabStops(h, anchorId);
+
+    /// <summary>The document's default tab interval, twips.</summary>
+    [JSExport]
+    public static string SetDefaultTabStop(int h, int twips) => DocxSessionOps.SetDefaultTabStop(h, twips);
 
     [JSExport]
     public static string SetTableRowOptions(int h, string cellAnchor, bool? repeatHeader,

@@ -35,6 +35,37 @@
       }
     },
     {
+      "op": "moveBlockRange",
+      "facade": "MoveBlockRange",
+      "result": "EditResult",
+      "args": [
+        { "name": "firstAnchorId", "type": "anchor", "required": true },
+        { "name": "lastAnchorId", "type": "anchor", "required": true },
+        { "name": "targetAnchorId", "type": "anchor", "required": true },
+        { "name": "position", "type": "position", "required": false, "default": "after" }
+      ],
+      "transports": {
+        "wasm": { "method": "MoveBlockRange" },
+        "npm": { "method": "moveBlockRange" },
+        "python": { "method": "move_block_range" },
+        "stdio": { "op": "move_block_range" },
+        "mcp": { "tool": "docxodus_edit", "action": "move_block_range" }
+      }
+    },
+    {
+      "op": "listOutline",
+      "facade": "ListOutline",
+      "result": "OutlineEntry[]",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "ListOutline" },
+        "npm": { "method": "listOutline" },
+        "python": { "method": "list_outline" },
+        "stdio": { "op": "list_outline" },
+        "mcp": { "absent": "reached by format, not action: docxodus_get_content format=outline, result wrapped in {outline}; not one to one, so no route is recorded" }
+      }
+    },
+    {
       "op": "deleteRange",
       "facade": "DeleteRange",
       "result": "EditResult",

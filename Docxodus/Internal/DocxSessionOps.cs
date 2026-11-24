@@ -830,6 +830,17 @@ internal static class DocxSessionOps
         Mutate(handle, preconditions, sourceAnchorId,
             s => s.MoveBlock(sourceAnchorId, targetAnchorId, position ?? DefaultInsertPosition));
 
+    /// <summary><see cref="DocxSession.MoveBlockRange"/>: a run of top-level blocks moved as one.</summary>
+    public static string MoveBlockRange(int handle, string firstAnchorId, string lastAnchorId, string targetAnchorId,
+        Position? position, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, firstAnchorId,
+            s => s.MoveBlockRange(firstAnchorId, lastAnchorId, targetAnchorId, position ?? DefaultInsertPosition));
+
+    /// <summary><see cref="DocxSession.ListOutline"/> as a JSON array of
+    /// <c>{ anchorId, level, text, styleId?, lastAnchorId }</c>.</summary>
+    public static string ListOutline(int handle) =>
+        DocxSessionJson.SerializeOutline(SessionRegistry.Get(handle).ListOutline());
+
     /// <summary>The blocks <paramref name="sourceAnchorId"/> may legally move next to, and on which
     /// side — what a drag UI gates its drop targets on, so it never offers a drop the engine
     /// will refuse.</summary>
@@ -1418,6 +1429,23 @@ internal static class DocxSessionOps
     /// <summary>A TablePropertiesInfo object, or "null" when the anchor is not in a table.</summary>
     public static string GetTableProperties(int handle, string cellAnchorId) =>
         DocxSessionJson.SerializeTablePropertiesInfo(SessionRegistry.Get(handle).GetTableProperties(cellAnchorId));
+
+    /// <summary><paramref name="stopsJson"/> is a JSON array of tab stops ({ positionTwips,
+    /// alignment?, leader? }): they become the paragraph's tab stops in effect.</summary>
+    public static string SetTabStops(int handle, string anchorId, string stopsJson,
+        MutationPreconditions? preconditions = null)
+    {
+        var stops = DocxSessionJson.ParseTabStops(stopsJson);
+        return Mutate(handle, preconditions, anchorId, s => s.SetTabStops(anchorId, stops));
+    }
+
+    /// <summary>A TabStopsInfo object, or "null" when the anchor is not a paragraph.</summary>
+    public static string GetTabStops(int handle, string anchorId) =>
+        DocxSessionJson.SerializeTabStopsInfo(SessionRegistry.Get(handle).GetTabStops(anchorId));
+
+    /// <summary>The document's default tab interval (settings w:defaultTabStop), twips.</summary>
+    public static string SetDefaultTabStop(int handle, int twips, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.SetDefaultTabStop(twips));
 
     public static string SetTableRowOptions(int handle, string cellAnchorId, bool? repeatHeader,
         bool? allowBreakAcrossPages, int? heightTwips, string? heightRule,

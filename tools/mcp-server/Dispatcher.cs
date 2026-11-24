@@ -368,6 +368,9 @@ internal static partial class Dispatcher
             case "styles":
                 return $"{{\"styles\":{DocxSessionOps.ListStyles(session.Handle)}}}";
 
+            case "outline":
+                return $"{{\"outline\":{DocxSessionOps.ListOutline(session.Handle)}}}";
+
             case "formatting":
                 if (anchorId is null)
                     throw new McpToolException("formatting requires anchorId");
@@ -540,6 +543,9 @@ internal static partial class Dispatcher
         "delete_block" => DocxSessionOps.DeleteBlock(session.Handle, Str(args, "anchorId")),
         "move_block" => DocxSessionOps.MoveBlock(
             session.Handle, Str(args, "sourceAnchorId"), Str(args, "targetAnchorId"), ParsePos(args)),
+        "move_block_range" => DocxSessionOps.MoveBlockRange(
+            session.Handle, Str(args, "firstAnchorId"), Str(args, "lastAnchorId"), Str(args, "targetAnchorId"),
+            ParsePos(args)),
         "delete_range" => DocxSessionOps.DeleteRange(
             session.Handle, Str(args, "fromAnchorId"), Str(args, "toAnchorIdExclusive")),
         "delete_section" => DocxSessionOps.DeleteSection(session.Handle, Str(args, "headingAnchorId")),
@@ -563,8 +569,11 @@ internal static partial class Dispatcher
         return RunFormatAction(session, Str(args, "action"), args);
     }
 
-    private static string RunFormatAction(DocSession session, string action, JsonElement args) =>
-        Guarded(session, ParsePreconditions(args, MutationTarget(args)), () => action switch
+    private static string RunFormatAction(DocSession session, string action, JsonElement args)
+    {
+        if (action == "get_tab_stops")
+            return DocxSessionOps.GetTabStops(session.Handle, Str(args, "anchorId"));
+        return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () => action switch
         {
         "apply_format" => DocxSessionOps.ApplyFormat(
             session.Handle, Str(args, "anchorId"), ParseSpan(args, "span"), ParseFormatOp(args)),
@@ -579,8 +588,11 @@ internal static partial class Dispatcher
         "remove_list_membership" => DocxSessionOps.RemoveListMembership(session.Handle, Str(args, "anchorId")),
         "apply_list_format" => DocxSessionOps.ApplyListFormat(
             session.Handle, Str(args, "anchorId"), DocxSessionJson.ParseOptionalListFormat(OptStr(args, "listFormat"))),
+        "set_tab_stops" => DocxSessionOps.SetTabStops(session.Handle, Str(args, "anchorId"), RawArray(args, "stops")),
+        "set_default_tab_stop" => DocxSessionOps.SetDefaultTabStop(session.Handle, Int(args, "twips")),
         _ => throw new McpToolException($"unknown docxodus_format action: {action}"),
         });
+    }
 
     // An omitted format reaches the facade as null, and DocxSessionOps applies its default (the
     // empty op) — issue #1024.
@@ -1473,11 +1485,12 @@ internal static partial class Dispatcher
         {
             "docxodus_edit" => action is "insert_paragraph" or "replace_text" or "replace_text_range"
                 or "replace_text_at_span_with_format"
-                or "delete_block" or "move_block" or "delete_range" or "delete_section"
+                or "delete_block" or "move_block" or "move_block_range" or "delete_range" or "delete_section"
                 or "split_paragraph" or "merge_paragraphs",
             "docxodus_format" => action is "apply_format" or "apply_format_by_substring"
                 or "set_paragraph_style" or "set_paragraph_format" or "set_list_level"
-                or "remove_list_membership" or "apply_list_format",
+                or "remove_list_membership" or "apply_list_format"
+                or "set_tab_stops" or "set_default_tab_stop",
             "docxodus_create" => action is "insert_paragraph" or "insert_heading" or "insert_table"
                 or "insert_horizontal_rule" or "insert_footnote" or "insert_endnote"
                 or "insert_page_number_field" or "insert_table_of_contents"
@@ -1573,6 +1586,10 @@ internal static partial class Dispatcher
                 RequireStrings(args, "sourceAnchorId", "targetAnchorId");
                 ValidateOptionalEnum(args, "position", "before", "after");
                 break;
+            case ("docxodus_edit", "move_block_range"):
+                RequireStrings(args, "firstAnchorId", "lastAnchorId", "targetAnchorId");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                break;
             case ("docxodus_edit", "delete_range"):
                 RequireStrings(args, "fromAnchorId", "toAnchorIdExclusive");
                 break;
@@ -1605,6 +1622,13 @@ internal static partial class Dispatcher
                 RequireStrings(args, "anchorId");
                 ValidateOptionalObject(args, "paragraphFormat");
                 _ = ParseParagraphFormatOp(args);
+                break;
+            case ("docxodus_format", "set_tab_stops"):
+                RequireStrings(args, "anchorId");
+                _ = DocxSessionJson.ParseTabStops(RawArray(args, "stops"));
+                break;
+            case ("docxodus_format", "set_default_tab_stop"):
+                RequireNumbers(args, "twips");
                 break;
             case ("docxodus_format", "set_list_level"):
                 RequireStrings(args, "anchorId");

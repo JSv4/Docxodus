@@ -74,7 +74,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "format": { "type": "string", "enum": ["markdown", "html", "text", "blocks", "info", "version", "anchor_locations", "semantic_changes", "verification", "check_preconditions", "styles", "formatting", "spans", "manifest"], "description": "markdown/text: anchor-addressed projection; html: rendered HTML; blocks: structural metadata; info: version plus edit and per-anchor section facts; version: monotonic document version; anchor_locations: read-only versioned anchor-to-part and element-child XPath lookup without saving; omit anchorIds for all keys, [] for none; semantic_changes: stable versioned changes from the session's opening package to its current state; verification: bounded default deliverable gate over the session's clean-save checkpoint, using opening bytes as baseline; check_preconditions: read-only guard evaluation; styles: explicit style catalog and resolved properties; formatting: direct/effective paragraph and run formatting for anchorId; spans: mutation-compatible inline spans for anchorId; manifest: deterministic package entries, hashes, relationships, facts, and validation findings for the full logical package." },
+                "format": { "type": "string", "enum": ["markdown", "html", "text", "blocks", "info", "version", "anchor_locations", "semantic_changes", "verification", "check_preconditions", "styles", "outline", "formatting", "spans", "manifest"], "description": "markdown/text: anchor-addressed projection; html: rendered HTML; blocks: structural metadata; info: version plus edit and per-anchor section facts; version: monotonic document version; anchor_locations: read-only versioned anchor-to-part and element-child XPath lookup without saving; omit anchorIds for all keys, [] for none; semantic_changes: stable versioned changes from the session's opening package to its current state; verification: bounded default deliverable gate over the session's clean-save checkpoint, using opening bytes as baseline; check_preconditions: read-only guard evaluation; styles: explicit style catalog and resolved properties; outline: the body's headings as Word's Navigation Pane lists them (anchorId, level 1-9, text, styleId, lastAnchorId); formatting: direct/effective paragraph and run formatting for anchorId; spans: mutation-compatible inline spans for anchorId; manifest: deterministic package entries, hashes, relationships, facts, and validation findings for the full logical package." },
                 "anchorIds": { "type": ["array", "null"], "items": { "type": "string" }, "description": "anchor_locations only: requested projected keys. Omitted/null selects all; [] selects none. Unknown keys map to null. Paths are namespace-independent one-based element-child XPaths." },
                 "anchorId": { "type": "string", "description": "Optional for markdown/html/text/info and guard evaluation; required for formatting/spans; not accepted for manifest, semantic_changes, verification, or anchor_locations. Those formats always describe the complete package/document. Returned formatting/list/section anchors and span ranges can be passed unchanged to mutation tools." },
                 "citation": {
@@ -280,16 +280,16 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_edit",
-            "Insert, replace, move, delete, or undo/redo text and blocks, addressed by anchor id.",
+            "Insert, replace, move, delete, or undo/redo text and blocks, addressed by anchor id. move_block_range moves a run of top-level blocks as one edit, as Word's Navigation Pane drags a heading with its text (lastAnchorId from docxodus_get_content format=outline).",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic guards evaluated immediately before the mutation: expectedVersion, anchorId, expectedContentHash, expectedText/expectedTextRange, expectedKind, expectedScope, expectedMatchCount." },
-                "action": { "type": "string", "enum": ["insert_paragraph", "replace_text", "replace_text_range", "replace_text_at_span_with_format", "delete_block", "move_block", "delete_range", "delete_section", "split_paragraph", "merge_paragraphs", "undo", "redo"] },
+                "action": { "type": "string", "enum": ["insert_paragraph", "replace_text", "replace_text_range", "replace_text_at_span_with_format", "delete_block", "move_block", "move_block_range", "delete_range", "delete_section", "split_paragraph", "merge_paragraphs", "undo", "redo"] },
                 "anchorId": { "type": "string", "description": "Target block. Required for every action except delete_range, delete_section, undo, redo." },
-                "position": { "type": "string", "enum": ["before", "after"], "description": "insert_paragraph/move_block only." },
+                "position": { "type": "string", "enum": ["before", "after"], "description": "insert_paragraph/move_block/move_block_range only." },
                 "markdown": { "type": "string", "description": "insert_paragraph/replace_text payload, in the supported markdown subset (headings, bullet/ordered lists, bold/italic/code/strike, links, hard breaks)." },
                 "find": { "type": "string", "description": "replace_text_range: literal text to find within the block. A find that matches nothing fails with text_not_found (both directly and as a batch step); pass preconditions.expectedMatchCount 0 to assert absence as a successful no-op instead." },
                 "replace": { "type": "string", "description": "replace_text_range / replace_text_at_span_with_format: replacement text." },
@@ -313,22 +313,24 @@ internal static class ToolCatalog
                 "characterOffset": { "type": "integer", "description": "split_paragraph: character offset to split at." },
                 "secondAnchorId": { "type": "string", "description": "merge_paragraphs: the paragraph absorbed into anchorId." },
                 "sourceAnchorId": { "type": "string", "description": "move_block: block to relocate." },
-                "targetAnchorId": { "type": "string", "description": "move_block: reference block used with position." }
+                "targetAnchorId": { "type": "string", "description": "move_block/move_block_range: reference block used with position." },
+                "firstAnchorId": { "type": "string", "description": "move_block_range: first top-level block of the run (inclusive)." },
+                "lastAnchorId": { "type": "string", "description": "move_block_range: last top-level block of the run (inclusive, after firstAnchorId). Refused across a section break, when it would cut a bookmark or comment range, onto a target inside the run, and under tracked changes." }
               },
               "required": ["sessionId", "action"]
             }
             """),
         new ToolDefinition(
             "docxodus_format",
-            "Apply character or paragraph formatting, addressed by anchor id.",
+            "Apply character or paragraph formatting, addressed by anchor id. get_tab_stops reads a paragraph's tab stops in effect, the ones its styles give it and the default tab interval; set_tab_stops makes a list of stops the ones in effect, as Word's Tabs dialog does (the paragraph's own w:tabs holds the stops its styles lack and clears unwanted style stops); set_default_tab_stop sets the document's default tab interval (refused while changes are tracked).",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
-                "action": { "type": "string", "enum": ["apply_format", "apply_format_by_substring", "set_paragraph_style", "set_paragraph_format", "set_list_level", "remove_list_membership", "apply_list_format"] },
-                "anchorId": { "type": "string" },
+                "action": { "type": "string", "enum": ["apply_format", "apply_format_by_substring", "set_paragraph_style", "set_paragraph_format", "set_list_level", "remove_list_membership", "apply_list_format", "get_tab_stops", "set_tab_stops", "set_default_tab_stop"] },
+                "anchorId": { "type": "string", "description": "Required by every action except set_default_tab_stop." },
                 "span": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "apply_format only. Omit to format the whole block." },
                 "substring": { "type": "string", "description": "apply_format_by_substring: literal text within the block to format." },
                 "format": {
@@ -389,9 +391,23 @@ internal static class ToolCatalog
                   }
                 },
                 "levelDelta": { "type": "integer", "description": "set_list_level: +1 indents one level, -1 outdents one level." },
-                "listFormat": { "type": "string", "enum": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"], "description": "apply_list_format: converts the paragraph into (or out of) a real, auto-numbered Word list. *Parenthesis variants render '(1)'/'(a)'/'(i)'." }
+                "listFormat": { "type": "string", "enum": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"], "description": "apply_list_format: converts the paragraph into (or out of) a real, auto-numbered Word list. *Parenthesis variants render '(1)'/'(a)'/'(i)'." },
+                "stops": {
+                  "type": "array",
+                  "description": "set_tab_stops: the tab stops to have in effect; an empty array clears them all (default tabs remain).",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "positionTwips": { "type": "integer", "description": "From the paragraph's leading text edge (not its indent); 1440 = 1 inch. -31680 to 31680." },
+                      "alignment": { "type": "string", "enum": ["left", "center", "right", "decimal", "bar"], "description": "Default left. A bar tab draws a vertical line." },
+                      "leader": { "type": "string", "enum": ["none", "dot", "hyphen", "underscore", "heavy", "middleDot"], "description": "Default none." }
+                    },
+                    "required": ["positionTwips"]
+                  }
+                },
+                "twips": { "type": "integer", "minimum": 1, "description": "set_default_tab_stop: the default tab interval (w:defaultTabStop), twips; 720 = 0.5 inch." }
               },
-              "required": ["sessionId", "action", "anchorId"]
+              "required": ["sessionId", "action"]
             }
             """),
         new ToolDefinition(
@@ -632,7 +648,7 @@ internal static class ToolCatalog
                 "markdown": { "type": "string", "description": "fill_rich_text payload." },
                 "checked": { "type": "boolean", "description": "set_checked value." },
                 "value": { "type": "string", "description": "set_date ISO-8601 date or timestamp (its calendar day is stored at midnight UTC; the time of day is not kept) or select_item value/display text." },
-                "displayText": { "type": "string", "description": "Optional set_date displayed text." },
+                "displayText": { "type": "string", "description": "Optional set_date displayed text. When omitted the control shows the day in its own date format and language, for example 15 December 2026." },
                 "imageBase64": { "type": "string", "description": "fill_picture raw image bytes as base64." },
                 "sectionAnchorId": { "type": "string", "description": "add_repeating_item section control." },
                 "afterItemAnchorId": { "type": "string", "description": "Optional direct item after which the clone is inserted." },

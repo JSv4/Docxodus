@@ -107,6 +107,8 @@ from .types import (
     PageSetupOp,
     ParagraphBorderEdge,
     ParagraphFormatOp,
+    TabStop,
+    TabStopsInfo,
     PageCitation,
     PageCitationRequest,
     PageMap,
@@ -123,6 +125,7 @@ from .types import (
     SectionInfo,
     SemanticChangeSet,
     StyleInfo,
+    OutlineEntry,
     TemplatePlaceholder,
     TextMatch,
     TableBorderSpec,
@@ -1409,7 +1412,9 @@ class DocxSession:
 
         The control stores the calendar day the value is written with at midnight UTC and
         keeps no time of day, so ``"2032-03-04T01:00:00+05:00"`` stores ``2032-03-04``.
-        ``display_text`` defaults to that day as ``yyyy-MM-dd``.
+        Without ``display_text`` the control shows that day in its own format and language, as the
+        desktop word processor shows a picked date (for example "15 December 2026"); a non-Gregorian
+        calendar, or a language whose usual calendar is another one, shows ``yyyy-MM-dd``.
         """
         return EditResult._from_wire(self._call("set_content_control_date", {
             "anchorId": anchor_id, "value": value, "displayText": display_text,
@@ -1593,6 +1598,14 @@ class DocxSession:
         result = self._call("list_styles", {})
         return tuple(StyleInfo._from_wire(style) for style in result)
 
+    def list_outline(self) -> tuple[OutlineEntry, ...]:
+        """The body's headings in document order, as Word's Navigation Pane lists them: each
+        top-level body paragraph (not one in a table cell or text box) with an outline level 1-9,
+        resolved as Word does (the paragraph's own ``w:outlineLvl``, else its style chain's), so a
+        localized heading style counts by its outline level, not its name."""
+        result = self._call("list_outline", {})
+        return tuple(OutlineEntry._from_wire(entry) for entry in result)
+
     def get_formatting(self, anchor_id: str) -> FormattingInspection | None:
         """Inspect explicitly separated direct/effective formatting for a paragraph."""
         result = self._call("get_formatting", {"anchorId": anchor_id})
@@ -1717,6 +1730,31 @@ class DocxSession:
                 "move_block",
                 {
                     "sourceAnchorId": source_anchor_id,
+                    "targetAnchorId": target_anchor_id,
+                    "position": position.value,
+                },
+            )
+        )
+
+    def move_block_range(
+        self,
+        first_anchor_id: str,
+        last_anchor_id: str,
+        target_anchor_id: str,
+        position: Position,
+    ) -> EditResult:
+        """Move the top-level blocks from ``first_anchor_id`` to ``last_anchor_id`` (inclusive,
+        in document order) before or after ``target_anchor_id`` as one edit: a heading and
+        everything under it, as Word's Navigation Pane drags it (``OutlineEntry.last_anchor_id``
+        gives the end). One undo step. Refused across a section break, when it would cut a
+        bookmark or comment range running into the run, onto a target inside the run, and under
+        tracked changes."""
+        return EditResult._from_wire(
+            self._call(
+                "move_block_range",
+                {
+                    "firstAnchorId": first_anchor_id,
+                    "lastAnchorId": last_anchor_id,
                     "targetAnchorId": target_anchor_id,
                     "position": position.value,
                 },
@@ -2434,6 +2472,28 @@ class DocxSession:
                 {"anchorId": anchor_id, "paragraphFormat": op.to_wire()},
             )
         )
+
+    def get_tab_stops(self, anchor_id: str) -> TabStopsInfo | None:
+        """The paragraph's tab stops as Word's Tabs dialog and ruler show them: the stops in
+        effect, the ones its styles give it, and the default tab interval. None when the anchor
+        is not a paragraph."""
+        result = self._call("get_tab_stops", {"anchorId": anchor_id})
+        return TabStopsInfo._from_wire(result) if result is not None else None
+
+    def set_tab_stops(self, anchor_id: str, stops: Sequence[TabStop]) -> EditResult:
+        """Make ``stops`` the paragraph's tab stops in effect, as Word does: its own ``w:tabs``
+        holds each stop its styles do not already give it and a ``clear`` entry for each style
+        stop not wanted. An empty list clears every stop (default tabs remain). One undo step;
+        with changes tracked, one ``w:pPrChange``."""
+        return EditResult._from_wire(self._call("set_tab_stops", {
+            "anchorId": anchor_id, "stops": [stop.to_wire() for stop in stops],
+        }))
+
+    def set_default_tab_stop(self, twips: int) -> EditResult:
+        """Set the document's default tab interval (``w:defaultTabStop`` in settings), in
+        twips. One undo step; refused while changes are tracked (no revision records a settings
+        change)."""
+        return EditResult._from_wire(self._call("set_default_tab_stop", {"twips": twips}))
 
     def set_list_level(self, anchor_id: str, level_delta: int) -> EditResult:
         return EditResult._from_wire(

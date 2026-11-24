@@ -1884,6 +1884,8 @@ export interface DocxodusWasmExports {
     ReplaceText: (handle: number, anchor: string, md: string) => string;
     DeleteBlock: (handle: number, anchor: string) => string;
     MoveBlock: (handle: number, sourceAnchor: string, targetAnchor: string, pos: string) => string;
+    MoveBlockRange: (handle: number, firstAnchor: string, lastAnchor: string, targetAnchor: string, pos: string) => string;
+    ListOutline: (handle: number) => string;
     /** JSON `{anchorId, before, after}[]` — the blocks a block may legally be moved next to and
      *  on which side, which is what a drag UI gates its drop targets on. The two sides are
      *  reported separately because a cross-block range or a section break between the blocks can
@@ -1910,6 +1912,9 @@ export interface DocxodusWasmExports {
     SetTableBorders: (handle: number, cellAnchor: string, specJson: string) => string;
     SetCellShading: (handle: number, cellAnchor: string, fill: string, scope: string) => string;
     SetRepeatHeaderRow: (handle: number, cellAnchor: string, repeat: boolean | null) => string;
+    SetTabStops: (handle: number, anchorId: string, stopsJson: string) => string;
+    GetTabStops: (handle: number, anchorId: string) => string;
+    SetDefaultTabStop: (handle: number, twips: number) => string;
     SetTableRowOptions: (handle: number, cellAnchor: string, repeatHeader: boolean | null,
       allowBreakAcrossPages: boolean | null, heightTwips: number | null, heightRule: string) => string;
     /** Word's Table Properties. */
@@ -2639,6 +2644,18 @@ export interface BookmarkRangeSegment {
   text: string;
 }
 
+/** One heading of the document's outline — see {@link DocxSession.listOutline}. */
+export interface OutlineEntry {
+  anchorId: string;
+  /** 1-9: Word's Level 1 is `w:outlineLvl w:val="0"`. */
+  level: number;
+  text: string;
+  styleId?: string;
+  /** The last top-level block of the heading's part (up to the next heading at its level or
+   *  above): what `moveBlockRange` moves with it. */
+  lastAnchorId: string;
+}
+
 export interface BookmarkInfo {
   name: string;
   bookmarkId: string;
@@ -3130,6 +3147,26 @@ export interface TableAnchorMapping {
   retained: { before: TableAnchorLocation; after: TableAnchorLocation }[];
   added: TableAnchorLocation[];
   invalidated: TableAnchorLocation[];
+}
+
+/** How text lines up at a tab stop; a bar tab draws a vertical line instead. */
+export type TabStopAlignment = "left" | "center" | "right" | "decimal" | "bar";
+
+/** The characters filling the space before a tab stop. */
+export type TabStopLeader = "none" | "dot" | "hyphen" | "underscore" | "heavy" | "middleDot";
+
+/** One tab stop, positioned from the paragraph's leading text edge (not its indent), in twips. */
+export interface TabStop {
+  positionTwips: number;
+  alignment?: TabStopAlignment;
+  leader?: TabStopLeader;
+}
+
+/** A paragraph's tab stops in effect, the ones its styles give it, and the default tab interval. */
+export interface TabStopsInfo {
+  stops: Required<TabStop>[];
+  styleStops: Required<TabStop>[];
+  defaultTabStopTwips: number;
 }
 
 export type TableRowHeightRule = "auto" | "atLeast" | "exact";

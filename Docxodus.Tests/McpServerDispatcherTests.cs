@@ -370,6 +370,45 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Equal("anchor_not_found", result.GetProperty("error").GetProperty("code").GetString());
     }
 
+    [Fact]
+    public void MCP022_Edit_OutlineAndMoveBlockRange()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        var inserted = Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"insert_paragraph","anchorId":"{{anchor}}","position":"before","markdown":"Alpha\n\nalpha text\n\nBeta\n\nbeta text"}""")));
+        Assert.True(inserted.GetProperty("success").GetBoolean());
+        foreach (var index in new[] { 0, 2 })
+        {
+            var heading = inserted.GetProperty("created")[index].GetProperty("id").GetString();
+            Assert.True(Parse(Dispatcher.Call(_store, "docxodus_format", J(
+                $$"""{"sessionId":{{sessionArg}},"action":"set_paragraph_style","anchorId":"{{heading}}","styleId":"Heading1"}""")))
+                .GetProperty("success").GetBoolean());
+        }
+
+        JsonElement Entry(string text)
+        {
+            var outline = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+                $$"""{"sessionId":{{sessionArg}},"format":"outline"}"""))).GetProperty("outline");
+            return outline.EnumerateArray().First(e => e.GetProperty("text").GetString() == text);
+        }
+        var alpha = Entry("Alpha");
+        var beta = Entry("Beta");
+        Assert.Equal(1, alpha.GetProperty("level").GetInt32());
+        var alphaId = alpha.GetProperty("anchorId").GetString();
+
+        var moved = Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"move_block_range","firstAnchorId":"{{alphaId}}","lastAnchorId":"{{alpha.GetProperty("lastAnchorId").GetString()}}","targetAnchorId":"{{beta.GetProperty("lastAnchorId").GetString()}}","position":"after"}"""));
+        Assert.True(Parse(moved).GetProperty("success").GetBoolean(), moved);
+        var outlineText = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"outline"}"""))).GetProperty("outline").GetRawText();
+        Assert.True(outlineText.IndexOf("\"Beta\"", StringComparison.Ordinal) < outlineText.IndexOf("\"Alpha\"", StringComparison.Ordinal), outlineText);
+
+        Assert.Throws<McpToolException>(() => Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"move_block_range","firstAnchorId":"{{alphaId}}","targetAnchorId":"{{alphaId}}"}""")));
+    }
+
     // ─── Search ─────────────────────────────────────────────────────────
 
     [Fact]
@@ -595,6 +634,63 @@ public class McpServerDispatcherTests : IDisposable
             """)));
         Assert.False(both.GetProperty("success").GetBoolean());
         Assert.Equal("invalid_paragraph_format", both.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void MCP044_Format_TabStops_SetReadAndDefaultInterval()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        var set = Dispatcher.Call(_store, "docxodus_format", J(
+            $$$"""{"sessionId":{{{sessionArg}}},"action":"set_tab_stops","anchorId":"{{{anchor}}}","stops":[{"positionTwips":1440},{"positionTwips":4320,"alignment":"right","leader":"dot"}]}"""));
+        Assert.True(Parse(set).GetProperty("success").GetBoolean(), set);
+        var interval = Dispatcher.Call(_store, "docxodus_format", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"set_default_tab_stop","twips":1080}"""));
+        Assert.True(Parse(interval).GetProperty("success").GetBoolean(), interval);
+
+        var info = Parse(Dispatcher.Call(_store, "docxodus_format", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"get_tab_stops","anchorId":"{{anchor}}"}""")));
+        var stops = info.GetProperty("stops");
+        Assert.Equal(2, stops.GetArrayLength());
+        Assert.Equal(4320, stops[1].GetProperty("positionTwips").GetInt32());
+        Assert.Equal("right", stops[1].GetProperty("alignment").GetString());
+        Assert.Equal("dot", stops[1].GetProperty("leader").GetString());
+        Assert.Equal(1080, info.GetProperty("defaultTabStopTwips").GetInt32());
+
+        var bad = Assert.Throws<McpToolException>(() => Dispatcher.Call(_store, "docxodus_format", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"set_tab_stops","anchorId":"{{anchor}}"}""")));
+        Assert.Contains("stops", bad.Message);
+    }
+
+    [Theory]
+    [InlineData("[1440]")]
+    [InlineData("[{\"alignment\":\"left\"}]")]
+    [InlineData("[{\"positionTwips\":720,\"alignment\":\"start\"}]")]
+    public void MCP044b_Format_BatchStepWithBadTabStopsIsRefusedBeforeAnyStepRuns(string stops)
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "atomic",
+              "steps": [
+                { "tool": "docxodus_format", "args": { "action": "set_default_tab_stop", "twips": 500 } },
+                { "tool": "docxodus_format", "args": { "action": "set_tab_stops", "anchorId": "{{anchor}}", "stops": {{stops}} } }
+              ]
+            }
+            """)));
+
+        Assert.Equal("invalid_batch_step",
+            batch.GetProperty("failure").GetProperty("error").GetProperty("code").GetString());
+        var info = Parse(Dispatcher.Call(_store, "docxodus_format", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"get_tab_stops","anchorId":"{{anchor}}"}""")));
+        Assert.NotEqual(500, info.GetProperty("defaultTabStopTwips").GetInt32());
     }
 
     // ─── Create / Table ─────────────────────────────────────────────────

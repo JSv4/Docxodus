@@ -274,7 +274,8 @@ See [history clients](../history-clients.md#mcp) for fields, precise counters, a
 regex-based syntax strip — an approximation, not a real markdown parser; use `markdown` for
 anything that needs to survive a write-back), `blocks` (every addressable block's
 `BlockMetadata` — style id/name, outline level, list facts), `styles` (the document's style catalog
-with resolved high-signal properties), `formatting` (explicit direct/effective paragraph and run
+with resolved high-signal properties), `outline` (the headings as Word's Navigation Pane lists
+them, each with the `lastAnchorId` that `move_block_range` takes), `formatting` (explicit direct/effective paragraph and run
 formatting for `anchorId`), `spans` (enumerable mutation-compatible inline spans for `anchorId`),
 `manifest` (the full deterministic OPC inventory, three package identities, relationships, facts,
 and validation findings described in [`package_manifests.md`](package_manifests.md)),
@@ -338,8 +339,8 @@ All search modes accept the exact citation token and attach a citation envelope 
 
 ### `docxodus_edit` — text/block CRUD + undo/redo
 
-`insert_paragraph`, `replace_text`, `replace_text_range`, `delete_block`, `delete_range`,
-`replace_text_at_span_with_format`, `delete_section`, `split_paragraph`, `merge_paragraphs`,
+`insert_paragraph`, `replace_text`, `replace_text_range`, `delete_block`, `move_block`,
+`move_block_range`, `delete_range`, `replace_text_at_span_with_format`, `delete_section`, `split_paragraph`, `merge_paragraphs`,
 `undo`, `redo` → the identically-named
 (camelCase) `DocxSession` methods via `DocxSessionOps`. `replace_text_at_span_with_format` takes an
 optional `deletedTextSide` (`before`/`after`) that puts a zero-length insertion on that side of tracked
@@ -359,6 +360,12 @@ one either/or `w:ind` slot (setting one evicts the other, both in one call is re
 single/480 = double; `exact`/`atLeast` = twips); `topBorder`/`bottomBorder` add or replace a
 `w:pBdr` edge, `clearBorders` removes the whole `w:pBdr` before either is applied in the same
 call), `set_list_level`, `remove_list_membership`, `apply_list_format`.
+
+`get_tab_stops` is a read: the paragraph's stops in effect, the ones its styles give it, and the
+default tab interval. `set_tab_stops` takes `stops`, an array of
+`{positionTwips, alignment?, leader?}`, and makes them the ones in effect; an empty array clears
+them all. `set_default_tab_stop` takes `twips` and no `anchorId`, and is refused while changes are
+tracked.
 
 ### `docxodus_create` — new structural content
 
