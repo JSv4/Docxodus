@@ -124,6 +124,10 @@ export function openDocxHistoryArchive(bytes: Uint8Array): Promise<DocxHistoryAr
 
 export { DocxSession } from "./session.js";
 export type {
+  TabStop,
+  TabStopAlignment,
+  TabStopLeader,
+  TabStopsInfo,
   AnchorInfo,
   AnchorLocation,
   AnchorLocationsResult,

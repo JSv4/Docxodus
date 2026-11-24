@@ -53,6 +53,52 @@
       }
     },
     {
+      "op": "setTabStops",
+      "facade": "SetTabStops",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "stops", "type": "array", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetTabStops" },
+        "npm": { "method": "setTabStops" },
+        "python": { "method": "set_tab_stops" },
+        "stdio": { "op": "set_tab_stops" },
+        "mcp": { "tool": "docxodus_format", "action": "set_tab_stops" }
+      }
+    },
+    {
+      "op": "getTabStops",
+      "facade": "GetTabStops",
+      "result": "TabStopsInfo?",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "GetTabStops" },
+        "npm": { "method": "getTabStops" },
+        "python": { "method": "get_tab_stops" },
+        "stdio": { "op": "get_tab_stops" },
+        "mcp": { "tool": "docxodus_format", "action": "get_tab_stops" }
+      }
+    },
+    {
+      "op": "setDefaultTabStop",
+      "facade": "SetDefaultTabStop",
+      "result": "EditResult",
+      "args": [
+        { "name": "twips", "type": "int", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetDefaultTabStop" },
+        "npm": { "method": "setDefaultTabStop" },
+        "python": { "method": "set_default_tab_stop" },
+        "stdio": { "op": "set_default_tab_stop" },
+        "mcp": { "tool": "docxodus_format", "action": "set_default_tab_stop" }
+      }
+    },
+    {
       "op": "setParagraphStyle",
       "facade": "SetParagraphStyle",
       "result": "EditResult",

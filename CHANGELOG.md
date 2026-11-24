@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`DocxSession.GetTabStops`, `SetTabStops` and `SetDefaultTabStop`.** Read a paragraph's tab stops in effect (its style chain and its own, with cleared ones removed), the ones its styles give it, and the document's default tab interval; set the stops in effect the way Word does (its own `w:tabs` holds the stops its styles lack and `clear` entries for unwanted style stops; one undo step, one `w:pPrChange` when tracked); set `w:defaultTabStop` in settings (refused while changes are tracked: no revision records a settings change). On the .NET API, WASM, npm (`setTabStops`, `getTabStops`, `setDefaultTabStop`), Python (`set_tab_stops`, `get_tab_stops`, `set_default_tab_stop`, with `TabStop` and `TabStopsInfo`), the stdio host and MCP (`docxodus_format` actions `set_tab_stops`, `get_tab_stops`, `set_default_tab_stop`).
+
 ## [17.0.0] - 2026-11-23
 
 ### Added
