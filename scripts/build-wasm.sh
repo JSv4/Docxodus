@@ -222,10 +222,11 @@ du -sh "$WASM_DIST"
 # build-npm and 6,115,564 on compare, up to 236 over 5972 KiB, and the outline on top of it at 6,118,046.
 # 8 KiB more covers both and the cross-references landing beside them; assembly roots, dependencies and
 # the AOT profile are unchanged.
-# Update Fields (UpdateFields with its TOC, REF, PAGEREF and SEQ rebuilders, and their JSON and bridge
-# exports), on top of tab stops, the outline and cross-references: CI measured the branch at 6,123,332
-# bytes, 188 under 5980 KiB, and its jobs differ by up to 4,157 for the same code (above). 12 KiB more
-# covers it and that spread; assembly roots, dependencies and the AOT profile are unchanged.
+# Cross-references (AddReferenceBookmark, the number and page switches, reference markers in rendered
+# HTML, their JSON and bridge exports), on top of tab stops and the outline: CI measured the branch at
+# 6,112,865 bytes on one runner and 6,123,723 on another, 203 over 5980 KiB, and UpdateFields on top of it at
+# 6,123,332 and 6,123,941. 12 KiB more covers both and that spread; assembly roots, dependencies and the
+# AOT profile are unchanged.
 WIRE_BUDGET_BYTES=$((5992 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
