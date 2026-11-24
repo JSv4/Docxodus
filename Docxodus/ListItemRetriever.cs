@@ -1485,9 +1485,10 @@ namespace Docxodus
             }
         }
 
-        /// <summary>One level of a list paragraph's number: its text, whether that shows other levels' counters
-        /// too ("2.1"), and whether it is only counters and punctuation.</summary>
-        internal readonly record struct ListItemLevel(string Text, bool ShowsOtherLevels, bool IsPlain);
+        /// <summary>One level of a list paragraph's number: its text (null for a level the list does not
+        /// define), whether that shows other levels' counters too ("2.1"), and whether it is only counters and
+        /// punctuation.</summary>
+        internal readonly record struct ListItemLevel(string? Text, bool ShowsOtherLevels, bool IsPlain);
 
         /// <summary>The number of a list paragraph level by level, from the list's first level to the
         /// paragraph's own, with the list and the counters it stands at.</summary>
@@ -1515,6 +1516,12 @@ namespace Docxodus
             var levels = new List<ListItemLevel>();
             for (int ilvl = 0; ilvl <= GetParagraphLevel(paragraph); ilvl++)
             {
+                // A malformed list may define the paragraph's level and none above it.
+                if (listItemInfo.Lvl(ilvl) == null)
+                {
+                    levels.Add(default);
+                    continue;
+                }
                 string lvlText = (string?)listItemInfo.Lvl(ilvl)?.Elements(W.lvlText).Attributes(W.val).FirstOrDefault() ?? "";
                 var tokens = GetFormatTokens(lvlText).ToList();
                 var counted = tokens.Where(t => t.Length == 2 && t[0] == '%' && char.IsDigit(t[1])).ToList();

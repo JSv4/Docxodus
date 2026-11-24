@@ -323,6 +323,87 @@ public class DocxSessionCrossReferenceTests
     }
 
     [Fact]
+    public void XR012_APageThatXmlCannotHold_IsRefused()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), new DocxSessionSettings { EmitMarkdownPatch = false });
+        var paragraphs = BodyParagraphs(session);
+        Assert.True(session.AddBookmark("target", DocumentRange.In(paragraphs[0], new CharSpan(0, 4))).Success);
+        long version = session.Version;
+        Assert.False(session.InsertCrossReference(paragraphs[1], 0, "target",
+            new CrossReferenceOptions { PageNumber = true, CachedPage = "7\u0001" }).Success);
+        Assert.Equal(version, session.Version);
+        Assert.NotEmpty(session.Save());
+    }
+
+    /// <summary>A list that defines only its second level: the number is that level's own.</summary>
+    [Fact]
+    public void XR013_AListWithoutItsUpperLevels_DoesNotThrow()
+    {
+        using var session = NumberedSession(new[] { ("decimal", "%1."), ("decimal", "%2.") }, ("item", 1));
+        using var bytes = new MemoryStream();
+        bytes.Write(session.Save());
+        bytes.Position = 0;
+        using (var document = WordprocessingDocument.Open(bytes, true))
+        {
+            var part = document.MainDocumentPart!.NumberingDefinitionsPart!;
+            part.GetXDocument().Descendants(W + "lvl").First().Remove();
+            part.PutXDocument();
+        }
+        using var partial = new DocxSession(bytes.ToArray());
+        Assert.Equal("1", Number(partial, "item", "outside", new CrossReferenceOptions { NumberNoContext = true }));
+        Assert.Equal("1?", Number(partial, "item", "outside", new CrossReferenceOptions { NumberFullContext = true }));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void XR014_StampReferenceFields_HoldsTheTextTheSessionCounts(bool simple)
+    {
+        var result = new XElement(W + "r", new XElement(W + "t", "A"), new XElement(W + "tab"), new XElement(W + "t", "B"), new XElement(W + "br"), new XElement(W + "t", "C"));
+        XElement Char(string type) => new(W + "r", new XElement(W + "fldChar", new XAttribute(W + "fldCharType", type)));
+        var bytes = Mutate(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), document =>
+        {
+            var part = document.MainDocumentPart!;
+            part.GetXDocument().Descendants(W + "p").First().ReplaceNodes(simple
+                ? new object[] { new XElement(W + "fldSimple", new XAttribute(W + "instr", " REF x "), result) }
+                : new object[] { Char("begin"), new XElement(W + "r", new XElement(W + "instrText", " REF x ")), Char("separate"), result, Char("end") });
+            part.PutXDocument();
+        });
+        using var session = new DocxSession(bytes);
+        var counted = session.GetAnchorInfo(BodyParagraphs(session)[0])!.VisibleText;
+        Assert.Equal("A\tB\nC", counted);
+
+        var html = XDocument.Parse(HtmlConversionOps.ConvertToHtml(bytes, new HtmlConversionOptions { StampReferenceFields = true }), LoadOptions.PreserveWhitespace);
+        // (the converter may split the result at its tab: the parts, and the tab between, add up to it)
+        var cached = html.Descendants().Where(e => (string?)e.Attribute("data-field") == "REF").Select(e => (string)e.Attribute("data-field-cached")!).ToList();
+        Assert.Equal(counted.Replace("\t", ""), string.Concat(cached).Replace("\t", ""));
+    }
+
+    [Fact]
+    public void XR015_StampReferenceFields_MarksAReferenceInsideAContentsTable()
+    {
+        XElement Char(string type) => new(W + "r", new XElement(W + "fldChar", new XAttribute(W + "fldCharType", type)));
+        XElement Run(string text) => new(W + "r", new XElement(W + "t", text));
+        XElement Instr(string text) => new(W + "r", new XElement(W + "instrText", text));
+        foreach (bool linked in new[] { false, true })
+        {
+            var bytes = Mutate(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), document =>
+            {
+                var part = document.MainDocumentPart!;
+                var entry = new object[] { Run("Intro "), Char("begin"), Instr(" PAGEREF _Toc1 \\h "), Char("separate"), Run("7"), Char("end") };
+                part.GetXDocument().Descendants(W + "p").First().ReplaceNodes(
+                    Char("begin"), Instr(" TOC \\o "), Char("separate"),
+                    linked ? new XElement(W + "hyperlink", new XAttribute(W + "anchor", "_Toc1"), entry) : entry, Char("end"));
+                part.PutXDocument();
+            });
+            var marked = Reference(HtmlConversionOps.ConvertToHtml(bytes, new HtmlConversionOptions { StampReferenceFields = true }), "PAGEREF");
+            Assert.Equal("_Toc1", (string?)marked.Attribute("data-field-target"));
+            Assert.Equal("7", marked.Value);
+            Assert.DoesNotContain("data-field", HtmlConversionOps.ConvertToHtml(bytes, new HtmlConversionOptions()));
+        }
+    }
+
+    [Fact]
     public void XR011_EditorRenderOptions_ReferenceFields_StampsThem()
     {
         using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());

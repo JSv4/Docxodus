@@ -371,6 +371,8 @@ public sealed partial class DocxSession
             return pairError;
 
         var opts = options ?? new CrossReferenceOptions();
+        if (opts.CachedPage is { } cachedPage && XmlText.ValidatePayload(cachedPage, anchorId) is { } textError)
+            return EditResult.Fail(textError);
         // One number switch at most: full context wins over no context over relative.
         string? numberSwitch = opts.PageNumber ? null
             : opts.NumberFullContext ? Internal.ReferenceNumber.FullContext
