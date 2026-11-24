@@ -642,7 +642,7 @@ internal static class ToolCatalog
                 "markdown": { "type": "string", "description": "fill_rich_text payload." },
                 "checked": { "type": "boolean", "description": "set_checked value." },
                 "value": { "type": "string", "description": "set_date ISO-8601 date or timestamp (its calendar day is stored at midnight UTC; the time of day is not kept) or select_item value/display text." },
-                "displayText": { "type": "string", "description": "Optional set_date displayed text." },
+                "displayText": { "type": "string", "description": "Optional set_date displayed text. When omitted the control shows the day in its own date format and language, for example 15 December 2026." },
                 "imageBase64": { "type": "string", "description": "fill_picture raw image bytes as base64." },
                 "sectionAnchorId": { "type": "string", "description": "add_repeating_item section control." },
                 "afterItemAnchorId": { "type": "string", "description": "Optional direct item after which the clone is inserted." },

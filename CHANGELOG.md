@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [17.0.0] - 2026-11-23
+
 ### Added
 
 - **`DocxSession.GetTabStops`, `SetTabStops` and `SetDefaultTabStop`.** Read a paragraph's tab stops in effect (its style chain and its own, with cleared ones removed), the ones its styles give it, and the document's default tab interval; set the stops in effect the way Word does (its own `w:tabs` holds the stops its styles lack and `clear` entries for unwanted style stops; one undo step, one `w:pPrChange` when tracked); set `w:defaultTabStop` in settings. On the .NET API, WASM, npm (`setTabStops`, `getTabStops`, `setDefaultTabStop`), Python (`set_tab_stops`, `get_tab_stops`, `set_default_tab_stop`, with `TabStop` and `TabStopsInfo`), the stdio host and MCP (`docxodus_format` actions `set_tab_stops`, `get_tab_stops`, `set_default_tab_stop`).
@@ -13,6 +15,10 @@ All notable changes to this project will be documented in this file.
 - A list's levels and Word's Continue Numbering (#1790). `GetListLevels` reads the levels of an item's list (number format, number text such as `%1.%2`, start, positions, legal numbering) and `SetListLevels` changes them, as Word's Define New Multilevel List does: only that list changes (a definition other lists share is copied first). `ContinueNumbering` makes an item, and the rest of its list after it, join the nearest earlier list with the same number format and text at the item's level, passing over other lists between them, as Word does; it is refused when no matching list comes before it. On the .NET API, WASM, npm (`getListLevels`, `setListLevels`, `continueNumbering`), Python (`get_list_levels`, `set_list_levels`, `continue_numbering`, with `ListLevelInfo` and `ListLevelSpec`), the stdio host and MCP (`docxodus_list` actions `get_levels`, `set_levels`, `continue`).
 - `SetListMembership` makes a paragraph an item of an existing list at a level, so it numbers on in that list, as Word's Format Painter does when it copies a numbered paragraph's formatting (#1791). A level the list does not define is defined first, as `SetListLevel` does; under tracked changes that is refused, since the change to the numbering part cannot be tracked, while joining a defined level is recorded as a tracked numbering change. On the .NET API, WASM, npm (`setListMembership`), Python (`set_list_membership`), the stdio host (`set_list_membership`) and MCP (`docxodus_list` action `set_membership`).
 - The editor selects across paragraphs as Word does (#1789): Shift+click, Shift+arrow keys (Ctrl+Shift too) and Ctrl+A reach past a paragraph's edge, and typing, Backspace, Delete, Enter, cut and paste over such a selection make one edit, one undo step: the first paragraph keeps its start, the paragraphs between go, and what is left of the last joins the first. A selection that reaches into a table, or one in a header or footer, is left to the browser's own editing, and Ctrl+A there keeps the browser's own select-all.
+
+### Changed
+
+- Filling a date control without display text now shows the date the way the control is set up to show it, as the desktop word processor does when you pick a date (#1851). A control set to day, month name and year in British English shows "15 December 2026", and the same control in German shows "15 Dezember 2026". Before, every control showed 2026-12-15. A control with no language set uses US English, and one with no format uses its language's short date. A few cases still show 2026-12-15: a control on a calendar other than the Gregorian one, a language whose usual calendar is another one (such as Thai or Saudi Arabic), and, in the browser build, a format that needs month or day names in a language other than English, because the browser build has only English names. Passing your own display text still overrides all of this.
 
 ### Fixed
 

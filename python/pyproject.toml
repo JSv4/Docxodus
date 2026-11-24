@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "docx-scalpel"
-version = "0.13.0"
+version = "0.14.0"
 description = "Edit, compare and redline Word .docx files from Python: anchor-addressed DOCX editing for LLM agents, tracked changes, DOCX to HTML and markdown — a thin client over Docxodus."
 readme = "README.md"
 requires-python = ">=3.10"
