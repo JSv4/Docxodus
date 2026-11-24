@@ -3951,7 +3951,7 @@ namespace Docxodus
             if (element.Name == W.fldSimple && settings.StampReferenceFields
                 && Internal.ReferenceFieldInstr.TryParse((string?)element.Attribute(W.instr)) is { } simpleReference)
             {
-                return ReferenceFieldSpan(simpleReference, CreateBorderDivs(wordDoc, settings, element.Elements()));
+                return ReferenceFieldSpan(simpleReference, element.Elements(), CreateBorderDivs(wordDoc, settings, element.Elements()));
             }
 
             // Transform smart tags and simple fields.
@@ -4126,7 +4126,7 @@ namespace Docxodus
             if (alignedTabContent != null) return alignedTabContent;
             var firstTabRun = runs.FirstOrDefault(run => run.Elements(W.tab).Any());
             if (firstTabRun == null)
-                return runs.Select(child => ConvertToHtmlTransform(wordDoc, settings, child, false, 0m));
+                return ConvertInline(wordDoc, settings, runs);
 
             // A cached TOC keeps its label, leader tab, and page-number field inside one
             // w:hyperlink. Run the same tab grouping used for direct paragraph children so the
@@ -4138,11 +4138,24 @@ namespace Docxodus
                 settings,
                 runsPrecedingTab,
                 firstTabRun);
-            content.AddRange(runs
-                .SkipWhile(run => run != firstTabRun)
-                .Skip(1)
-                .Select(child => ConvertToHtmlTransform(wordDoc, settings, child, false, 0m)));
+            content.AddRange(ConvertInline(wordDoc, settings, runs.SkipWhile(run => run != firstTabRun).Skip(1)));
             return content;
+        }
+
+        /// <summary>Convert siblings one by one; with <see cref="WmlToHtmlConverterSettings.StampReferenceFields"/>,
+        /// with the references among them marked. A link's content starts below the fields that hold the link.</summary>
+        private static IEnumerable<object?> ConvertInline(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, IEnumerable<XElement> siblings)
+        {
+            if (!settings.StampReferenceFields)
+                return siblings.Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
+            var elements = siblings.ToList();
+            var link = elements.FirstOrDefault()?.Parent is { } parent && parent.Name == W.hyperlink ? parent : null;
+            return Flat(ConvertContentThatCanContainFields(wordDoc, settings, elements,
+                link?.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()?.Select(field => (int?)field.Id).Max()));
+
+            static IEnumerable<object?> Flat(object? content) =>
+                content is IEnumerable<object?> parts ? parts.SelectMany(Flat) : new[] { content };
         }
 
         private static object? ProcessBookmarkStart(WmlToHtmlConverterSettings settings, XElement element)
@@ -8274,9 +8287,7 @@ namespace Docxodus
                 .Sum();
             var totalWidth = precedingElementsWidth + tabWidth;
 
-            var txElementsPrecedingTab = elementsPrecedingTab
-                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
-                .ToList();
+            var txElementsPrecedingTab = ConvertInline(wordDoc, settings, elementsPrecedingTab).ToList();
 
             // Process the tab element to get leader characters
             object? tabSpan = null;
@@ -12621,22 +12632,27 @@ namespace Docxodus
 
         /// <summary>The marker <see cref="WmlToHtmlConverterSettings.StampReferenceFields"/> puts around a
         /// REF / PAGEREF / NOTEREF result.</summary>
-        private static XElement ReferenceFieldSpan((string Kind, string Target, bool Hyperlink) field, object content) =>
+        /// <remarks><c>data-field-cached</c> is the text the session counts for <paramref name="source"/>: a tab or
+        /// break is one character there, and the rendered result shows none.</remarks>
+        private static XElement ReferenceFieldSpan((string Kind, string Target, bool Hyperlink) field,
+            IEnumerable<XElement> source, object content) =>
             new XElement(Xhtml.span,
                 new XAttribute("data-field", field.Kind),
                 new XAttribute("data-field-target", field.Target),
+                new XAttribute("data-field-cached", string.Concat(source.SelectMany(e => e.DescendantsAndSelf(W.r))
+                    .Where(r => !r.Ancestors().TakeWhile(a => a.Name != W.p).Any(a => a.Name == W.del || a.Name == W.moveFrom))
+                    .Select(DocxSession.RunText))),
                 field.Hyperlink ? new XAttribute("data-field-hyperlink", "true") : null,
                 content);
 
+        /// <param name="outerField">The field whose content <paramref name="elements"/> are, when its nested fields
+        /// are to be converted: a nested field's id is the greater.</param>
         private static object ConvertContentThatCanContainFields(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
-            IEnumerable<XElement> elements)
+            IEnumerable<XElement> elements, int? outerField = null)
         {
             var grouped = elements
-                .GroupAdjacent(e =>
-                {
-                    var stack = e.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>();
-                    return stack == null || !stack.Any() ? (int?)null : stack.Select(st => st.Id).Min();
-                })
+                .GroupAdjacent(e => e.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()?
+                    .Select(st => (int?)st.Id).Where(id => outerField == null || id > outerField).Min())
                 .ToList();
 
             var txformed = grouped
@@ -12676,18 +12692,23 @@ namespace Docxodus
                         var referenceContent = g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m));
                         if (!settings.ShowDeletedRevisionContent && FieldRetriever.IsDeletedField(g.First().Ancestors().Last(), (int)key))
                             return referenceContent;
-                        return PreserveJoinedFieldSources(InsideRevision(ReferenceFieldSpan(reference, referenceContent)));
+                        return PreserveJoinedFieldSources(InsideRevision(ReferenceFieldSpan(reference, g, referenceContent)));
                     }
 
                     // A HYPERLINK field already inside a w:hyperlink renders as that link's content:
                     // an anchor cannot hold another.
                     var parsed = FieldRetriever.ParseField(instrText);
+                    // (with StampReferenceFields a reference nested in the result, as the PAGEREF of a contents
+                    // entry is, is marked too)
+                    object Nested() => settings.StampReferenceFields
+                        ? ConvertContentThatCanContainFields(wordDoc, settings, g, key)
+                        : g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m));
                     if (parsed.FieldType != "HYPERLINK" || g.First().Ancestors(W.hyperlink).Any())
-                        return g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m));
+                        return Nested();
 
                     // Convert the field's own children, as a w:hyperlink does, so a tracked change,
                     // bookmark or comment range inside the link keeps its rendering.
-                    var content = g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m));
+                    var content = Nested();
                     var a = parsed.Arguments.Length > 0
                         ? new XElement(Xhtml.a, new XAttribute("href", parsed.Arguments[0]), content)
                         : new XElement(Xhtml.a, content);

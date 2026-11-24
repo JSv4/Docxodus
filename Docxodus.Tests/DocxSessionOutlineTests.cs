@@ -230,6 +230,47 @@ public class DocxSessionOutlineTests
         Assert.True(session.MoveBlockRange(AnchorOf(session, "B"), AnchorOf(session, "B"), AnchorOf(session, "A"), Position.Before).Success);
     }
 
+    private static string TextBox(string content) =>
+        "<w:r><w:pict><v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\"><v:textbox><w:txbxContent>" + content + "</w:txbxContent></v:textbox></v:shape></w:pict></w:r>";
+
+    [Fact]
+    public void OL012_ATextBoxInAHeading_IsNotItsText_AndItsSectionIsNotTheDocuments()
+    {
+        using var session = new DocxSession(Build(
+            $"<w:p><w:pPr><w:pStyle w:val=\"Ttulo1\"/></w:pPr><w:r><w:t>Chapter title</w:t></w:r>{TextBox(P("Sidebar", null, "<w:sectPr/>"))}</w:p>"
+            + P("a1") + P("B", "Ttulo1") + P("b1")));
+        var outline = session.ListOutline();
+        Assert.Equal(new[] { "Chapter title", "B" }, outline.Select(e => e.Text));
+
+        var res = session.MoveBlockRange(outline[0].AnchorId, outline[0].LastAnchorId, outline[1].LastAnchorId, Position.After);
+
+        Assert.True(res.Success, res.Error?.Message);
+        Assert.Equal(new[] { "B", "Chapter title" }, session.ListOutline().Select(e => e.Text));
+    }
+
+    [Fact]
+    public void OL013_ASectionBreakInATableCell_IsStillOne()
+    {
+        using var session = new DocxSession(Build(P("A", "Ttulo1") + P("B", "Ttulo1")
+            + "<w:tbl><w:tr><w:tc>" + P("cell", null, "<w:sectPr/>") + "</w:tc></w:tr></w:tbl>" + P("C", "Ttulo1")));
+        Assert.False(session.MoveBlockRange(AnchorOf(session, "A"), AnchorOf(session, "A"), AnchorOf(session, "C"), Position.After).Success);
+    }
+
+    [Fact]
+    public void OL014_MoveBlockRange_ReportsItsPatch()
+    {
+        using var session = new DocxSession(Build(P("A", "Ttulo1") + P("a1") + P("B", "Ttulo1")));
+        var before = session.Project().Markdown;
+
+        var res = session.MoveBlockRange(AnchorOf(session, "A"), AnchorOf(session, "a1"), AnchorOf(session, "B"), Position.After);
+
+        Assert.NotNull(res.Patch);
+        Assert.NotEqual(before, session.Project().Markdown);
+        Assert.Contains("a1", res.Patch!.Markdown);
+        using var quiet = new DocxSession(Build(P("A", "Ttulo1") + P("B", "Ttulo1")), new DocxSessionSettings { EmitMarkdownPatch = false });
+        Assert.Null(quiet.MoveBlockRange(AnchorOf(quiet, "A"), AnchorOf(quiet, "A"), AnchorOf(quiet, "B"), Position.After).Patch);
+    }
+
     [Fact]
     public void OL011_Outline_ABuiltInHeadingStyleWithoutALevel_HasItsOwn()
     {

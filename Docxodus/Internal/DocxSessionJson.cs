@@ -3740,11 +3740,16 @@ internal static class DocxSessionJson
             stops.Add(new ParagraphTabStop
             {
                 PositionTwips = position.Value,
-                Alignment = ParseToken(TryGetString(item, "alignment", null), "tab alignment", TabStopAlignment.Left, TabAlignmentTokens),
-                Leader = ParseToken(TryGetString(item, "leader", null), "tab leader", TabStopLeader.None, TabLeaderTokens),
+                Alignment = ParseToken(Token(item, "alignment"), "tab alignment", TabStopAlignment.Left, TabAlignmentTokens),
+                Leader = ParseToken(Token(item, "leader"), "tab leader", TabStopLeader.None, TabLeaderTokens),
             });
         }
         return stops;
+
+        static string? Token(JsonElement item, string name) =>
+            !item.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null ? null
+            : value.ValueKind == JsonValueKind.String ? value.GetString()
+            : throw new ArgumentException($"a tab stop's {name} must be a string");
     }
 
     public static string SerializeTabStopsInfo(TabStopsInfo? info)

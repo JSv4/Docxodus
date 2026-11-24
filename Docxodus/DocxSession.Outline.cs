@@ -32,7 +32,7 @@ public sealed partial class DocxSession
     public IReadOnlyList<OutlineEntry> ListOutline()
     {
         ThrowIfDisposed();
-        _ = AnchorIndex();
+        var anchors = BodyAnchors();
         var body = _doc!.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
         if (body is null) return Array.Empty<OutlineEntry>();
         var levels = new OutlineLevels(_doc.MainDocumentPart!);
@@ -46,7 +46,7 @@ public sealed partial class DocxSession
             var p = blocks[i];
             if (p.Name != W.p) continue;
             if (levels.Of(p) is not { } level) continue;
-            if (AnchorForElement(p) is not { } anchor) continue;
+            if (AnchorIn(anchors, p) is not { } anchor) continue;
             headings.Add((i, anchor, level + 1, p));
         }
         var result = new List<OutlineEntry>(headings.Count);
@@ -59,8 +59,8 @@ public sealed partial class DocxSession
             // (the last block with an anchor: a section-only paragraph has one too)
             string last = anchor.Id;
             for (int j = end; j > index; j--)
-                if (AnchorForElement(blocks[j]) is { } a) { last = a.Id; break; }
-            result.Add(new OutlineEntry(anchor.Id, level, VisibleText(p),
+                if (AnchorIn(anchors, blocks[j]) is { } a) { last = a.Id; break; }
+            result.Add(new OutlineEntry(anchor.Id, level, ParagraphText(p),
                 (string?)p.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val), last));
         }
         return result;
@@ -216,7 +216,7 @@ public sealed partial class DocxSession
             if (MoveSourceRejection(block) is { } why)
                 return EditResult.Fail(EditErrorCode.InvalidPosition, why, firstAnchorId);
         if (children.Skip(Math.Min(s0, t)).Take(Math.Max(s1, t) - Math.Min(s0, t) + 1)
-            .Any(c => c.DescendantsAndSelf(W.sectPr).Any(s => s.Parent?.Name == W.pPr)))
+            .Any(c => StoryParagraphs(c).Any(p => p.Element(W.pPr)?.Element(W.sectPr) is not null)))
             return EditResult.Fail(EditErrorCode.InvalidPosition, "cannot move blocks across a section-break paragraph", firstAnchorId);
 
         // A range or field must keep its two ends in order and the same distance apart.
@@ -252,10 +252,12 @@ public sealed partial class DocxSession
             if (slot < rest.Count) rest[slot].AddBeforeSelf(nodes);
             else rest[^1].AddAfterSelf(nodes);
             InvalidateProjectionCache();
+            var anchors = BodyAnchors();
             return new EditResult
             {
                 Success = true,
-                Modified = run.SelectMany(TopLevelBlocks).Select(AnchorForElement).OfType<Anchor>().ToArray(),
+                Modified = run.SelectMany(TopLevelBlocks).Select(b => AnchorIn(anchors, b)).OfType<Anchor>().ToArray(),
+                Patch = PatchFor(firstTarget),
             };
         }
         catch (Exception ex)
@@ -263,6 +265,25 @@ public sealed partial class DocxSession
             return FailInternal(ex, firstAnchorId);
         }
     }
+
+    /// <summary>The main document's anchors by unid, for an operation that looks up many blocks: each
+    /// <see cref="AnchorForElement"/> is a scan of the whole index.</summary>
+    private Dictionary<string, Anchor> BodyAnchors()
+    {
+        var part = _doc!.MainDocumentPart?.Uri.ToString();
+        var anchors = new Dictionary<string, Anchor>(StringComparer.Ordinal);
+        foreach (var target in AnchorIndex().Values)
+            if (target.PartUri == part) anchors.TryAdd(target.Unid, target.Anchor);
+        return anchors;
+    }
+
+    private static Anchor? AnchorIn(Dictionary<string, Anchor> anchors, XElement block) =>
+        (string?)block.Attribute(PtOpenXml.Unid) is { } unid && anchors.TryGetValue(unid, out var anchor) ? anchor : null;
+
+    /// <summary>The story's own paragraphs in <paramref name="root"/>, table cells included: a text box's
+    /// are another story, whose section properties break no section of this one.</summary>
+    private static IEnumerable<XElement> StoryParagraphs(XElement root) =>
+        root.DescendantsAndSelf(W.p).Where(p => !p.Ancestors().Any(a => a.Name == W.txbxContent));
 
     /// <summary>A range marker (or a proofing mark) that is itself a child of the body or of a block
     /// content control, so not a block.</summary>

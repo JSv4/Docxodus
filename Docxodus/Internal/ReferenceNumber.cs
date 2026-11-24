@@ -32,7 +32,8 @@ internal static class ReferenceNumber
         if (ListItemRetriever.RetrieveListItemLevels(doc, target, numeralsOnly, settings) is not { } number) return Unnumbered;
         int own = number.Levels.Count - 1;
         if (numeralsOnly && !number.Levels[own].IsPlain) return null;
-        string ownText = WithoutPeriod(number.Levels[own].Text);
+        if (number.Levels[own].Text is not { Length: > 0 } ownNumber) return Unnumbered;
+        string ownText = WithoutPeriod(ownNumber);
         if (numberSwitch == NoContext || own == 0 || number.Levels[own].ShowsOtherLevels) return ownText;
 
         int top = own;
@@ -50,7 +51,7 @@ internal static class ReferenceNumber
         for (int level = own - 1; level >= top; level--)
         {
             var upper = number.Levels[level];
-            if (!upper.IsPlain || !number.Levels[level + 1].IsPlain || !JoinablePattern.IsMatch(upper.Text)) return null;
+            if (upper.Text is null || !upper.IsPlain || !number.Levels[level + 1].IsPlain || !JoinablePattern.IsMatch(upper.Text)) return null;
             text = (char.IsLetterOrDigit(text[0]) ? upper.Text : WithoutPeriod(upper.Text)) + text;
         }
         return text;
