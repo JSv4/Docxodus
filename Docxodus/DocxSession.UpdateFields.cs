@@ -241,7 +241,9 @@ public sealed partial class DocxSession
             settled[field] = false;
             if (!field.StartsIn(inRange)) return settled[field] = true;
             if (depth >= MaxDepth) return false;
-            if (field.Tokens.Length > 1 && ResolveBookmarkPair(field.Tokens[1], hyperlinkTarget: true, null, out var start, out var end) is null
+            // (a number or a position is not the bookmark's text, so nothing inside it matters)
+            if (field.Tokens.Length > 1 && !field.Tokens.Skip(2).Any(t => t.ToLowerInvariant() is "\\n" or "\\r" or "\\w" or "\\p")
+                && ResolveBookmarkPair(field.Tokens[1], hyperlinkTarget: true, null, out var start, out var end) is null
                 && start.Ancestors(W.p).FirstOrDefault() is { } paragraph)
             {
                 bool sound = true;
@@ -339,7 +341,7 @@ public sealed partial class DocxSession
             counters.TryGetValue(id, out var counter);
             int value = counter.Value;
             string format = "Arabic";
-            bool hidden = false, repeat = false, known = true;
+            bool hidden = false, repeat = false, known = true, formatted = false;
             int? reset = null;
             for (int i = 2; i < field.Tokens.Length; i++)
             {
@@ -351,6 +353,7 @@ public sealed partial class DocxSession
                 else if (token == "\\n") continue;
                 else if (token == "\\*" && i + 1 < field.Tokens.Length)
                 {
+                    formatted = true; // (a general format shows a number that \h would hide)
                     if (!IsKeepFormat(field.Tokens[++i])) format = field.Tokens[i];
                 }
                 else if (token.StartsWith("\\r", StringComparison.Ordinal) && Number(i + 1) is { } restart)
@@ -368,7 +371,7 @@ public sealed partial class DocxSession
             value = reset ?? (repeat ? Math.Max(value, 1) : value + 1);
             counters[id] = (value, place[field.Begin]);
             if (!known || field.Locked || !field.StartsIn(inRange) || FormatSequence(value, format) is not { } shown) continue;
-            update.Set(field, hidden ? string.Empty : shown);
+            update.Set(field, hidden && !formatted ? string.Empty : shown);
         }
     }
 
@@ -432,11 +435,18 @@ public sealed partial class DocxSession
         public bool StartsIn(HashSet<XElement>? paragraphs) => paragraphs is null || paragraphs.Contains(Paragraph)
             || (Kind == "TOC" && Paragraphs().Any(paragraphs.Contains));
 
-        /// <summary>The nodes of the cached result, or null when it runs over paragraphs.</summary>
+        /// <summary>The nodes of the cached result, or null when it is not whole nodes of one parent: it runs
+        /// over paragraphs, or shares a run with a field character.</summary>
         private List<XNode>? Result() => !Complex ? Begin.Nodes().ToList()
+            : End is null || !Opens(End, "end") ? null
             : Separate is null ? new List<XNode>()
-            : End is null || !ReferenceEquals(Separate.Parent, End.Parent) ? null
+            : !Closes(Separate, "separate") || !ReferenceEquals(Separate.Parent, End.Parent) ? null
             : Separate.NodesAfterSelf().TakeWhile(n => !ReferenceEquals(n, End)).ToList();
+
+        /// <summary>The run starts (or ends) with that field character, with nothing of it outside the field's part.</summary>
+        public static bool Opens(XElement run, string type) => IsChar(run.Elements().FirstOrDefault(e => e.Name != W.rPr), type);
+        public static bool Closes(XElement run, string type) => IsChar(run.Elements().LastOrDefault(), type);
+        private static bool IsChar(XElement? e, string type) => e?.Name == W.fldChar && (string?)e.Attribute(W.fldCharType) == type;
 
         public string ResultText() => string.Concat((Result() ?? new List<XNode>()).OfType<XElement>().Select(VisibleText));
 
@@ -446,7 +456,6 @@ public sealed partial class DocxSession
         /// <paramref name="changing"/> is called before anything changes.</summary>
         public bool? SetResult(string text, Action changing)
         {
-            if (Complex && End is null) return null;
             if (Result() is not { } result || result.OfType<XElement>().Any(HoldsMoreThanText)) return null;
             var dirty = (Complex ? Begin.Element(W.fldChar) : Begin)?.Attribute(W.dirty);
             bool shown = ResultText() == text;
@@ -560,8 +569,10 @@ public sealed partial class DocxSession
         if (toc.Locked || !toc.Complex || toc.End is null || toc.Separate is null || TocSwitches.Parse(toc.Tokens) is not { } switches) return;
         var paragraphs = toc.Paragraphs().ToList();
         XElement first = paragraphs[0], last = paragraphs[^1];
-        // Only a table that is whole paragraphs, one after another: nothing else goes with them.
-        if (!ReferenceEquals(toc.Begin.Parent, first) || !ReferenceEquals(toc.End.Parent, last) || !ReferenceEquals(first.Parent, last.Parent)
+        // Only a table that is whole paragraphs, one after another, and whole runs in them: nothing else goes
+        // with them.
+        if (!FoundField.Opens(toc.Begin, "begin") || !FoundField.Opens(toc.End, "end") || !FoundField.Closes(toc.End, "end")
+            || !ReferenceEquals(toc.Begin.Parent, first) || !ReferenceEquals(toc.End.Parent, last) || !ReferenceEquals(first.Parent, last.Parent)
             || first.ElementsAfterSelf().TakeWhile(e => !ReferenceEquals(e, last) && !ReferenceEquals(first, last)).Any(e => e.Name != W.p)
             || paragraphs.SkipLast(1).Any(p => p.Element(W.pPr)?.Element(W.sectPr) is not null))
             return;

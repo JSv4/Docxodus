@@ -636,6 +636,51 @@ public class DocxSessionUpdateFieldsTests
         Assert.StartsWith("Opening", Lines(session)[0]);
     }
 
+    /// <summary>Some producers write a whole field, or a field and the text beside it, in one run.</summary>
+    [Theory]
+    [InlineData("<w:r><w:fldChar w:fldCharType=\"begin\"/><w:instrText> REF b </w:instrText><w:fldChar w:fldCharType=\"separate\"/><w:t>Old</w:t><w:fldChar w:fldCharType=\"end\"/></w:r>")]
+    [InlineData("<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText> REF b </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/><w:t>Old</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r>")]
+    [InlineData("<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText> REF b </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>Old</w:t><w:fldChar w:fldCharType=\"end\"/></w:r>")]
+    [InlineData("<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText> REF b </w:instrText><w:fldChar w:fldCharType=\"end\"/></w:r>")]
+    public void UF037_AFieldThatSharesARun_IsLeftAlone_WithTheTextAfterIt(string field)
+    {
+        using var session = Open(P(Marked("b", 1, R("New"))) + P(R("before ") + field + R(" after")));
+        var before = Body(session).ToString();
+        Assert.True(session.UpdateFields().Success);
+        Assert.Equal(before, Body(session).ToString());
+        Assert.True(AsksForUpdate(session));
+    }
+
+    [Theory]
+    [InlineData("<w:r><w:t>Contents: </w:t><w:fldChar w:fldCharType=\"begin\"/></w:r>", "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>")]
+    [InlineData("<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>", "<w:r><w:fldChar w:fldCharType=\"end\"/><w:t> after</w:t></w:r>")]
+    [InlineData("<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>", "<w:r><w:t>last entry</w:t><w:fldChar w:fldCharType=\"end\"/></w:r>")]
+    public void UF038_ATableThatSharesARunWithOtherText_IsLeftAlone(string begin, string end)
+    {
+        using var session = Open(P(begin + "<w:r><w:instrText> TOC \\o </w:instrText></w:r>" + Char("separate") + R("Old"), "TOC1") + P(end) + P(R("Intro"), "Heading1"));
+        var before = Body(session).ToString();
+        Assert.True(session.UpdateFields().Success);
+        Assert.Equal(before, Body(session).ToString());
+    }
+
+    [Fact]
+    public void UF039_ANumberOrPositionReferenceToItsOwnParagraph_IsUpdated()
+    {
+        const string numbering = "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"4\"/><w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"%1.\"/></w:lvl></w:abstractNum>"
+            + "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+        using var session = Open(P(Marked("self", 1, R("this section ") + Field(" REF self \\n ", "9")), null, "<w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr>"), numbering: numbering);
+        Assert.True(session.UpdateFields().Success);
+        Assert.Equal(new[] { "this section 4" }, Lines(session));
+    }
+
+    [Fact]
+    public void UF040_AHiddenSequenceNumber_ShowsWithAGeneralFormat()
+    {
+        using var session = Open(P(Field(" SEQ Figure \\h ", "9")) + P(Field(" SEQ Figure \\h \\* ARABIC ", "9")) + P(Field(" SEQ Figure ", "9")));
+        Assert.True(session.UpdateFields().Success);
+        Assert.Equal(new[] { "", "2", "3" }, Lines(session));
+    }
+
     [Fact]
     public void UF025_TheResultSaysWhatChanged_AndNoChangeTakesNoUndoStep()
     {
