@@ -199,11 +199,11 @@ test.describe('DocxSession (WASM bridge)', () => {
       const session = (window as any).Docxodus.openTypedSession(new Uint8Array(bytes)) as DocxSession;
       try {
         const [target, from] = Object.entries(session.project().anchorIndex).filter(([, a]) => a.scope === 'body' && a.kind === 'p').map(([id]) => id);
-        session.replaceText(target, 'Old');
+        session.replaceText(target, 'Old name');
         const bookmark = session.addReferenceBookmark(target).bookmarkName!;
         session.insertCrossReference(from, 0, bookmark);
         session.insertCrossReference(from, 0, bookmark, { pageNumber: true });
-        session.replaceTextAtSpan(target, 0, 3, 'New');
+        session.replaceTextRange(target, 'Old', 'New');
         const updated = session.updateFields({ pages: { [target]: '9' } });
         const xml = session.raw.getXml(from);
         let malformed = '';
@@ -213,7 +213,7 @@ test.describe('DocxSession (WASM bridge)', () => {
     }, Array.from(readTestFile('HC001-5DayTourPlanTemplate.docx')));
     expect(result.updated).toBe(true);
     expect(result.modified).toEqual([result.from]);
-    expect(result.xml).toContain('>New<');
+    expect(result.xml).toContain('>New name<');
     expect(result.xml).toContain('>9<');
     expect(result.again).toBe(0);
     expect(result.malformed).not.toBe('');
