@@ -521,6 +521,62 @@ public class DocxSessionUpdateFieldsTests
     }
 
     [Fact]
+    public void UF027_AHeadingsOwnFields_AreUpdatedBeforeTheTableCopiesIt()
+    {
+        using var session = Open(Contents(" TOC \\o \"1-3\" ", Closing(), R("x"))
+            + P(R("Schedule ") + Field(" SEQ Schedule ", "9") + R(" of ") + Field(" REF b ", "Old"), "Heading1") + P(Marked("b", 1, R("Fees"))));
+        Assert.True(session.UpdateFields().Success);
+        Assert.Equal(new[] { "Schedule 1 of Fees\t1", "", "Schedule 1 of Fees", "Fees" }, Lines(session));
+    }
+
+    [Fact]
+    public void UF028_TablesOfContentsOnly_CopiesTheHeadingAsItIs()
+    {
+        using var session = Open(Contents(" TOC \\o \"1-3\" ", Closing(), R("x")) + P(R("Schedule ") + Field(" SEQ Schedule ", "9"), "Heading1"));
+        Assert.True(session.UpdateFields(new UpdateFieldsOptions { TablesOfContentsOnly = true }).Success);
+        Assert.Equal(new[] { "Schedule 9\t1", "", "Schedule 9" }, Lines(session));
+    }
+
+    [Fact]
+    public void UF029_ACallThatChangesNothing_KeepsTheRedoHistory()
+    {
+        using var session = Open(P(Marked("b", 1, R("Same"))) + P(Field(" REF b ", "Same") + Field(" DATE ", "today")) + P(R("edit me")));
+        var edited = BodyParagraphs(session)[2];
+        Assert.True(session.ReplaceText(edited, "edited").Success);
+        Assert.True(session.Undo());
+
+        Assert.True(session.UpdateFields().Success);
+
+        Assert.True(session.Redo());
+        Assert.Equal("edited", Lines(session)[2]);
+    }
+
+    [Theory]
+    [InlineData("{\"tablesOfContentsOnly\":\"true\"}")]
+    [InlineData("{\"tablesOfContentsOnly\":1}")]
+    public void UF030_AScopeThatIsNotABoolean_IsRefused(string json) =>
+        Assert.Throws<ArgumentException>(() => Docxodus.Internal.DocxSessionJson.ParseUpdateFieldsOptions(json));
+
+    [Fact]
+    public void UF031_APageThatXmlCannotHold_IsRefused()
+    {
+        using var session = Open(Contents(" TOC \\o \"1-3\" ", Closing(), R("x")) + P(R("Intro"), "Heading1"));
+        long version = session.Version;
+        Assert.False(session.UpdateFields(new UpdateFieldsOptions
+        {
+            Pages = new Dictionary<string, string> { [session.ListOutline()[0].AnchorId] = "7\u0001" },
+        }).Success);
+        Assert.Equal(version, session.Version);
+    }
+
+    [Fact]
+    public void UF032_AnUpdateReportsItsPatch()
+    {
+        using var session = Open(P(Marked("b", 1, R("New"))) + P(Field(" REF b ", "Old")));
+        Assert.Contains("New", session.UpdateFields().Patch!.Markdown);
+    }
+
+    [Fact]
     public void UF025_TheResultSaysWhatChanged_AndNoChangeTakesNoUndoStep()
     {
         using var session = Open(Contents(" TOC \\o \"1-3\" ", Closing(), R("x"), R("y")) + P(R("Intro"), "Heading1"));

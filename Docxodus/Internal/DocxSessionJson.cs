@@ -558,7 +558,10 @@ internal static class DocxSessionJson
                     _ => throw new ArgumentException($"pages.{entry.Name} must be a string or a number"),
                 };
         }
-        var tocOnly = TryGetBoolNullable(root, "tablesOfContentsOnly") ?? false;
+        bool tocOnly = false;
+        if (root.TryGetProperty("tablesOfContentsOnly", out var only) && only.ValueKind != JsonValueKind.Null)
+            tocOnly = only.ValueKind is JsonValueKind.True or JsonValueKind.False ? only.GetBoolean()
+                : throw new ArgumentException("tablesOfContentsOnly must be a boolean");
         if (range is null && pages is null && !tocOnly) return null;
         return new UpdateFieldsOptions { Range = range, Pages = pages, TablesOfContentsOnly = tocOnly };
     }

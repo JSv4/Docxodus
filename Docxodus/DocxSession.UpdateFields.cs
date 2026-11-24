@@ -92,51 +92,65 @@ public sealed partial class DocxSession
 
         var pages = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (key, value) in o.Pages ?? new Dictionary<string, string>())
+        {
+            if (XmlText.ValidatePayload(value, key) is { } textError) return EditResult.Fail(textError);
             pages[key.Contains(':') ? key[(key.LastIndexOf(':') + 1)..] : key] = value;
+        }
 
         // (no field this updates: no edit, and no undo step, as when printing a document without any)
         var updatable = o.TablesOfContentsOnly ? new[] { "TOC" } : new[] { "TOC", "REF", "PAGEREF", "SEQ" };
         if (!ScanFields(body).Any(f => updatable.Contains(f.Kind) && f.StartsIn(inRange)))
             return new EditResult { Success = true };
 
-        _history.RecordPreOp(TakeSnapshot());
+        // (the undo step is taken just before the first change: one taken and dropped again would have
+        // emptied the redo history and pushed out the oldest undo step)
+        var update = new FieldUpdate(pages, () => _history.RecordPreOp(TakeSnapshot()));
         try
         {
-            var update = new FieldUpdate(pages);
-            foreach (var toc in ScanFields(body).Where(f => f.Kind == "TOC" && f.StartsIn(inRange)).ToList())
-                RebuildTableOfContents(body, toc, update);
-            if (update.Changed) InvalidateProjectionCache();
-
-            if (!o.TablesOfContentsOnly)
+            void References(string kind)
             {
-                var fields = ScanFields(body);
-                UpdateSequences(body, fields, inRange, update);
-                foreach (var field in fields.Where(f => f.Kind is "REF" or "PAGEREF" && f.StartsIn(inRange)))
+                foreach (var field in ScanFields(body).Where(f => f.Kind == kind && f.StartsIn(inRange)))
                     if (field.Begin.Ancestors(W.body).Any() && ReferenceResult(field, update) is { } result)
                         update.Set(field, result);
+            }
+            // The headings' own fields first: a table of contents copies their text. Page references last:
+            // its entries bring their own.
+            if (!o.TablesOfContentsOnly)
+            {
+                UpdateSequences(body, ScanFields(body), inRange, update);
+                References("REF");
+                if (update.Changed) InvalidateProjectionCache();
+            }
+            foreach (var toc in ScanFields(body).Where(f => f.Kind == "TOC" && f.StartsIn(inRange)).ToList())
+                RebuildTableOfContents(body, toc, update);
+            if (!o.TablesOfContentsOnly)
+            {
+                References("PAGEREF");
                 update.CopyToFallbacks(body);
-                if (inRange is null && !FieldsLeft(main, body, update) && ClearFieldUpdateOnOpen(main)) update.Changed = true;
+                if (inRange is null && !FieldsLeft(main, body, update)) ClearFieldUpdateOnOpen(main, update);
             }
 
-            if (!update.Changed)
-            {
-                _ = _history.PopForUndo();
-                return new EditResult { Success = true };
-            }
+            if (!update.Changed) return new EditResult { Success = true };
             InvalidateProjectionCache();
+            var anchors = BodyAnchors();
             Anchor[] Anchors(IEnumerable<XElement> paragraphs) => paragraphs.Distinct()
-                .Where(p => p.Ancestors(W.body).Any()).Select(AnchorForElement).OfType<Anchor>().ToArray();
+                .Where(p => p.Ancestors(W.body).Any()).Select(p => AnchorIn(anchors, p)).OfType<Anchor>().ToArray();
+            var created = Anchors(update.Created);
+            var modified = Anchors(update.Modified.Where(p => !update.Created.Contains(p)));
             return new EditResult
             {
                 Success = true,
-                Created = Anchors(update.Created),
+                Created = created,
                 Removed = update.Removed.ToArray(),
-                Modified = Anchors(update.Modified.Where(p => !update.Created.Contains(p))),
+                Modified = modified,
+                Patch = created.Concat(modified).Select(a => FindAnchor(a.Id)).FirstOrDefault(t => t is not null) is { } touched
+                    ? PatchFor(touched) : null,
             };
         }
         catch (Exception ex)
         {
-            return FailInternal(ex);
+            // (nothing was changed before the undo step, so without one there is nothing to take back)
+            return update.Changed ? FailInternal(ex) : EditResult.Fail(EditErrorCode.InternalError, ex.Message);
         }
     }
 
@@ -144,11 +158,25 @@ public sealed partial class DocxSession
     private sealed class FieldUpdate
     {
         private readonly IReadOnlyDictionary<string, string> _pages;
+        private readonly Action _recordUndoStep;
         private readonly HashSet<XElement> _current = new();
 
-        public FieldUpdate(IReadOnlyDictionary<string, string> pages) => _pages = pages;
+        public FieldUpdate(IReadOnlyDictionary<string, string> pages, Action recordUndoStep)
+        {
+            _pages = pages;
+            _recordUndoStep = recordUndoStep;
+        }
 
-        public bool Changed;
+        public bool Changed { get; private set; }
+
+        /// <summary>The document is about to change: the first time, take the undo step.</summary>
+        public void Changing()
+        {
+            if (Changed) return;
+            _recordUndoStep();
+            Changed = true;
+        }
+
         public readonly HashSet<XElement> Created = new();
         public readonly List<XElement> Modified = new();
         public readonly List<Anchor> Removed = new();
@@ -162,11 +190,9 @@ public sealed partial class DocxSession
 
         public void Set(FoundField field, string result)
         {
-            if (field.SetResult(result) is not { } changed) return;
+            if (field.SetResult(result, Changing) is not { } changed) return;
             MarkCurrent(field.Begin);
-            if (!changed) return;
-            Changed = true;
-            Modified.Add(field.Paragraph);
+            if (changed) Modified.Add(field.Paragraph);
         }
 
         /// <summary>A drawing's fallback holds a copy of its text: give each field in it the result its
@@ -180,7 +206,7 @@ public sealed partial class DocxSession
                 var to = ScanFields(fallback);
                 if (from.Count == 0 || !from.Select(f => f.Instr).SequenceEqual(to.Select(f => f.Instr))) continue;
                 foreach (var (source, copy) in from.Zip(to))
-                    if (IsCurrent(source) && copy.SetResult(source.ResultText()) == true) Changed = true;
+                    if (IsCurrent(source)) copy.SetResult(source.ResultText(), Changing);
             }
         }
     }
@@ -381,15 +407,18 @@ public sealed partial class DocxSession
 
         /// <summary>Replace the cached result with one run of <paramref name="text"/>, keeping the
         /// first result run's formatting; the field's dirty mark goes. True when that changed the field,
-        /// false when it already shows the text, null when the result is not one to replace.</summary>
-        public bool? SetResult(string text)
+        /// false when it already shows the text, null when the result is not one to replace.
+        /// <paramref name="changing"/> is called before anything changes.</summary>
+        public bool? SetResult(string text, Action changing)
         {
             if (Complex && End is null) return null;
             if (Result() is not { } result || result.OfType<XElement>().Any(HoldsMoreThanText)) return null;
             var dirty = (Complex ? Begin.Element(W.fldChar) : Begin)?.Attribute(W.dirty);
-            bool wasDirty = dirty is not null;
+            bool shown = ResultText() == text;
+            if (shown && dirty is null) return false;
+            changing();
             dirty?.Remove();
-            if (ResultText() == text) return wasDirty;
+            if (shown) return true;
             var rPr = result.OfType<XElement>().SelectMany(e => e.DescendantsAndSelf(W.r)).Select(r => r.Element(W.rPr)).FirstOrDefault(r => r is not null)
                 ?? (Complex ? Begin.Element(W.rPr) : null);
             foreach (var node in result) node.Remove();
@@ -505,6 +534,8 @@ public sealed partial class DocxSession
         var content = paragraphs.SelectMany(p => p.Elements()).Where(e => !before.Contains(e) && !after.Contains(e)).ToList();
         if (content.Any(HoldsMoreThanText)) return;
 
+        update.Changing();
+        var anchors = BodyAnchors();
         var inTable = new HashSet<XElement>(paragraphs);
         var levels = new OutlineLevels(_doc!.MainDocumentPart!);
         var shownPages = ScanFields(body).Where(f => f.Kind == "PAGEREF" && f.Tokens.Length > 1 && inTable.Contains(f.Paragraph))
@@ -516,8 +547,8 @@ public sealed partial class DocxSession
         {
             int? level = (levels.BuiltInHeading(heading) ?? (switches.OutlineLevels ? levels.Of(heading) : null)) + 1;
             if (level is null || level < switches.From || level > switches.To) continue;
-            var text = Regex.Replace(VisibleText(heading), @"\s+", " ").Trim();
-            if (text.Length == 0 || AnchorForElement(heading) is not { } anchor) continue;
+            var text = Regex.Replace(ParagraphText(heading), @"\s+", " ").Trim();
+            if (text.Length == 0 || AnchorIn(anchors, heading) is not { } anchor) continue;
             // A hidden _Toc bookmark over the heading's text; one there already is kept, first the one the
             // table used (Word leaves a heading several over time).
             var bookmark = bookmarks.FirstOrDefault(b => shownPages.ContainsKey(b.Name) && b.IsPaired && b.IsValid
@@ -586,7 +617,7 @@ public sealed partial class DocxSession
         // where the document's text (and often a section break) goes on.
         bool keepsClosing = !ReferenceEquals(first, last)
             && !toc.End.ElementsBeforeSelf().Any(e => e.Name != W.pPr && VisibleText(e).Length > 0);
-        update.Removed.AddRange(paragraphs.Where(p => !keepsClosing || !ReferenceEquals(p, last)).Select(AnchorForElement).OfType<Anchor>());
+        update.Removed.AddRange(paragraphs.Where(p => !keepsClosing || !ReferenceEquals(p, last)).Select(p => AnchorIn(anchors, p)).OfType<Anchor>());
         foreach (var e in before) e.Remove();
         if (keepsClosing)
             foreach (var e in toc.End.ElementsBeforeSelf().Where(e => e.Name != W.pPr).ToList()) e.Remove();
@@ -610,7 +641,7 @@ public sealed partial class DocxSession
         foreach (var p in paragraphs)
             if (!keepsClosing || !ReferenceEquals(p, last)) p.Remove();
 
-        update.Changed = true;
+        InvalidateProjectionCache();
         update.MarkCurrent(begin);
         foreach (var p in built) update.Created.Add(p);
         if (keepsClosing) update.Modified.Add(last);
@@ -646,9 +677,9 @@ public sealed partial class DocxSession
         return id;
     }
 
-    private bool StyleHasRightTab(string styleId) => FormattingAssembler.ResolveEffectiveParagraphProperties(_doc!,
-            new XElement(W.p, new XElement(W.pPr, new XElement(W.pStyle, new XAttribute(W.val, styleId)))))
-        .Element(W.tabs)?.Elements(W.tab).Any(t => (string?)t.Attribute(W.val) is "right" or "end") == true;
+    private bool StyleHasRightTab(string styleId) => FormattingAssembler.ResolveEffectiveTabs(_doc!,
+            new XElement(W.p, new XElement(W.pPr, new XElement(W.pStyle, new XAttribute(W.val, styleId)))), withDirect: false)
+        ?.Elements(W.tab).Any(t => (string?)t.Attribute(W.val) is "right" or "end") == true;
 
     /// <summary>The dotted right tab Word gives a contents entry: half a point inside the text width of
     /// the section the table is in.</summary>
@@ -662,14 +693,13 @@ public sealed partial class DocxSession
     }
 
     /// <summary>The cached results are current: the document no longer asks Word to update its
-    /// fields when it is opened. True when it did ask.</summary>
-    private static bool ClearFieldUpdateOnOpen(MainDocumentPart main)
+    /// fields when it is opened.</summary>
+    private static void ClearFieldUpdateOnOpen(MainDocumentPart main, FieldUpdate update)
     {
         var part = main.DocumentSettingsPart;
-        var update = part?.GetXDocument().Root?.Element(W.updateFields);
-        if (update is null) return false;
-        update.Remove();
-        part!.PutXDocument();
-        return true;
+        if (part?.GetXDocument().Root?.Element(W.updateFields) is not { } request) return;
+        update.Changing();
+        request.Remove();
+        part.PutXDocument();
     }
 }
