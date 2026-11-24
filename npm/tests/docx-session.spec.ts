@@ -174,6 +174,26 @@ test.describe('DocxSession (WASM bridge)', () => {
     expect(result.refused).toBe('invalid_position');
   });
 
+  test('a reference bookmark and the cross-references to it', async ({ page }) => {
+    const result = await page.evaluate((bytes: number[]) => {
+      const session = (window as any).Docxodus.openTypedSession(new Uint8Array(bytes)) as DocxSession;
+      try {
+        const [target, from] = Object.entries(session.project().anchorIndex).filter(([, a]) => a.scope === 'body' && a.kind === 'p').map(([id]) => id);
+        const made = session.addReferenceBookmark(target);
+        const again = session.addReferenceBookmark(target);
+        const page7 = session.insertCrossReference(from, 0, made.bookmarkName!, { pageNumber: true, cachedPage: '7', hyperlink: true });
+        const number = session.insertCrossReference(from, 0, made.bookmarkName!, { numberFullContext: true });
+        return { name: made.bookmarkName, same: again.bookmarkName === made.bookmarkName, page: page7.success, number: number.success, xml: session.raw.getXml(from),
+          refused: session.insertCrossReference(from, 0, 'missing').error?.code };
+      } finally { session.close(); }
+    }, Array.from(readTestFile('HC001-5DayTourPlanTemplate.docx')));
+    expect(result.name).toMatch(/^_Ref\d{9}$/);
+    expect(result.same && result.page && result.number).toBe(true);
+    expect(result.xml).toContain(`PAGEREF ${result.name} \\h`);
+    expect(result.xml).toContain(`REF ${result.name} \\w`);
+    expect(result.refused).toBe('missing_bookmark_target');
+  });
+
   test('block insertion refuses cell anchors before recording history', async ({ page }) => {
     const results = await page.evaluate((bytes: number[]) => {
       const open = (input: Uint8Array) => (window as any).Docxodus.openTypedSession(input) as DocxSession;

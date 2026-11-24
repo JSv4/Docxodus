@@ -1470,6 +1470,13 @@ class DocxSession:
     def remove_bookmark(self, name: str) -> EditResult:
         return EditResult._from_wire(self._call("remove_bookmark", {"name": name}))
 
+    def add_reference_bookmark(self, anchor_id: str) -> EditResult:
+        """The hidden ``_Ref`` bookmark over the whole paragraph ``anchor_id`` (its text, not its
+        list number), what Word makes for a cross-reference to a heading or numbered item. One
+        that already spans it is reused and nothing changes; otherwise it is one undo step. The
+        name is in ``EditResult.bookmark_name``, ready for ``insert_cross_reference``."""
+        return EditResult._from_wire(self._call("add_reference_bookmark", {"anchorId": anchor_id}))
+
     def list_annotations(self) -> tuple[DocumentAnnotation, ...]:
         result = self._call("list_annotations", {})
         return tuple(DocumentAnnotation._from_wire(a) for a in result)

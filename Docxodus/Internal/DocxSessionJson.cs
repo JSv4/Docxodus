@@ -34,6 +34,9 @@ internal sealed record EditorRenderOptions
     /// session index the preceding mutation just invalidated); a windowed initial mount turns it
     /// on so its blocks are attribute-for-attribute the full render's.</summary>
     public bool StampAnchors { get; init; }
+    /// <summary>Mark REF / PAGEREF / NOTEREF results with <c>data-field</c> (and their target
+    /// bookmark) so the editor keeps each cross-reference whole and can follow it.</summary>
+    public bool ReferenceFields { get; init; }
 }
 
 /// <summary>
@@ -512,7 +515,8 @@ internal static class DocxSessionJson
     }
 
     /// <summary>Parse an <c>insertCrossReference</c> options object, <c>{ referenceNumber?,
-    /// hyperlink?, includePosition? }</c>. Each switch is on only when it is literally true.</summary>
+    /// hyperlink?, includePosition?, pageNumber?, numberNoContext?, numberFullContext?,
+    /// cachedPage? }</c>. Each switch is on only when it is literally true.</summary>
     public static CrossReferenceOptions ParseCrossReferenceOptions(JsonElement options)
     {
         if (options.ValueKind != JsonValueKind.Object) return new CrossReferenceOptions();
@@ -524,6 +528,14 @@ internal static class DocxSessionJson
                 && link.ValueKind == JsonValueKind.True,
             IncludePosition = options.TryGetProperty("includePosition", out var position)
                 && position.ValueKind == JsonValueKind.True,
+            PageNumber = options.TryGetProperty("pageNumber", out var page)
+                && page.ValueKind == JsonValueKind.True,
+            NumberNoContext = options.TryGetProperty("numberNoContext", out var noContext)
+                && noContext.ValueKind == JsonValueKind.True,
+            NumberFullContext = options.TryGetProperty("numberFullContext", out var fullContext)
+                && fullContext.ValueKind == JsonValueKind.True,
+            CachedPage = options.TryGetProperty("cachedPage", out var cachedPage)
+                && cachedPage.ValueKind == JsonValueKind.String ? cachedPage.GetString() : null,
         };
     }
 
@@ -788,6 +800,7 @@ internal static class DocxSessionJson
             RenderTrackedChanges = TryGetBoolNullable(root, "renderTrackedChanges") ?? options.RenderTrackedChanges,
             Comments = TryGetBoolNullable(root, "comments") ?? options.Comments,
             StampAnchors = TryGetBoolNullable(root, "stampAnchors") ?? options.StampAnchors,
+            ReferenceFields = TryGetBoolNullable(root, "referenceFields") ?? options.ReferenceFields,
         };
     }
 

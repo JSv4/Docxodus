@@ -3130,4 +3130,27 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Equal("missing_bookmark_target",
             missing.GetProperty("error").GetProperty("code").GetString());
     }
+
+    [Fact]
+    public void MCP156_AddReferenceBookmark_ThenPageReference()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Assert.True(ReplaceText(_store, sessionId, anchor, "Scope of the work.")
+            .GetProperty("success").GetBoolean());
+
+        var bookmark = Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"add_reference_bookmark","anchorId":"{{anchor}}"}""")));
+        Assert.True(bookmark.GetProperty("success").GetBoolean(), bookmark.GetRawText());
+        var name = bookmark.GetProperty("bookmarkName").GetString()!;
+        Assert.StartsWith("_Ref", name);
+
+        var inserted = Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$$"""{"sessionId":{{{sessionArg}}},"action":"insert_cross_reference","anchorId":"{{{anchor}}}","characterOffset":18,"bookmarkName":"{{{name}}}","options":{"pageNumber":true,"cachedPage":"7"}}""")));
+        Assert.True(inserted.GetProperty("success").GetBoolean(), inserted.GetRawText());
+        var text = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"text"}"""))).GetRawText();
+        Assert.Contains("work.7", text);
+    }
 }

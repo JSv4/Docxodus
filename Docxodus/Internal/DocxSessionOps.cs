@@ -551,6 +551,7 @@ internal static class DocxSessionOps
             RenderFootnotesAndEndnotes = true,
             RenderTrackedChanges = o.RenderTrackedChanges,
             StampAnchors = true,
+            StampReferenceFields = o.ReferenceFields,
             CommentRenderMode = o.Comments ? (int)CommentRenderMode.Inline : -1,
             CommentCssClassPrefix = EditorCommentCssPrefix,
         };
@@ -607,6 +608,7 @@ internal static class DocxSessionOps
             // inside page boxes.
             StampPageNumberFields = o.Paginated,
             StampPageNumberFieldsInRunningStories = true,
+            StampReferenceFields = o.ReferenceFields,
             // Page view also changes how a block itself renders — an anchored picture or text
             // box is positioned absolutely inside its page box — so a block re-rendered into
             // page view follows the same profile the full render used.
@@ -1035,6 +1037,11 @@ internal static class DocxSessionOps
 
     public static string ListBookmarks(int handle, ProjectionScopes scopes = ProjectionScopes.All) =>
         DocxSessionJson.SerializeBookmarks(SessionRegistry.Get(handle).ListBookmarks(scopes));
+
+    /// <summary>The hidden <c>_Ref</c> bookmark over a whole paragraph that a cross-reference to
+    /// it targets; see <see cref="DocxSession.AddReferenceBookmark"/>.</summary>
+    public static string AddReferenceBookmark(int handle, string anchorId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AddReferenceBookmark(anchorId));
 
     public static string AddBookmark(int handle, string name, string startAnchorId, int startOffset,
         string endAnchorId, int endOffset) =>

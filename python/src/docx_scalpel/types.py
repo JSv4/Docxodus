@@ -4458,11 +4458,18 @@ class FindOptions:
 class CrossReferenceOptions:
     """Options for ``DocxSession.insert_cross_reference`` — the REF field's switches:
     ``\\r`` (reference the target's auto-number), ``\\h`` (hyperlink), ``\\p``
-    (relative position, cached as "above"/"below")."""
+    (relative position, cached as "above"/"below"), ``\\n`` (``number_no_context``: the
+    number without higher levels) and ``\\w`` (``number_full_context``). ``page_number``
+    inserts a ``PAGEREF`` (the target's page) instead, caching ``cached_page`` (else ``1``,
+    with the field marked dirty so Word updates it)."""
 
     reference_number: bool = False
     hyperlink: bool = False
     include_position: bool = False
+    page_number: bool = False
+    number_no_context: bool = False
+    number_full_context: bool = False
+    cached_page: str | None = None
 
     def to_wire(self) -> dict[str, Any]:
         wire: dict[str, Any] = {}
@@ -4472,6 +4479,14 @@ class CrossReferenceOptions:
             wire["hyperlink"] = True
         if self.include_position:
             wire["includePosition"] = True
+        if self.page_number:
+            wire["pageNumber"] = True
+        if self.number_no_context:
+            wire["numberNoContext"] = True
+        if self.number_full_context:
+            wire["numberFullContext"] = True
+        if self.cached_page is not None:
+            wire["cachedPage"] = self.cached_page
         return wire
 
 

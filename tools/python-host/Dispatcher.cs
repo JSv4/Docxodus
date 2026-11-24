@@ -292,6 +292,7 @@ internal static partial class Dispatcher
             Handle(args), Str(args, "name"), Str(args, "startAnchorId"), Int(args, "startOffset"),
             Str(args, "endAnchorId"), Int(args, "endOffset")),
         "remove_bookmark" => DocxSessionOps.RemoveBookmark(Handle(args), Str(args, "name")),
+        "add_reference_bookmark" => DocxSessionOps.AddReferenceBookmark(Handle(args), Str(args, "anchorId")),
 
         "list_revisions" => DocxSessionOps.ListRevisions(
             Handle(args), DocxSessionJson.ParseRevisionListFilter(args)),
@@ -1182,7 +1183,7 @@ internal static partial class Dispatcher
         or "ensure_header_footer_visible" or "set_page_numbering" or "clear_page_numbering"
         or "set_header_footer_kind_enabled" or "set_page_setup"
         or "insert_table_of_contents" or "insert_table_of_figures" or "insert_table_of_authorities"
-        or "insert_footnote" or "insert_endnote" or "insert_cross_reference"
+        or "insert_footnote" or "insert_endnote" or "insert_cross_reference" or "add_reference_bookmark"
         or "add_comment" or "add_comment_reply" or "update_comment"
         or "set_comment_resolved" or "remove_comment"
         or "accept_revision" or "reject_revision" or "repair_revisions"

@@ -1946,6 +1946,7 @@ export interface DocxodusWasmExports {
       bookmarkName: string,
       optionsJson: string
     ) => string;
+    AddReferenceBookmark: (handle: number, anchor: string) => string;
     InsertEndnote: (handle: number, anchor: string, characterOffset: number, markdown: string) => string;
     // Native Word comment authoring (issue #300). spanJson: "" = whole block, else
     // {"start":n,"length":n}; initials/date: "" = absent (date is ISO-8601).
@@ -3061,6 +3062,9 @@ export interface EditorRenderOptions {
    *  ids match {@link CommentListEntry.id}. Default false, which renders exactly as the
    *  comment-less `RenderHtml` / `RenderBlockHtml` do. */
   comments?: boolean;
+  /** Wrap REF / PAGEREF / NOTEREF results in `data-field` spans that name their bookmark
+   *  (`data-field-target`), so an editor can keep each reference whole and follow it. Default false. */
+  referenceFields?: boolean;
 }
 
 /** Options for `DocxSession.insertTable`. */
@@ -3526,6 +3530,14 @@ export interface CrossReferenceOptions {
   referenceNumber?: boolean;
   hyperlink?: boolean;
   includePosition?: boolean;
+  /** A `PAGEREF` (the target's page) instead of a `REF`; the number switches do not apply. */
+  pageNumber?: boolean;
+  /** The `\n` switch: the target's number without the context of higher levels. */
+  numberNoContext?: boolean;
+  /** The `\w` switch: the target's number in full context. */
+  numberFullContext?: boolean;
+  /** With `pageNumber`: the page to cache as the result (else `1`, and the field is dirty). */
+  cachedPage?: string;
 }
 
 /**
