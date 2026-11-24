@@ -236,18 +236,23 @@ public sealed partial class DocxSession
             // Where the blocks came from, and both edges of where they went: a paragraph must stand between
             // two tables, and after one that would end the body (as InsertTable keeps it).
             var separators = new List<XElement>();
+            // (the run's own first and last block: a marker that travels with it may be outside them)
+            XElement firstBlock = run.First(b => !IsBlockLevelMarker(b)), lastBlock = run.Last(b => !IsBlockLevelMarker(b));
             foreach (var (left, right) in new[]
                 {
                     (gapBefore, gapAfter),
-                    (RevisionOps.SiblingBlock(run[0], forward: false), run[0]),
-                    (run[^1], RevisionOps.SiblingBlock(run[^1], forward: true)),
+                    (RevisionOps.SiblingBlock(firstBlock, forward: false), firstBlock),
+                    (lastBlock, RevisionOps.SiblingBlock(lastBlock, forward: true)),
                 })
             {
                 if (left?.Name != W.tbl || !ReferenceEquals(RevisionOps.SiblingBlock(left, forward: true), right)
                     || !(right?.Name == W.tbl || right?.Name == W.sectPr || (right is null && container.Name == W.body))) continue;
                 var separator = new XElement(W.p);
                 UnidHelper.AssignToSelfAndDescendants(separator);
-                left.AddAfterSelf(separator);
+                // After the ends of the ranges that cover the table, so that none of them covers it.
+                var after = left;
+                while (after.ElementsAfterSelf().FirstOrDefault() is { } next && CrossBlockRangePairs.Any(pair => next.Name == pair.End)) after = next;
+                after.AddAfterSelf(separator);
                 separators.Add(separator);
             }
             InvalidateProjectionCache();
