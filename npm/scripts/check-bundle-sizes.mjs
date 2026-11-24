@@ -139,10 +139,13 @@ const budgetsKiB = {
   // leaving a picture beside the caret to the browser, add 229-253 gzip bytes over main with the Tab
   // key: embed/IIFE/editor 167253/167313/145808 -> 167506/167542/146050. Raise only these three gates,
   // to the next 0.1 KiB with at least 0.05 KiB to spare; pagination is unchanged.
-  // UpdateFields, stacked on the outline and cross-references, add 83-90 gzip bytes over main 48b47abc:
-  // embed/IIFE 167514/167559 -> 167597/167649 locally, and CI measures a few bytes more. Raise only
+  // Tab stops (GetTabStops, SetTabStops and SetDefaultTabStop on the session) add 57-61 gzip bytes over main 48b47abc:
+  // embed/IIFE 167514/167559 -> 167571/167620 locally, and CI measures a few bytes more. Raise only
   // these two gates by 0.1 KiB; editor and pagination are unchanged.
-  'embed.bundle.js': 163.8,
+  // The outline (ListOutline and MoveBlockRange on the session) adds 56-59 gzip bytes over that:
+  // embed/IIFE 167571/167620 -> 167627/167679, which leaves too little under 163.8. Raise the same
+  // two gates by another 0.1 KiB; editor and pagination are unchanged.
+  'embed.bundle.js': 163.9,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
   // The appended bullet-normalization option adds 29 gzip bytes (161996 -> 162025).
@@ -160,8 +163,9 @@ const budgetsKiB = {
   // #1789 (above).
   // Tab types a tab (above).
   // Paragraph joins in cells (above).
-  // UpdateFields (above).
-  'embed.iife.js': 163.8,
+  // Tab stops (above).
+  // The outline (above).
+  'embed.iife.js': 163.9,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
   // #1776 (above): 0.1 KiB.
   // #1789 (above).

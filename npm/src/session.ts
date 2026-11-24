@@ -68,6 +68,8 @@ import type {
   TableCellScope,
   TablePropertiesInfo,
   TableRowOptions,
+  TabStop,
+  TabStopsInfo,
   TableShadingScope,
   ListFormat,
   GrepOptions,
@@ -1077,6 +1079,23 @@ export class DocxSession {
     return JSON.parse(this.wasm.GetTableProperties(this.handle, cellAnchorId)) as TablePropertiesInfo | null;
   }
 
+  /** Make `stops` the paragraph's tab stops in effect, as Word does: its own w:tabs holds the stops
+   *  its styles do not give it and clears the style stops not wanted. One undo step. */
+  setTabStops(anchorId: string, stops: TabStop[]): EditResult {
+    return JSON.parse(this.wasm.SetTabStops(this.handle, anchorId, JSON.stringify(stops))) as EditResult;
+  }
+
+  /** A paragraph's tab stops, or null when the anchor is not a paragraph. */
+  getTabStops(anchorId: string): TabStopsInfo | null {
+    return JSON.parse(this.wasm.GetTabStops(this.handle, anchorId)) as TabStopsInfo | null;
+  }
+
+  /** The document's default tab interval (settings w:defaultTabStop), twips. One undo step; refused
+   *  while changes are tracked. */
+  setDefaultTabStop(twips: number): EditResult {
+    return JSON.parse(this.wasm.SetDefaultTabStop(this.handle, twips)) as EditResult;
+  }
+
   /** Apply row layout options to the row containing the canonical cell anchor. */
   setTableRowOptions(cellAnchorId: string, options: TableRowOptions): EditResult {
     return JSON.parse(
@@ -1557,7 +1576,10 @@ export class DocxSession {
    * Fill a date control. The control stores a calendar day at midnight UTC and keeps no time
    * of day: a string keeps the day it is written with (`"2032-03-04"`,
    * `"2032-03-04T01:00:00+05:00"`), and a `Date` is sent as its UTC instant, so it stores its
-   * UTC day. `displayText` defaults to that day as `yyyy-MM-dd`.
+   * UTC day. Without `displayText` the control shows that day in its own format and language, as the
+   * desktop word processor shows a picked date (for example "15 December 2026"). In the browser a
+   * format that needs non-English month or day names, and anywhere a non-Gregorian calendar or a
+   * language whose usual calendar is another one, shows `yyyy-MM-dd`.
    */
   setContentControlDate(anchorId: string, value: string | Date, displayText?: string,
     options: ContentControlFillOptions = {}): EditResult {

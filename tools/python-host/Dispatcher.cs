@@ -314,6 +314,9 @@ internal static partial class Dispatcher
             Handle(args), Str(args, "anchorId"), ParseParagraphFormatOp(args, "paragraphFormat", "op")),
         "set_list_level" => DocxSessionOps.SetListLevel(
             Handle(args), Str(args, "anchorId"), Int(args, "levelDelta")),
+        "set_tab_stops" => DocxSessionOps.SetTabStops(Handle(args), Str(args, "anchorId"), RawArray(args, "stops")),
+        "get_tab_stops" => DocxSessionOps.GetTabStops(Handle(args), Str(args, "anchorId")),
+        "set_default_tab_stop" => DocxSessionOps.SetDefaultTabStop(Handle(args), Int(args, "twips")),
         "remove_list_membership" => DocxSessionOps.RemoveListMembership(
             Handle(args), Str(args, "anchorId")),
         "apply_list_format" => DocxSessionOps.ApplyListFormat(
@@ -1189,6 +1192,7 @@ internal static partial class Dispatcher
         or "accept_all_revisions" or "reject_all_revisions"
         or "apply_format" or "apply_format_by_substring" or "set_paragraph_style"
         or "set_paragraph_format" or "set_list_level" or "remove_list_membership"
+        or "set_tab_stops" or "set_default_tab_stop"
         or "apply_list_format" or "apply_list_format_range" or "set_list_start_override"
         or "clear_list_start_override" or "set_list_levels" or "continue_numbering" or "set_list_membership"
         or "replace_cell_content" or "set_table_style"

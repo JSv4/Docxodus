@@ -107,6 +107,8 @@ from .types import (
     PageSetupOp,
     ParagraphBorderEdge,
     ParagraphFormatOp,
+    TabStop,
+    TabStopsInfo,
     PageCitation,
     PageCitationRequest,
     PageMap,
@@ -1410,7 +1412,9 @@ class DocxSession:
 
         The control stores the calendar day the value is written with at midnight UTC and
         keeps no time of day, so ``"2032-03-04T01:00:00+05:00"`` stores ``2032-03-04``.
-        ``display_text`` defaults to that day as ``yyyy-MM-dd``.
+        Without ``display_text`` the control shows that day in its own format and language, as the
+        desktop word processor shows a picked date (for example "15 December 2026"); a non-Gregorian
+        calendar, or a language whose usual calendar is another one, shows ``yyyy-MM-dd``.
         """
         return EditResult._from_wire(self._call("set_content_control_date", {
             "anchorId": anchor_id, "value": value, "displayText": display_text,
@@ -2491,6 +2495,28 @@ class DocxSession:
                 {"anchorId": anchor_id, "paragraphFormat": op.to_wire()},
             )
         )
+
+    def get_tab_stops(self, anchor_id: str) -> TabStopsInfo | None:
+        """The paragraph's tab stops as Word's Tabs dialog and ruler show them: the stops in
+        effect, the ones its styles give it, and the default tab interval. None when the anchor
+        is not a paragraph."""
+        result = self._call("get_tab_stops", {"anchorId": anchor_id})
+        return TabStopsInfo._from_wire(result) if result is not None else None
+
+    def set_tab_stops(self, anchor_id: str, stops: Sequence[TabStop]) -> EditResult:
+        """Make ``stops`` the paragraph's tab stops in effect, as Word does: its own ``w:tabs``
+        holds each stop its styles do not already give it and a ``clear`` entry for each style
+        stop not wanted. An empty list clears every stop (default tabs remain). One undo step;
+        with changes tracked, one ``w:pPrChange``."""
+        return EditResult._from_wire(self._call("set_tab_stops", {
+            "anchorId": anchor_id, "stops": [stop.to_wire() for stop in stops],
+        }))
+
+    def set_default_tab_stop(self, twips: int) -> EditResult:
+        """Set the document's default tab interval (``w:defaultTabStop`` in settings), in
+        twips. One undo step; refused while changes are tracked (no revision records a settings
+        change)."""
+        return EditResult._from_wire(self._call("set_default_tab_stop", {"twips": twips}))
 
     def set_list_level(self, anchor_id: str, level_delta: int) -> EditResult:
         return EditResult._from_wire(

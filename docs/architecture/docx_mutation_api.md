@@ -815,6 +815,22 @@ What am I editing?
           session.Undo() restores prior state.
 ```
 
+## Paragraph tab stops
+
+```csharp
+TabStopsInfo? GetTabStops(string anchorId);
+EditResult SetTabStops(string anchorId, IReadOnlyList<ParagraphTabStop> stops);
+EditResult SetDefaultTabStop(int twips);
+```
+
+`GetTabStops` reads the stops in effect (the style chain and the paragraph's own, with cleared ones
+removed), the ones the styles alone give, and the document's default interval. Like `GetFormatting`'s
+effective paragraph it leaves out numbering-level and table-style tabs. `SetTabStops` takes the whole
+list to have in effect and writes what Word's Tabs dialog writes: the paragraph's own `w:tabs` holds
+each stop its styles do not already give, plus a `clear` entry for each style stop that is not in the
+list. With changes tracked it records one `w:pPrChange`. `SetDefaultTabStop` writes
+`w:defaultTabStop`, a document setting, so it refuses while changes are tracked.
+
 ## Block reordering — `MoveBlock` and `ValidMoveTargets`
 
 ```csharp
@@ -896,6 +912,27 @@ carries the original set-membership implementation as an oracle and asserts the 
 every (source, target, side) triple over documents with nested, overlapping, table-spanning,
 single-block, inverted, and dangling ranges plus section breaks. The naive version cost seconds
 on a 234-block charter with 392 bookmarks, which the drag UI paid on every drag start.
+
+## The outline — `ListOutline` and `MoveBlockRange`
+
+```csharp
+IReadOnlyList<OutlineEntry> ListOutline();  // record(AnchorId, Level, Text, StyleId, LastAnchorId)
+EditResult MoveBlockRange(string firstAnchorId, string lastAnchorId, string targetAnchorId, Position pos);
+```
+
+`ListOutline` lists the body's headings as Word's Navigation Pane does: every top-level paragraph
+(not one in a table cell or a text box) whose outline level is 1-9. The level is the paragraph's own
+`w:outlineLvl`, else its style chain's; a built-in heading style that writes no level has its own.
+`LastAnchorId` is the last block of the heading's part, up to the next heading at its level or above.
+
+`MoveBlockRange` moves a run of top-level blocks beside another block as one undo step, which is how
+a heading is dragged with its text. A block content control moves whole: a run that reaches into one
+must cover it, and a target inside one stands for the place just outside it, so membership never
+changes. A body-level range marker next to the run travels with it when its other end is in the run
+(Word ends a bookmark over whole paragraphs that way). It refuses (`InvalidPosition`) a move that
+would split a control, cross a section break, or change or invert what a bookmark, comment,
+permission, native move or complex field covers. A move to where the run already is succeeds and
+takes no undo step.
 
 ## Bulk block removal — `DeleteRange` and `DeleteSection`
 
@@ -1011,6 +1048,7 @@ EditResult RemoveBookmark(string name);
 
 EditResult InsertCrossReference(string anchorId, int characterOffset, string bookmarkName,
     CrossReferenceOptions? options = null);
+EditResult AddReferenceBookmark(string anchorId);
 ```
 
 `InsertCrossReference` (issue #545) writes a Word-faithful internal cross-reference: a
@@ -1020,11 +1058,21 @@ character offset with the same run-splitting discipline as `InsertFootnote`. The
 run holds what Word would currently render — the bookmarked text, the target's auto-number
 under `\r` (`0` when the target is unnumbered, as Word shows), and/or the `above`/`below`
 position word — so non-recomputing renderers display a faithful snapshot while Word updates
-the field like any hand-authored cross-reference. The bookmark must already exist as one
+the field like any hand-authored cross-reference. `NumberNoContext` (`\n`) and `NumberFullContext`
+(`\w`) are the other two number switches, at most one of the three being written. The number is the
+one Word shows (`Internal/ReferenceNumber.cs`): without its trailing period, `(i)` under `\n` and
+`2.3.1(a)(i)` under `\w`, and under `\r` only the levels the field's own list paragraph does not
+share. Where Word's text is not known (a number in words above another, a relative reference from
+outside the list) the number without context is cached and the field marked dirty. `PageNumber`
+writes a `PAGEREF` instead: its cached result is `CachedPage`, or `1` with the field marked dirty. The bookmark must already exist as one
 coherent same-story pair; otherwise the op fails with `MissingBookmarkTarget`. Under
 `RenderInline` the same field is a tracked insertion: complex-field runs (begin, instruction,
 separate, cached result, end) inside one `w:ins`, which is how Word records an inserted field and
 the only form a `w:ins` can hold, since `w:fldSimple` is not a run (issue #1313).
+
+`AddReferenceBookmark` puts the hidden `_Ref` bookmark Word allocates for a reference to a heading
+or numbered item around the whole paragraph (a field or link inside it is not cut), or returns the
+one already there; the name comes back in `EditResult.BookmarkName`.
 
 `HyperlinkTarget.External(uri)` creates or reuses a hyperlink relationship on the XML part that
 owns the link. A header link is related from its `HeaderPart`, a footnote link from its
@@ -1691,7 +1739,7 @@ resolution replay) still strips it (DS430/DS434 vs DS418).
 | Under `RenderInline` | Operations |
 |---|---|
 | Record as native revisions | `ReplaceText` (and `ReplaceMatch`/`ReplaceInner`/`ReplaceTextAtSpan`), `DeleteBlock`, `DeleteRange`, `DeleteSection`, `InsertParagraph`, `SplitParagraph`, `MergeParagraphs` (a deleted first paragraph mark, issue #1313), `MoveBlock`, `InsertHorizontalRule`, `InsertFootnote`, `InsertEndnote`, `InsertCrossReference` (the REF field's complex-field runs in one `w:ins`, issue #1313), the formatting ops (`*PrChange`), the table row/column ops, `InsertTable` (issue #1626: every row and its content inserted, as Word records a table inserted with Track Changes on, plus the empty paragraph the insert adds after a table that would otherwise end its cell or the body or touch another table; see [Tracked table insertion](#tracked-table-insertion-issue-1626)), and `ReplaceCellContent` (issue #1311), which records the cell's old content as a deletion and the new as an insertion the way `SetHeaderText` does a story: the cell's last paragraph keeps its mark and takes the new last paragraph's runs and paragraph properties, so reject gives back exactly the old cell and accept the new content. As when typing over a cell in Word, what a deletion does not remove survives an accept: the kept mark and its run formatting, bookmark/comment/permission range markers, and the empty shell of an inline content control. The running-story and section ops record too (issue #1299): `InsertPageNumberField` puts the field's runs in one `w:ins`, as Word records an inserted field; `SetHeaderText`/`SetFooterText` record the new story content as an insertion and any existing content as a deletion (the story's final paragraph mark is kept, so reject gives back exactly the old story and accept exactly the new one); and `SetPageSetup`, `SetPageNumbering`, `ClearPageNumbering` and the first-page flag (`EnsureHeaderFooterVisible`/`SetHeaderFooterKindEnabled` with `First`, or writing a first-page story) record a `w:sectPrChange`. A section that already has a pending `w:sectPrChange` keeps it, so its stored before-image stays the original section; an edit that puts the section back the way it was resolves it. When that pending change is another author's and the edit actually changes the properties, the fold re-credits it to the latest editor (this edit's author and date, a fresh id) while the stored baseline stays the original; a fold into the session author's own pending change keeps its id and takes the edit's date |
-| Refuse with `TrackedOperationUnsupported` | `InsertTable` between the halves of a pending tracked split (rejecting the split must merge the halves across the table), `ApplyListFormatRange`, a `MergeParagraphs` whose first paragraph ends a section, and every image mutation — no reversible native encoding exists, so nothing is written rather than something that cannot be taken back. Also every change to "Different odd and even pages" (`EnsureHeaderFooterVisible`/`SetHeaderFooterKindEnabled` with `Even`, or a `SetHeaderText`/`SetFooterText` even story while the setting is off): `w:evenAndOddHeaders` is a document setting in `settings.xml`, and OOXML has no revision element for settings. A tracked `SetHeaderText`/`SetFooterText` is refused the same way when the existing story does not end in a paragraph (for example a story ending in a block content control), when its last paragraph holds bookmark markers (the condition tracked `ReplaceText` refuses), or when the section has no story of that kind of its own but inherits one from an earlier section — giving it its own adds a header/footer reference, and no revision can record that, so a reject could never bring the inherited story back. A tracked `ReplaceCellContent` is refused when the cell holds a block beside its paragraphs (a nested table or a block-level content control: the untracked edit replaces only the direct paragraphs and keeps that block, which the tracked replacement would delete) or when its last paragraph holds bookmark markers. Each refusal writes nothing |
+| Refuse with `TrackedOperationUnsupported` | `InsertTable` between the halves of a pending tracked split (rejecting the split must merge the halves across the table), `ApplyListFormatRange`, a `MergeParagraphs` whose first paragraph ends a section, and every image mutation and `MoveBlockRange` — no reversible native encoding exists, so nothing is written rather than something that cannot be taken back. Also every change to "Different odd and even pages" (`EnsureHeaderFooterVisible`/`SetHeaderFooterKindEnabled` with `Even`, or a `SetHeaderText`/`SetFooterText` even story while the setting is off): `w:evenAndOddHeaders` is a document setting in `settings.xml`, and OOXML has no revision element for settings; `SetDefaultTabStop` refuses for the same reason. A tracked `SetHeaderText`/`SetFooterText` is refused the same way when the existing story does not end in a paragraph (for example a story ending in a block content control), when its last paragraph holds bookmark markers (the condition tracked `ReplaceText` refuses), or when the section has no story of that kind of its own but inherits one from an earlier section — giving it its own adds a header/footer reference, and no revision can record that, so a reject could never bring the inherited story back. A tracked `ReplaceCellContent` is refused when the cell holds a block beside its paragraphs (a nested table or a block-level content control: the untracked edit replaces only the direct paragraphs and keeps that block, which the tracked replacement would delete) or when its last paragraph holds bookmark markers. Each refusal writes nothing |
 | Apply untracked | Comments and annotations, which are not revisions, by design |
 
 Anything that writes package state under recording belongs in exactly one of those three rows.

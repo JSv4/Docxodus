@@ -25,6 +25,7 @@ public class DocxSessionOutlineTests
         + "<w:style w:type=\"paragraph\" w:styleId=\"Ttulo1\"><w:name w:val=\"heading 1\"/><w:basedOn w:val=\"Normal\"/><w:pPr><w:outlineLvl w:val=\"0\"/></w:pPr></w:style>"
         + "<w:style w:type=\"paragraph\" w:styleId=\"Ttulo2\"><w:name w:val=\"heading 2\"/><w:basedOn w:val=\"Normal\"/><w:pPr><w:outlineLvl w:val=\"1\"/></w:pPr></w:style>"
         + "<w:style w:type=\"paragraph\" w:styleId=\"Chapter\"><w:name w:val=\"Chapter\"/><w:basedOn w:val=\"Ttulo1\"/></w:style>"
+        + "<w:style w:type=\"paragraph\" w:styleId=\"Cuatro\"><w:name w:val=\"heading 4\"/><w:basedOn w:val=\"Normal\"/></w:style>"
         + "<w:style w:type=\"paragraph\" w:styleId=\"Plain\"><w:name w:val=\"Plain\"/><w:basedOn w:val=\"Ttulo1\"/><w:pPr><w:outlineLvl w:val=\"9\"/></w:pPr></w:style>";
 
     private static string P(string text, string? style = null, string? pPrExtra = null) =>
@@ -120,6 +121,120 @@ public class DocxSessionOutlineTests
         Assert.False(cut.Success);
         Assert.True(whole.Success, whole.Error?.Message);
         Assert.Equal(new[] { "A", "a1", "brk", "C", "c1", "B", "D" }, Texts(session));
+    }
+
+    private static string Sdt(string content) =>
+        "<w:sdt><w:sdtPr><w:id w:val=\"5\"/></w:sdtPr><w:sdtContent>" + content + "</w:sdtContent></w:sdt>";
+
+    [Fact]
+    public void OL005_MoveBlockRange_MovesAPartThatEndsInAContentControl()
+    {
+        using var session = new DocxSession(Build(
+            P("A", "Ttulo1") + P("a1") + Sdt(P("c1") + P("c2")) + P("B", "Ttulo1") + P("b1")));
+        var outline = session.ListOutline();
+
+        var res = session.MoveBlockRange(outline[0].AnchorId, outline[0].LastAnchorId, outline[1].LastAnchorId, Position.After);
+
+        Assert.True(res.Success, res.Error?.Message);
+        Assert.Equal(new[] { "B", "b1", "A", "a1", "c1", "c2" }, Texts(session));
+        Assert.Equal(4, res.Modified.Count);
+        Assert.Contains("c2", session.Raw.GetXml(AnchorOf(session, "c2")));
+        // and back, to after the part that now ends in the control: beside the control, not inside it
+        outline = session.ListOutline();
+        var back = session.MoveBlockRange(outline[0].AnchorId, outline[0].LastAnchorId, outline[1].LastAnchorId, Position.After);
+        Assert.True(back.Success, back.Error?.Message);
+        Assert.Equal(new[] { "A", "a1", "c1", "c2", "B", "b1" }, Texts(session));
+        Assert.Equal(new[] { "c1", "c2" }, ControlTexts(session));
+    }
+
+    private static string[] ControlTexts(DocxSession session)
+    {
+        using var ms = new MemoryStream(session.Save());
+        using var document = WordprocessingDocument.Open(ms, false);
+        return document.MainDocumentPart!.GetXDocument().Descendants(W.sdtContent).Single().Elements(W.p).Select(p => p.Value).ToArray();
+    }
+
+    [Fact]
+    public void OL006_MoveBlockRange_PastAContentControl_IsNotANoOp()
+    {
+        using var session = new DocxSession(Build(
+            P("A", "Ttulo1") + P("a1") + Sdt(P("c1")) + P("B", "Ttulo1")));
+
+        var res = session.MoveBlockRange(AnchorOf(session, "A"), AnchorOf(session, "a1"), AnchorOf(session, "B"), Position.Before);
+
+        Assert.True(res.Success, res.Error?.Message);
+        Assert.Equal(new[] { "c1", "A", "a1", "B" }, Texts(session));
+    }
+
+    [Fact]
+    public void OL007_MoveBlockRange_RefusesToSplitAContentControl_OrToLandInsideOne()
+    {
+        using var session = new DocxSession(Build(
+            P("A", "Ttulo1") + P("a1") + Sdt(P("c1") + P("c2")) + P("B", "Ttulo1")));
+        var before = Texts(session);
+
+        Assert.False(session.MoveBlockRange(AnchorOf(session, "A"), AnchorOf(session, "c1"), AnchorOf(session, "B"), Position.After).Success);
+        Assert.False(session.MoveBlockRange(AnchorOf(session, "B"), AnchorOf(session, "B"), AnchorOf(session, "c1"), Position.After).Success);
+        Assert.False(session.MoveBlockRange(AnchorOf(session, "c2"), AnchorOf(session, "B"), AnchorOf(session, "A"), Position.Before).Success);
+        Assert.Equal(before, Texts(session));
+        // within the control is its own run of blocks
+        Assert.True(session.MoveBlockRange(AnchorOf(session, "c2"), AnchorOf(session, "c2"), AnchorOf(session, "c1"), Position.Before).Success);
+        Assert.Equal(new[] { "A", "a1", "c2", "c1", "B" }, Texts(session));
+    }
+
+    /// <summary>Word ends a bookmark over whole paragraphs directly in the body, after the last one.</summary>
+    [Fact]
+    public void OL008_MoveBlockRange_TakesTheBookmarkThatCoversTheRun()
+    {
+        using var session = new DocxSession(Build(
+            "<w:p><w:pPr><w:pStyle w:val=\"Ttulo1\"/></w:pPr><w:bookmarkStart w:id=\"3\" w:name=\"Span\"/><w:r><w:t>A</w:t></w:r></w:p>"
+            + P("a1") + "<w:bookmarkEnd w:id=\"3\"/>" + P("B", "Ttulo1") + P("b1")));
+        var text = session.ListBookmarks().Single().Text;
+
+        var res = session.MoveBlockRange(AnchorOf(session, "A"), AnchorOf(session, "a1"), AnchorOf(session, "b1"), Position.After);
+
+        Assert.True(res.Success, res.Error?.Message);
+        Assert.Equal(new[] { "B", "b1", "A", "a1" }, Texts(session));
+        var bookmark = session.ListBookmarks().Single();
+        Assert.True(bookmark.IsPaired && bookmark.IsValid);
+        Assert.Equal(text, bookmark.Text);
+        // and the next run lands outside it, not between its last paragraph and its end
+        Assert.True(session.MoveBlockRange(AnchorOf(session, "B"), AnchorOf(session, "b1"), AnchorOf(session, "a1"), Position.After).Success);
+        Assert.Equal(text, session.ListBookmarks().Single().Text);
+    }
+
+    [Fact]
+    public void OL009_MoveBlockRange_RefusesToCutABookmarkWithABodyLevelMarker()
+    {
+        using var session = new DocxSession(Build(
+            P("A", "Ttulo1") + "<w:bookmarkStart w:id=\"3\" w:name=\"Span\"/>" + P("a1") + P("B", "Ttulo1") + P("b1")
+            + "<w:bookmarkEnd w:id=\"3\"/>" + P("C", "Ttulo1") + P("c1")));
+        var before = Texts(session);
+
+        Assert.False(session.MoveBlockRange(AnchorOf(session, "A"), AnchorOf(session, "a1"), AnchorOf(session, "c1"), Position.After).Success);
+        Assert.Equal(before, Texts(session));
+        Assert.True(session.ListBookmarks().Single().IsValid);
+    }
+
+    [Fact]
+    public void OL010_MoveBlockRange_RefusesToLandInsideAFieldsResult()
+    {
+        const string begin = "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText> TOC \\o </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>";
+        const string end = "<w:p><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>";
+        using var session = new DocxSession(Build(
+            $"<w:p>{begin}<w:r><w:t>entry one</w:t></w:r></w:p>" + P("entry two") + end + P("A", "Ttulo1") + P("B", "Ttulo1")));
+
+        var res = session.MoveBlockRange(AnchorOf(session, "B"), AnchorOf(session, "B"), AnchorOf(session, "entry two"), Position.Before);
+
+        Assert.Equal(EditErrorCode.InvalidPosition, res.Error!.Code);
+        Assert.True(session.MoveBlockRange(AnchorOf(session, "B"), AnchorOf(session, "B"), AnchorOf(session, "A"), Position.Before).Success);
+    }
+
+    [Fact]
+    public void OL011_Outline_ABuiltInHeadingStyleWithoutALevel_HasItsOwn()
+    {
+        using var session = new DocxSession(Build(P("Four", "Cuatro") + P("body")));
+        Assert.Equal("4:Four", Outline(session));
     }
 
     [Fact]

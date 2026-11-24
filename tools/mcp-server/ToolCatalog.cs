@@ -333,15 +333,15 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_format",
-            "Apply character or paragraph formatting, addressed by anchor id.",
+            "Apply character or paragraph formatting, addressed by anchor id. get_tab_stops reads a paragraph's tab stops in effect, the ones its styles give it and the default tab interval; set_tab_stops makes a list of stops the ones in effect, as Word's Tabs dialog does (the paragraph's own w:tabs holds the stops its styles lack and clears unwanted style stops); set_default_tab_stop sets the document's default tab interval (refused while changes are tracked).",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
-                "action": { "type": "string", "enum": ["apply_format", "apply_format_by_substring", "set_paragraph_style", "set_paragraph_format", "set_list_level", "remove_list_membership", "apply_list_format"] },
-                "anchorId": { "type": "string" },
+                "action": { "type": "string", "enum": ["apply_format", "apply_format_by_substring", "set_paragraph_style", "set_paragraph_format", "set_list_level", "remove_list_membership", "apply_list_format", "get_tab_stops", "set_tab_stops", "set_default_tab_stop"] },
+                "anchorId": { "type": "string", "description": "Required by every action except set_default_tab_stop." },
                 "span": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "apply_format only. Omit to format the whole block." },
                 "substring": { "type": "string", "description": "apply_format_by_substring: literal text within the block to format." },
                 "format": {
@@ -402,9 +402,23 @@ internal static class ToolCatalog
                   }
                 },
                 "levelDelta": { "type": "integer", "description": "set_list_level: +1 indents one level, -1 outdents one level." },
-                "listFormat": { "type": "string", "enum": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"], "description": "apply_list_format: converts the paragraph into (or out of) a real, auto-numbered Word list. *Parenthesis variants render '(1)'/'(a)'/'(i)'." }
+                "listFormat": { "type": "string", "enum": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"], "description": "apply_list_format: converts the paragraph into (or out of) a real, auto-numbered Word list. *Parenthesis variants render '(1)'/'(a)'/'(i)'." },
+                "stops": {
+                  "type": "array",
+                  "description": "set_tab_stops: the tab stops to have in effect; an empty array clears them all (default tabs remain).",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "positionTwips": { "type": "integer", "description": "From the paragraph's leading text edge (not its indent); 1440 = 1 inch. -31680 to 31680." },
+                      "alignment": { "type": "string", "enum": ["left", "center", "right", "decimal", "bar"], "description": "Default left. A bar tab draws a vertical line." },
+                      "leader": { "type": "string", "enum": ["none", "dot", "hyphen", "underscore", "heavy", "middleDot"], "description": "Default none." }
+                    },
+                    "required": ["positionTwips"]
+                  }
+                },
+                "twips": { "type": "integer", "minimum": 1, "description": "set_default_tab_stop: the default tab interval (w:defaultTabStop), twips; 720 = 0.5 inch." }
               },
-              "required": ["sessionId", "action", "anchorId"]
+              "required": ["sessionId", "action"]
             }
             """),
         new ToolDefinition(
@@ -645,7 +659,7 @@ internal static class ToolCatalog
                 "markdown": { "type": "string", "description": "fill_rich_text payload." },
                 "checked": { "type": "boolean", "description": "set_checked value." },
                 "value": { "type": "string", "description": "set_date ISO-8601 date or timestamp (its calendar day is stored at midnight UTC; the time of day is not kept) or select_item value/display text." },
-                "displayText": { "type": "string", "description": "Optional set_date displayed text." },
+                "displayText": { "type": "string", "description": "Optional set_date displayed text. When omitted the control shows the day in its own date format and language, for example 15 December 2026." },
                 "imageBase64": { "type": "string", "description": "fill_picture raw image bytes as base64." },
                 "sectionAnchorId": { "type": "string", "description": "add_repeating_item section control." },
                 "afterItemAnchorId": { "type": "string", "description": "Optional direct item after which the clone is inserted." },

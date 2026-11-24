@@ -1485,8 +1485,54 @@ namespace Docxodus
             }
         }
 
+        /// <summary>One level of a list paragraph's number: its text, whether that shows other levels' counters
+        /// too ("2.1"), and whether it is only counters and punctuation.</summary>
+        internal readonly record struct ListItemLevel(string Text, bool ShowsOtherLevels, bool IsPlain);
+
+        /// <summary>The number of a list paragraph level by level, from the list's first level to the
+        /// paragraph's own, with the list and the counters it stands at.</summary>
+        internal sealed record ListItemLevels(int? AbstractNumId, int[] Counters, IReadOnlyList<ListItemLevel> Levels);
+
+        private static readonly HashSet<string?> PlainNumberFormats = new()
+        {
+            null, "decimal", "decimalZero", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman",
+        };
+
+        /// <summary>
+        /// <see cref="RetrieveListItem(WordprocessingDocument, XElement)"/> for every level down to the
+        /// paragraph's own, or null for a paragraph that is not a list item. With
+        /// <paramref name="numeralsOnly"/> the words around the counters ("Section ") are left out.
+        /// </summary>
+        internal static ListItemLevels? RetrieveListItemLevels(WordprocessingDocument wordDoc, XElement paragraph,
+            bool numeralsOnly, ListItemRetrieverSettings? settings)
+        {
+            if (RetrieveListItem(wordDoc, paragraph, settings) == null)
+                return null;
+            var listItemInfo = paragraph.Annotation<ListItemInfo>()!;
+            var counters = paragraph.Annotation<LevelNumbers>()!.LevelNumbersArray;
+            var stylesXDoc = wordDoc.MainDocumentPart!.StyleDefinitionsPart!.GetXDocument();
+            string language = GetLanguageIdentifier(paragraph, stylesXDoc);
+            var levels = new List<ListItemLevel>();
+            for (int ilvl = 0; ilvl <= GetParagraphLevel(paragraph); ilvl++)
+            {
+                string lvlText = (string?)listItemInfo.Lvl(ilvl)?.Elements(W.lvlText).Attributes(W.val).FirstOrDefault() ?? "";
+                var tokens = GetFormatTokens(lvlText).ToList();
+                var counted = tokens.Where(t => t.Length == 2 && t[0] == '%' && char.IsDigit(t[1])).ToList();
+                string words = string.Concat(tokens.Except(counted));
+                levels.Add(new ListItemLevel(
+                    FormatListItem(listItemInfo, counters, ilvl, lvlText, stylesXDoc, language, settings, numeralsOnly).Trim(),
+                    ShowsOtherLevels: counted.Distinct().Count() > 1,
+                    IsPlain: counted.Count > 0
+                        && counted.All(t => PlainNumberFormats.Contains(
+                            (string?)listItemInfo.Lvl(t[1] - '1')?.Elements(W.numFmt).Attributes(W.val).FirstOrDefault()))
+                        && !words.Any(c => char.IsDigit(c) || (!numeralsOnly && char.IsLetter(c)))));
+            }
+            return new ListItemLevels(listItemInfo.AbstractNumId, counters, levels);
+        }
+
         private static string FormatListItem(ListItemInfo lii, int[] levelNumbers, int ilvl,
-            string lvlText, XDocument styles, string languageCultureName, ListItemRetrieverSettings? settings)
+            string lvlText, XDocument styles, string languageCultureName, ListItemRetrieverSettings? settings,
+            bool numeralsOnly = false)
         {
             string[] formatTokens = GetFormatTokens(lvlText).ToArray();
             XElement lvl = lii.Lvl(ilvl)!;
@@ -1494,7 +1540,7 @@ namespace Docxodus
             string listItem = formatTokens.Select((t, l) =>
             {
                 if (t.Substring(0, 1) != "%")
-                    return t;
+                    return numeralsOnly ? string.Concat(t.Where(c => !char.IsLetter(c) && !char.IsWhiteSpace(c))) : t;
                 int indentationLevel;
                 if (!Int32.TryParse(t.Substring(1), out indentationLevel))
                     return t;
