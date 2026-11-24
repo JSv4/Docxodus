@@ -307,6 +307,42 @@ public class DocxSessionOutlineTests
         Assert.Equal("B b1 A [T] - sectPr", Blocks(fromEnd));
     }
 
+    /// <summary>A bookmark over the moved part ends directly in the body, after the part's last table.</summary>
+    [Fact]
+    public void OL017_MoveBlockRange_KeepsTheParagraph_OutsideABookmarkThatTravels()
+    {
+        using var session = new DocxSession(Build(
+            "<w:p><w:pPr><w:pStyle w:val=\"Ttulo1\"/></w:pPr><w:bookmarkStart w:id=\"3\" w:name=\"Span\"/><w:r><w:t>A</w:t></w:r></w:p>"
+            + Tbl("T") + "<w:bookmarkEnd w:id=\"3\"/>" + P("B", "Ttulo1") + P("b1") + Tbl("U") + P("end", "Ttulo1")));
+        var outline = session.ListOutline();
+        var range = (outline[0].AnchorId, outline[0].LastAnchorId);
+
+        Assert.True(session.MoveBlockRange(range.AnchorId, range.LastAnchorId, AnchorOf(session, "b1"), Position.After).Success);
+        Assert.Equal("B b1 A [T] bookmarkEnd - [U] end sectPr", Blocks(session));
+        Assert.True(session.Undo());
+
+        Assert.True(session.MoveBlockRange(range.AnchorId, range.LastAnchorId, AnchorOf(session, "end"), Position.After).Success);
+        Assert.Equal("B b1 [U] end A [T] bookmarkEnd - sectPr", Blocks(session));
+        var bookmark = session.ListBookmarks().Single();
+        Assert.True(bookmark.IsPaired && bookmark.IsValid);
+    }
+
+    [Fact]
+    public void OL018_MoveBlockRange_IsRefusedWhileChangesAreTracked()
+    {
+        using var session = new DocxSession(Build(P("A", "Ttulo1") + P("a1") + P("B", "Ttulo1")),
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+        var before = Blocks(session);
+        long version = session.Version;
+
+        var res = session.MoveBlockRange(AnchorOf(session, "A"), AnchorOf(session, "a1"), AnchorOf(session, "B"), Position.After);
+
+        Assert.Equal(EditErrorCode.TrackedOperationUnsupported, res.Error!.Code);
+        Assert.Equal(before, Blocks(session));
+        Assert.Equal(version, session.Version);
+        Assert.False(session.Undo());
+    }
+
     [Fact]
     public void OL016_ADefaultStyleSpelledOn_AndAFallbackThatIsShown_Count()
     {

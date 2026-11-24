@@ -7775,8 +7775,10 @@ namespace Docxodus
             // Keep a HYPERLINK before or across the tab whole: converting its preceding runs
             // individually would leave its text and bookmark targets outside the link. Reuse the field annotations
             // rather than looking for instructions under the already-flattened run list.
+            // A marked cross-reference that holds the tab stays whole too: in two parts, an edit could take one.
             var hyperlinkPrecedesTab = elementsPrecedingTab.Any(e => FieldRetriever.IsFieldResult(e, "HYPERLINK")) ||
-                firstTabRun != null && FieldRetriever.IsFieldResult(firstTabRun, "HYPERLINK");
+                firstTabRun != null && (FieldRetriever.IsFieldResult(firstTabRun, "HYPERLINK") ||
+                    settings.StampReferenceFields && FieldRetriever.IsFieldResult(firstTabRun, "REF"));
             if (hyperlinkPrecedesTab)
             {
                 var paraElement1 = new XElement(elementName,
@@ -12694,7 +12696,8 @@ namespace Docxodus
                     // A cross-reference field, for an editor that keeps it whole (StampReferenceFields).
                     if (settings.StampReferenceFields && Internal.ReferenceFieldInstr.TryParse(instrText) is { } reference)
                     {
-                        var referenceContent = g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m));
+                        // (a reference inside the result is marked in its turn)
+                        var referenceContent = ConvertContentThatCanContainFields(wordDoc, settings, g, key);
                         if (!settings.ShowDeletedRevisionContent && FieldRetriever.IsDeletedField(g.First().Ancestors().Last(), (int)key))
                             return referenceContent;
                         return PreserveJoinedFieldSources(InsideRevision(ReferenceFieldSpan(reference, g, referenceContent)));

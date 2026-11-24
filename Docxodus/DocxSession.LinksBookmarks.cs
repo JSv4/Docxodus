@@ -41,7 +41,8 @@ public sealed record CrossReferenceOptions
     /// <see cref="NumberFullContext"/> do not apply to it. The session has no page layout, so the
     /// cached result is <see cref="CachedPage"/> when the caller knows it (an editor showing pages
     /// does), else <c>1</c> with the field marked dirty so Word recomputes it on open. With
-    /// <see cref="IncludePosition"/> the cached result is <c>on page N</c>.</summary>
+    /// <see cref="IncludePosition"/> the cached result is <c>on page N</c> and the field always
+    /// dirty, since Word shows <c>above</c> or <c>below</c> for a target on the same page.</summary>
     public bool PageNumber { get; init; }
 
     /// <summary>Emit the <c>\n</c> switch: the bookmarked paragraph's number without the context
@@ -383,8 +384,9 @@ public sealed partial class DocxSession
         string cached;
         if (opts.PageNumber)
         {
-            dirty = string.IsNullOrEmpty(opts.CachedPage);
-            cached = dirty ? "1" : opts.CachedPage!;
+            // (with \p a target on the field's own page reads "above" or "below", which only Word can tell)
+            dirty = string.IsNullOrEmpty(opts.CachedPage) || opts.IncludePosition;
+            cached = string.IsNullOrEmpty(opts.CachedPage) ? "1" : opts.CachedPage;
         }
         else if (numberSwitch is not null)
         {

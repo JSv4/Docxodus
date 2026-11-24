@@ -374,9 +374,10 @@ public class DocxSessionCrossReferenceTests
         Assert.Equal("A\tB\nC", counted);
 
         var html = XDocument.Parse(HtmlConversionOps.ConvertToHtml(bytes, new HtmlConversionOptions { StampReferenceFields = true }), LoadOptions.PreserveWhitespace);
-        // (the converter may split the result at its tab: the parts, and the tab between, add up to it)
-        var cached = html.Descendants().Where(e => (string?)e.Attribute("data-field") == "REF").Select(e => (string)e.Attribute("data-field-cached")!).ToList();
-        Assert.Equal(counted.Replace("\t", ""), string.Concat(cached).Replace("\t", ""));
+        // one marker, whatever the result holds
+        var marked = Assert.Single(html.Descendants().Where(e => (string?)e.Attribute("data-field") == "REF"));
+        // (an XML reader turns the break in the attribute into a space; a browser keeps it)
+        Assert.Equal(counted.Replace("\n", " ").Replace("\t", " "), ((string)marked.Attribute("data-field-cached")!).Replace("\n", " ").Replace("\t", " "));
     }
 
     [Fact]
@@ -401,6 +402,36 @@ public class DocxSessionCrossReferenceTests
             Assert.Equal("7", marked.Value);
             Assert.DoesNotContain("data-field", HtmlConversionOps.ConvertToHtml(bytes, new HtmlConversionOptions()));
         }
+    }
+
+    [Fact]
+    public void XR018_PageNumberWithPosition_IsAlwaysDirty()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var paragraphs = BodyParagraphs(session);
+        Assert.True(session.AddBookmark("target", DocumentRange.In(paragraphs[0], new CharSpan(0, 4))).Success);
+        Assert.True(session.InsertCrossReference(paragraphs[1], 0, "target",
+            new CrossReferenceOptions { PageNumber = true, IncludePosition = true, CachedPage = "7" }).Success);
+        Assert.Equal("on page 7", Field(session, paragraphs[1]).Value);
+        Assert.Equal("true", (string?)Field(session, paragraphs[1]).Attribute(W + "dirty"));
+    }
+
+    [Fact]
+    public void XR019_StampReferenceFields_MarksAReferenceInsideAReference()
+    {
+        XElement Char(string type) => new(W + "r", new XElement(W + "fldChar", new XAttribute(W + "fldCharType", type)));
+        XElement[] Wrap(string instr, params XElement[] result) => new[] { Char("begin"), new XElement(W + "r", new XElement(W + "instrText", instr)), Char("separate") }
+            .Concat(result).Append(Char("end")).ToArray();
+        var bytes = Mutate(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), document =>
+        {
+            var part = document.MainDocumentPart!;
+            part.GetXDocument().Descendants(W + "p").First().ReplaceNodes(Wrap(" REF outer ",
+                new[] { new XElement(W + "r", new XElement(W + "t", "see ")) }.Concat(Wrap(" PAGEREF inner ", new XElement(W + "r", new XElement(W + "t", "7")))).ToArray()));
+            part.PutXDocument();
+        });
+        var html = HtmlConversionOps.ConvertToHtml(bytes, new HtmlConversionOptions { StampReferenceFields = true });
+        Assert.Equal("see 7", Reference(html).Value);
+        Assert.Equal("inner", (string?)Reference(html).Descendants().Single(e => (string?)e.Attribute("data-field") == "PAGEREF").Attribute("data-field-target"));
     }
 
     [Fact]
