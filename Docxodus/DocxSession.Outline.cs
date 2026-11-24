@@ -25,7 +25,8 @@ public sealed partial class DocxSession
     /// body paragraph (not one in a table cell or a text box) whose outline level is 1-9. The level
     /// is resolved as Word resolves it: the paragraph's own <c>w:outlineLvl</c>, else its style's,
     /// following <c>w:basedOn</c> — so a localized heading style ("Título 1", id <c>Ttulo1</c>)
-    /// counts as a heading by its outline level, not by its name. <c>w:val="9"</c> is body text.
+    /// counts as a heading by its outline level, not by its name. <c>w:val="9"</c> is body text. A
+    /// built-in heading style that writes no level (some producers leave it out) has its own.
     /// </summary>
     public IReadOnlyList<OutlineEntry> ListOutline()
     {
@@ -50,17 +51,14 @@ public sealed partial class DocxSession
             for (var id = styleId; id is not null && seen.Add(id) && byId.TryGetValue(id, out var style);
                  id = (string?)style.Element(W.basedOn)?.Attribute(W.val))
             {
-                if (OutlineLevelOf(style.Element(W.pPr)) is { } own) { level = own; break; }
+                if ((OutlineLevelOf(style.Element(W.pPr)) ?? BuiltInHeadingLevelOf(style)) is { } own) { level = own; break; }
             }
             return levelOfStyle[styleId] = level;
         }
 
         // The top-level blocks in order (a block content control's are among them), each heading's
         // position in them, then each heading's part: up to the next heading at its level or above.
-        var blocks = body.Descendants()
-            .Where(e => (e.Name == W.p || e.Name == W.tbl)
-                && !e.Ancestors().Any(a => a.Name == W.tbl || a.Name == W.txbxContent || a.Name == MC.Fallback))
-            .ToList();
+        var blocks = TopLevelBlocks(body).ToList();
         var headings = new List<(int Index, Anchor Anchor, int Level, XElement P)>();
         for (int i = 0; i < blocks.Count; i++)
         {
@@ -95,14 +93,29 @@ public sealed partial class DocxSession
     private static int? OutlineLevelOf(XElement? pPr) =>
         int.TryParse((string?)pPr?.Element(W.outlineLvl)?.Attribute(W.val), out var level) ? level : null;
 
+    /// <summary>The outline level (0-8) of a built-in heading style, which its name fixes
+    /// (<c>heading 1</c> to <c>heading 9</c> in every language), or null for any other style.</summary>
+    private static int? BuiltInHeadingLevelOf(XElement style) =>
+        (string?)style.Element(W.name)?.Attribute(W.val) is { Length: 9 } name
+        && name.StartsWith("heading ", StringComparison.OrdinalIgnoreCase) && name[8] is >= '1' and <= '9'
+            ? name[8] - '1' : null;
+
+    /// <summary>The paragraphs and tables in <paramref name="root"/> (itself included) that are in no
+    /// table cell or text box, in document order.</summary>
+    private static IEnumerable<XElement> TopLevelBlocks(XElement root) =>
+        root.DescendantsAndSelf().Where(e => (e.Name == W.p || e.Name == W.tbl)
+            && !e.Ancestors().Any(a => a.Name == W.tbl || a.Name == W.txbxContent || a.Name == MC.Fallback));
+
     /// <summary>
     /// Move the run of top-level body blocks from <paramref name="firstAnchorId"/> to
     /// <paramref name="lastAnchorId"/> (inclusive, in document order; paragraphs and tables) before
     /// or after <paramref name="targetAnchorId"/> — a heading and everything under it, as Word's
-    /// Navigation Pane drags it. One undo step. The same guards as <see cref="MoveBlock"/>: refused
-    /// when the run or the way it travels crosses a section break, when it would cut or invert a
-    /// cross-block range (a bookmark or comment running into the run from outside), when the target
-    /// lies inside the run, and under tracked changes (a tracked multi-block move is not supported).
+    /// Navigation Pane drags it. One undo step. A block content control moves whole or not at all:
+    /// a run that reaches into one must cover it, and a target inside one stands for the place just
+    /// outside it. Refused when the run or the way it travels crosses a section break, when the move
+    /// would cut, invert or change what a bookmark, comment, permission or field covers, when the
+    /// target lies inside the run, and under tracked changes (a tracked multi-block move is not
+    /// supported).
     /// </summary>
     public EditResult MoveBlockRange(string firstAnchorId, string lastAnchorId, string targetAnchorId, Position pos)
     {
@@ -124,75 +137,139 @@ public sealed partial class DocxSession
         var target = targetTarget.Resolve(_doc!);
         if (first is null || last is null || target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "an anchor resolved null", firstAnchorId);
-        if (first.Parent is not { } parent || !ReferenceEquals(last.Parent, parent) || !ReferenceEquals(target.Parent, parent))
-            return EditResult.Fail(EditErrorCode.InvalidPosition,
-                "MoveBlockRange's blocks and target must share a direct XML parent", firstAnchorId);
-        if (!IsEditorBodyBlock(first, parent) || !IsEditorBodyBlock(last, parent) || !IsEditorBodyBlock(target, parent))
+        // The closest body or block content control that holds all three: its children are what moves.
+        var body = first.Ancestors(W.body).FirstOrDefault();
+        var container = first.Ancestors().FirstOrDefault(a => (a.Name == W.body || a.Name == W.sdtContent)
+            && last.Ancestors().Contains(a) && target.Ancestors().Contains(a));
+        if (body is null || container is null
+            || new[] { first, last, target }.Any(b => !TopLevelBlocks(b).Contains(b)))
             return EditResult.Fail(EditErrorCode.AnchorWrongKind,
                 "MoveBlockRange only supports top-level body blocks", firstAnchorId);
 
-        var ctx = BuildBlockMoveContext(parent);
-        if (!ctx.Index.TryGetValue(first, out var s0) || !ctx.Index.TryGetValue(last, out var s1)
-            || !ctx.Index.TryGetValue(target, out var t))
-            return EditResult.Fail(EditErrorCode.InvalidPosition, "a block is not a body render unit", firstAnchorId);
+        XElement Unit(XElement block) => block.AncestorsAndSelf().First(e => ReferenceEquals(e.Parent, container));
+        bool OpensUnit(XElement block) => ReferenceEquals(TopLevelBlocks(Unit(block)).First(), block);
+        bool ClosesUnit(XElement block) => ReferenceEquals(TopLevelBlocks(Unit(block)).Last(), block);
+        if (!OpensUnit(first) || !ClosesUnit(last) || !(pos == Position.Before ? OpensUnit(target) : ClosesUnit(target)))
+            return EditResult.Fail(EditErrorCode.InvalidPosition,
+                "the move would split a content control, or put blocks inside one", firstAnchorId);
+
+        var children = container.Elements().ToList();
+        var index = new Dictionary<XElement, int>(children.Count);
+        for (int i = 0; i < children.Count; i++) index[children[i]] = i;
+        int s0 = index[Unit(first)], s1 = index[Unit(last)], t = index[Unit(target)];
         if (s1 < s0)
             return EditResult.Fail(EditErrorCode.InvalidPosition, "the last block comes before the first", lastAnchorId);
         if (t >= s0 && t <= s1)
             return EditResult.Fail(EditErrorCode.InvalidPosition, "the target lies inside the blocks to move", targetAnchorId);
-        // Already there: a no-op that takes no undo step.
-        if ((pos == Position.Before && t == s1 + 1) || (pos == Position.After && t == s0 - 1))
-            return new EditResult { Success = true };
 
-        var run = ctx.Blocks.Skip(s0).Take(s1 - s0 + 1).ToList();
+        // Every range and field, as the children its two ends are in (or are); one end outside the
+        // container is past its first or last child.
+        int At(XElement marker) =>
+            marker.AncestorsAndSelf().FirstOrDefault(e => ReferenceEquals(e.Parent, container)) is { } child ? index[child]
+            : XNode.DocumentOrderComparer.Compare(marker, container) < 0 ? -1 : children.Count;
+        var ranges = CrossBlockRangesAndFields(body).Select(r => (Start: At(r.Start), End: At(r.End), r.Label)).ToList();
+        // A marker right beside the run (Word writes the end of a bookmark over whole paragraphs there)
+        // travels with it when its other end does.
+        bool Travels(int marker) => ranges.Any(r =>
+            (r.Start == marker && r.End >= s0 && r.End <= s1) || (r.End == marker && r.Start >= s0 && r.Start <= s1));
+        for (bool grew = true; grew;)
+        {
+            grew = false;
+            if (s1 + 1 < children.Count && IsBlockLevelMarker(children[s1 + 1]) && Travels(s1 + 1)) { s1++; grew = true; }
+            if (s0 > 0 && IsBlockLevelMarker(children[s0 - 1]) && Travels(s0 - 1)) { s0--; grew = true; }
+        }
+
+        // Where it can land: beside the target, on either side of the markers between it and the next block.
+        int n = s1 - s0 + 1;
+        var rest = children.Where((_, i) => i < s0 || i > s1).ToList();
+        int at = t > s1 ? t - n : t;
+        var slots = new List<int> { pos == Position.Before ? at : at + 1 };
+        if (pos == Position.Before)
+            while (slots[^1] > 0 && IsBlockLevelMarker(rest[slots[^1] - 1])) slots.Add(slots[^1] - 1);
+        else
+            while (slots[^1] < rest.Count && IsBlockLevelMarker(rest[slots[^1]])) slots.Add(slots[^1] + 1);
+        // Already there: a no-op that takes no undo step.
+        if (slots.Contains(s0)) return new EditResult { Success = true };
+
+        var run = children.GetRange(s0, n);
         foreach (var block in run)
             if (MoveSourceRejection(block) is { } why)
                 return EditResult.Fail(EditErrorCode.InvalidPosition, why, firstAnchorId);
-        int lo = Math.Min(s0, t), hi = Math.Max(s1, t);
-        if (ctx.SectionBreaksBefore[hi + 1] - ctx.SectionBreaksBefore[lo] > 0)
+        if (children.Skip(Math.Min(s0, t)).Take(Math.Max(s1, t) - Math.Min(s0, t) + 1)
+            .Any(c => c.DescendantsAndSelf(W.sectPr).Any(s => s.Parent?.Name == W.pPr)))
             return EditResult.Fail(EditErrorCode.InvalidPosition, "cannot move blocks across a section-break paragraph", firstAnchorId);
-        if (ctx.UniversalRejection is { } universal)
-            return EditResult.Fail(EditErrorCode.InvalidPosition, universal, firstAnchorId);
 
-        // Where each block lands once the run is lifted out and put back at the target: a
-        // cross-block range must keep its two ends in order and the same distance apart.
-        int n = s1 - s0 + 1;
-        int targetAfterRemoval = t > s1 ? t - n : t;
-        int insertAt = pos == Position.Before ? targetAfterRemoval : targetAfterRemoval + 1;
-        int Reordered(int i)
+        // A range or field must keep its two ends in order and the same distance apart.
+        string? Broken(int slot)
         {
-            if (i >= s0 && i <= s1) return insertAt + (i - s0);
-            int afterRemoval = i > s1 ? i - n : i;
-            return afterRemoval >= insertAt ? afterRemoval + n : afterRemoval;
+            int Reordered(int i)
+            {
+                if (i >= s0 && i <= s1) return slot + (i - s0);
+                int r = i > s1 ? i - n : i;
+                return r >= slot ? r + n : r;
+            }
+            foreach (var (start, end, label) in ranges)
+                if (end < start || Reordered(end) - Reordered(start) != end - start) return label;
+            return null;
         }
-        foreach (var (start, end, label) in ctx.CrossBlockRanges)
-        {
-            int a = Reordered(start), b = Reordered(end);
-            if (b < a || b - a != end - start)
-                return EditResult.Fail(EditErrorCode.InvalidPosition,
-                    $"move would change or invert a cross-block {label} range", firstAnchorId);
-        }
+        int chosen = slots.FindIndex(slot => Broken(slot) is null);
+        if (chosen < 0)
+            return EditResult.Fail(EditErrorCode.InvalidPosition,
+                $"move would change or invert a cross-block {Broken(slots[0])} range", firstAnchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            // The blocks' own siblings between them (a run-level marker left among blocks, say)
-            // travel with them: everything from the first block to the last.
+            // The blocks' own siblings between them travel with them: everything from the first to the last.
             var nodes = new List<XNode>();
-            for (XNode? node = first; node is not null; node = node.NextNode)
+            for (XNode? node = run[0]; node is not null; node = node.NextNode)
             {
                 nodes.Add(node);
-                if (ReferenceEquals(node, last)) break;
+                if (ReferenceEquals(node, run[^1])) break;
             }
             foreach (var node in nodes) node.Remove();
-            if (pos == Position.Before) target.AddBeforeSelf(nodes);
-            else target.AddAfterSelf(nodes);
+            int slot = slots[chosen];
+            if (slot < rest.Count) rest[slot].AddBeforeSelf(nodes);
+            else rest[^1].AddAfterSelf(nodes);
             InvalidateProjectionCache();
-            Anchor[] moved = run.Select(AnchorForElement).OfType<Anchor>().ToArray();
-            return new EditResult { Success = true, Modified = moved.Length > 0 ? moved : new[] { firstTarget.Anchor } };
+            return new EditResult
+            {
+                Success = true,
+                Modified = run.SelectMany(TopLevelBlocks).Select(AnchorForElement).OfType<Anchor>().ToArray(),
+            };
         }
         catch (Exception ex)
         {
             return FailInternal(ex, firstAnchorId);
         }
+    }
+
+    /// <summary>A range marker (or a proofing mark) that is itself a child of the body or of a block
+    /// content control, so not a block.</summary>
+    private static bool IsBlockLevelMarker(XElement child) => child.Name == W.proofErr
+        || CrossBlockRangePairs.Any(pair => child.Name == pair.Start || child.Name == pair.End);
+
+    /// <summary>The two ends of every paired range marker and every complex field in
+    /// <paramref name="root"/>.</summary>
+    private static IEnumerable<(XElement Start, XElement End, string Label)> CrossBlockRangesAndFields(XElement root)
+    {
+        var starts = new Dictionary<(XName Name, string Id), XElement>();
+        var fields = new Stack<XElement>();
+        foreach (var e in root.Descendants())
+        {
+            if (e.Name == W.fldChar)
+            {
+                var type = (string?)e.Attribute(W.fldCharType);
+                if (type == "begin") fields.Push(e);
+                else if (type == "end" && fields.Count > 0) yield return (fields.Pop(), e, "field");
+                continue;
+            }
+            foreach (var (startName, endName, _) in CrossBlockRangePairs)
+                if (e.Name == startName) starts.TryAdd((endName, (string?)e.Attribute(W.id) ?? ""), e);
+        }
+        foreach (var e in root.Descendants())
+            foreach (var (_, endName, label) in CrossBlockRangePairs)
+                if (e.Name == endName && starts.TryGetValue((endName, (string?)e.Attribute(W.id) ?? ""), out var start))
+                    yield return (start, e, label);
     }
 }

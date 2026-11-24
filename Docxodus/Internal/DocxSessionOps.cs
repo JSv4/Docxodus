@@ -835,7 +835,7 @@ internal static class DocxSessionOps
             s => s.MoveBlockRange(firstAnchorId, lastAnchorId, targetAnchorId, position ?? DefaultInsertPosition));
 
     /// <summary><see cref="DocxSession.ListOutline"/> as a JSON array of
-    /// <c>{ anchorId, level, text, styleId? }</c>.</summary>
+    /// <c>{ anchorId, level, text, styleId?, lastAnchorId }</c>.</summary>
     public static string ListOutline(int handle) =>
         DocxSessionJson.SerializeOutline(SessionRegistry.Get(handle).ListOutline());
 
