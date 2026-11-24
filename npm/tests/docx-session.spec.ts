@@ -148,7 +148,10 @@ test.describe('DocxSession (WASM bridge)', () => {
     const result = await page.evaluate((bytes: number[]) => {
       const session = (window as any).Docxodus.openTypedSession(new Uint8Array(bytes)) as DocxSession;
       try {
-        const anchor = Object.entries(session.project().anchorIndex).find(([, a]) => a.scope === 'body' && a.kind === 'p')![0];
+        // The title at the top: a paragraph in a table cell is not in the outline.
+        const { markdown, anchorIndex } = session.project();
+        const anchor = Object.entries(anchorIndex).filter(([id, a]) => a.scope === 'body' && ['p', 'h'].includes(a.kind) && markdown.includes(`{#${id}}`))
+          .sort(([a], [b]) => markdown.indexOf(`{#${a}}`) - markdown.indexOf(`{#${b}}`))[0][0];
         const inserted = session.insertParagraph(anchor, 'before', 'Alpha\n\nalpha text\n\nBeta\n\nbeta text');
         for (const i of [0, 2]) session.setParagraphStyle(inserted.created[i].id, 'Heading1');
         const order = () => session.listOutline().map(e => e.text).filter(t => t === 'Alpha' || t === 'Beta');
