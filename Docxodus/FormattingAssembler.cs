@@ -2624,6 +2624,30 @@ namespace Docxodus
         }
 
         /// <summary>
+        /// The tab stops <see cref="ResolveEffectiveParagraphProperties"/>'s layers give a paragraph, merged
+        /// from the document defaults up. One order matters here: a style's <c>clear</c> is spent on the
+        /// first stop it meets, so merging the styles before the defaults would bring a default stop back.
+        /// </summary>
+        internal static XElement? ResolveEffectiveTabs(WordprocessingDocument wDoc, XElement paragraph, bool withDirect)
+        {
+            var styles = wDoc.MainDocumentPart?.StyleDefinitionsPart?.GetXDocument();
+            var layers = new List<XElement?>();
+            if (styles != null)
+            {
+                var styleName = (string?)paragraph.Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault()
+                    ?? (string?)styles.Root?.Elements(W.style)
+                        .FirstOrDefault(s => (string?)s.Attribute(W.type) == "paragraph" && s.Attribute(W._default).ToBoolean() == true)?
+                        .Attribute(W.styleId);
+                // (a probe, as above: a clone carries no cached list annotations)
+                var probe = new XElement(W.p, paragraph.Attributes(), paragraph.Element(W.pPr));
+                layers.Add(WordStockDocDefaults.ParagraphProperties(styles.Root)?.Element(W.tabs));
+                layers.AddRange(ParaStyleParaPropsStack(styles, styleName, probe).Reverse().Select(pPr => pPr.Element(W.tabs)));
+            }
+            if (withDirect) layers.Add(paragraph.Element(W.pPr)?.Element(W.tabs));
+            return layers.Aggregate((XElement?)null, (lower, higher) => TabsMerge(higher, lower));
+        }
+
+        /// <summary>
         /// Non-mutating run-property resolver for anchor introspection. Reuses the assembler's
         /// paragraph/character style rollup, toggle handling, document defaults, and theme-font
         /// resolution, then overlays the run's direct <c>w:rPr</c>. Returns a detached effective

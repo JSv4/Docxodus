@@ -192,6 +192,7 @@ public class DocxSessionTabStopsTests
     [InlineData("0.5in", 720)]
     [InlineData("1in", 1440)]
     [InlineData("567", 567)]
+    [InlineData("0", 0)]
     public void TS009_DefaultInterval_IsReadInItsUnit(string value, int twips)
     {
         var session = new DocxSession(Document($"<w:defaultTabStop w:val=\"{value}\"/>"));
@@ -206,11 +207,63 @@ public class DocxSessionTabStopsTests
         Assert.Equal(EditErrorCode.InvalidParagraphFormat, far.Error!.Code);
     }
 
+    [Fact]
+    public void TS012_AnAlignmentOrLeaderThatDoesNotExist_IsRefused()
+    {
+        var session = new DocxSession(Document());
+        var p = Paragraphs(session)[0];
+        long version = session.Version;
+        Assert.Equal(EditErrorCode.InvalidParagraphFormat, session.SetTabStops(p, new[] { Stop(720, (TabStopAlignment)99) }).Error!.Code);
+        Assert.Equal(EditErrorCode.InvalidParagraphFormat, session.SetTabStops(p, new[] { Stop(720, leader: (TabStopLeader)99) }).Error!.Code);
+        Assert.Equal(version, session.Version);
+    }
+
+    [Fact]
+    public void TS013_AZeroInterval_IsNotTheDefaultOne()
+    {
+        var session = new DocxSession(Document("<w:defaultTabStop w:val=\"0\"/>"));
+        Assert.True(session.SetDefaultTabStop(720).Success);
+        using var ms = new MemoryStream(session.Save());
+        using var doc = WordprocessingDocument.Open(ms, false);
+        Assert.Equal("720", (string?)doc.MainDocumentPart!.DocumentSettingsPart!.GetXDocument().Root!.Element(W + "defaultTabStop")!.Attribute(W + "val"));
+    }
+
+    /// <summary>The document defaults and a base style both set a stop that a derived style clears: it
+    /// stays cleared, and asking for it writes it.</summary>
+    [Fact]
+    public void TS014_AStopAStyleClears_IsNotBroughtBackByTheDefaults()
+    {
+        const string tab = "<w:pPr><w:tabs><w:tab w:val=\"left\" w:pos=\"1440\"/></w:tabs></w:pPr>";
+        using var ms = new MemoryStream();
+        ms.Write(Document());
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, true))
+        {
+            var part = doc.MainDocumentPart!.StyleDefinitionsPart!;
+            var root = part.GetXDocument().Root!;
+            XElement Parse(string xml) => XElement.Parse($"<x xmlns:w=\"{W.NamespaceName}\">{xml}</x>").Elements().Single();
+            root.AddFirst(Parse($"<w:docDefaults><w:pPrDefault>{tab}</w:pPrDefault></w:docDefaults>"));
+            root.Elements(W + "style").First().Add(Parse(tab));
+            root.Elements(W + "style").Last().Element(W + "pPr")!.ReplaceWith(Parse(tab.Replace("left", "clear")));
+            part.PutXDocument();
+        }
+        var session = new DocxSession(ms.ToArray());
+        var p = Paragraphs(session)[0];
+
+        Assert.Empty(session.GetTabStops(p)!.StyleStops);
+        Assert.Equal(new[] { Stop(5760, TabStopAlignment.Right, TabStopLeader.Dot) }, session.GetTabStops(p)!.Stops);
+        Assert.True(session.SetTabStops(p, new[] { Stop(1440) }).Success);
+        Assert.Equal("left@1440", OwnTabs(session, 0));
+        Assert.Equal(new[] { Stop(1440) }, session.GetTabStops(p)!.Stops);
+    }
+
     [Theory]
     [InlineData("[1440]")]
     [InlineData("[{\"alignment\":\"left\"}]")]
     [InlineData("[{\"positionTwips\":1440.5}]")]
     [InlineData("[{\"positionTwips\":1440,\"alignment\":\"start\"}]")]
+    [InlineData("[{\"positionTwips\":1440,\"alignment\":42}]")]
+    [InlineData("[{\"positionTwips\":1440,\"leader\":true}]")]
     [InlineData("{}")]
     public void TS011_Json_RefusesMalformedStops(string json) =>
         Assert.Throws<System.ArgumentException>(() => DocxSessionJson.ParseTabStops(json));
