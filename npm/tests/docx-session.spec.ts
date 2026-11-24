@@ -112,6 +112,88 @@ test.describe('DocxSession (WASM bridge)', () => {
     expect(result.restored).toBe(true);
   });
 
+  test('tab stops round-trip through the typed session, and undo', async ({ page }) => {
+    const result = await page.evaluate((bytes: number[]) => {
+      const open = (b: Uint8Array) => (window as any).Docxodus.openTypedSession(b) as DocxSession;
+      const firstParagraph = (s: DocxSession) =>
+        Object.entries(s.project().anchorIndex).find(([, a]) => a.scope === 'body' && a.kind === 'p')![0];
+      const session = open(new Uint8Array(bytes));
+      try {
+        const anchor = firstParagraph(session);
+        const before = session.getTabStops(anchor)!;
+        const set = session.setTabStops(anchor, [{ positionTwips: 1440 }, { positionTwips: 4320, alignment: 'right', leader: 'dot' }]);
+        const interval = session.setDefaultTabStop(1080);
+        const after = session.getTabStops(anchor)!;
+        const reopened = open(session.save());
+        const saved = reopened.getTabStops(firstParagraph(reopened))!;
+        reopened.close();
+        const undone = session.undo() && session.undo();
+        return { set: set.success, interval: interval.success, before, after, saved, undone, restored: session.getTabStops(anchor),
+          refused: session.setDefaultTabStop(0).error?.code, notAParagraph: session.getTabStops('p:body:none') };
+      } finally { session.close(); }
+    }, Array.from(readTestFile('HC001-5DayTourPlanTemplate.docx')));
+    expect(result.set && result.interval && result.undone).toBe(true);
+    expect(result.after.stops).toEqual([
+      { positionTwips: 1440, alignment: 'left', leader: 'none' },
+      { positionTwips: 4320, alignment: 'right', leader: 'dot' },
+    ]);
+    expect(result.after.defaultTabStopTwips).toBe(1080);
+    expect(result.saved).toEqual(result.after);
+    expect(result.restored).toEqual(result.before);
+    expect(result.refused).toBe('invalid_paragraph_format');
+    expect(result.notAParagraph).toBeNull();
+  });
+
+  test('the outline lists headings, and a heading moves with its text as one undo', async ({ page }) => {
+    const result = await page.evaluate((bytes: number[]) => {
+      const session = (window as any).Docxodus.openTypedSession(new Uint8Array(bytes)) as DocxSession;
+      try {
+        // The title at the top: a paragraph in a table cell is not in the outline.
+        const { markdown, anchorIndex } = session.project();
+        const anchor = Object.entries(anchorIndex).filter(([id, a]) => a.scope === 'body' && ['p', 'h'].includes(a.kind) && markdown.includes(`{#${id}}`))
+          .sort(([a], [b]) => markdown.indexOf(`{#${a}}`) - markdown.indexOf(`{#${b}}`))[0][0];
+        const inserted = session.insertParagraph(anchor, 'before', 'Alpha\n\nalpha text\n\nBeta\n\nbeta text');
+        for (const i of [0, 2]) session.setParagraphStyle(inserted.created[i].id, 'Heading1');
+        const order = () => session.listOutline().map(e => e.text).filter(t => t === 'Alpha' || t === 'Beta');
+        const before = order();
+        const [alpha, beta] = ['Alpha', 'Beta'].map(t => session.listOutline().find(e => e.text === t)!);
+        const moved = session.moveBlockRange(beta.anchorId, inserted.created[3].id, alpha.anchorId, 'before');
+        const after = order();
+        return { level: alpha.level, last: alpha.lastAnchorId === inserted.created[1].id, before, moved: moved.success, after,
+          undone: session.undo(), restored: order(),
+          refused: session.moveBlockRange(alpha.anchorId, alpha.lastAnchorId, alpha.lastAnchorId, 'after').error?.code };
+      } finally { session.close(); }
+    }, Array.from(readTestFile('HC001-5DayTourPlanTemplate.docx')));
+    expect(result.level).toBe(1);
+    expect(result.last).toBe(true);
+    expect(result.before).toEqual(['Alpha', 'Beta']);
+    expect(result.moved).toBe(true);
+    expect(result.after).toEqual(['Beta', 'Alpha']);
+    expect(result.undone).toBe(true);
+    expect(result.restored).toEqual(['Alpha', 'Beta']);
+    expect(result.refused).toBe('invalid_position');
+  });
+
+  test('a reference bookmark and the cross-references to it', async ({ page }) => {
+    const result = await page.evaluate((bytes: number[]) => {
+      const session = (window as any).Docxodus.openTypedSession(new Uint8Array(bytes)) as DocxSession;
+      try {
+        const [target, from] = Object.entries(session.project().anchorIndex).filter(([, a]) => a.scope === 'body' && a.kind === 'p').map(([id]) => id);
+        const made = session.addReferenceBookmark(target);
+        const again = session.addReferenceBookmark(target);
+        const page7 = session.insertCrossReference(from, 0, made.bookmarkName!, { pageNumber: true, cachedPage: '7', hyperlink: true });
+        const number = session.insertCrossReference(from, 0, made.bookmarkName!, { numberFullContext: true });
+        return { name: made.bookmarkName, same: again.bookmarkName === made.bookmarkName, page: page7.success, number: number.success, xml: session.raw.getXml(from),
+          refused: session.insertCrossReference(from, 0, 'missing').error?.code };
+      } finally { session.close(); }
+    }, Array.from(readTestFile('HC001-5DayTourPlanTemplate.docx')));
+    expect(result.name).toMatch(/^_Ref\d{9}$/);
+    expect(result.same && result.page && result.number).toBe(true);
+    expect(result.xml).toContain(`PAGEREF ${result.name} \\h`);
+    expect(result.xml).toContain(`REF ${result.name} \\w`);
+    expect(result.refused).toBe('missing_bookmark_target');
+  });
+
   test('block insertion refuses cell anchors before recording history', async ({ page }) => {
     const results = await page.evaluate((bytes: number[]) => {
       const open = (input: Uint8Array) => (window as any).Docxodus.openTypedSession(input) as DocxSession;

@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using Docxodus.Internal;
 
 namespace Docxodus;
 
@@ -124,7 +125,7 @@ public sealed partial class DocxSession
     /// table cell or text box, in document order.</summary>
     private static IEnumerable<XElement> TopLevelBlocks(XElement root) =>
         root.DescendantsAndSelf().Where(e => (e.Name == W.p || e.Name == W.tbl)
-            && !e.Ancestors().Any(a => a.Name == W.tbl || a.Name == W.txbxContent || a.Name == MC.Fallback));
+            && !e.Ancestors().Any(a => a.Name == W.tbl || a.Name == W.txbxContent) && WmlToMarkdownConverter.IsSelectedMarkup(e));
 
     /// <summary>
     /// Move the run of top-level body blocks from <paramref name="firstAnchorId"/> to
@@ -247,15 +248,34 @@ public sealed partial class DocxSession
                 nodes.Add(node);
                 if (ReferenceEquals(node, run[^1])) break;
             }
+            var (gapBefore, gapAfter) = (RevisionOps.SiblingBlock(run[0], forward: false), RevisionOps.SiblingBlock(run[^1], forward: true));
             foreach (var node in nodes) node.Remove();
             int slot = slots[chosen];
             if (slot < rest.Count) rest[slot].AddBeforeSelf(nodes);
             else rest[^1].AddAfterSelf(nodes);
+            // Where the blocks came from, and both edges of where they went: a paragraph must stand between
+            // two tables, and after one that would end the body (as InsertTable keeps it).
+            var separators = new List<XElement>();
+            foreach (var (left, right) in new[]
+                {
+                    (gapBefore, gapAfter),
+                    (RevisionOps.SiblingBlock(run[0], forward: false), run[0]),
+                    (run[^1], RevisionOps.SiblingBlock(run[^1], forward: true)),
+                })
+            {
+                if (left?.Name != W.tbl || !ReferenceEquals(RevisionOps.SiblingBlock(left, forward: true), right)
+                    || !(right?.Name == W.tbl || right?.Name == W.sectPr || (right is null && container.Name == W.body))) continue;
+                var separator = new XElement(W.p);
+                UnidHelper.AssignToSelfAndDescendants(separator);
+                left.AddAfterSelf(separator);
+                separators.Add(separator);
+            }
             InvalidateProjectionCache();
             var anchors = BodyAnchors();
             return new EditResult
             {
                 Success = true,
+                Created = separators.Select(p => AnchorIn(anchors, p)).OfType<Anchor>().ToArray(),
                 Modified = run.SelectMany(TopLevelBlocks).Select(b => AnchorIn(anchors, b)).OfType<Anchor>().ToArray(),
                 Patch = PatchFor(firstTarget),
             };
