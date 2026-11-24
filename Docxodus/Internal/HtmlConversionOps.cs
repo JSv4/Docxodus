@@ -1234,6 +1234,9 @@ internal static class HtmlConversionOps
         Mix(num?.Elements(w + "num").Count() ?? -1);
         Mix(num?.Elements(w + "abstractNum").Count() ?? -1);
         Mix(num?.Descendants(w + "lvl").Count() ?? -1);
+        // The automatic tab interval, which a session can set and undo.
+        foreach (var c in (string?)main.DocumentSettingsPart?.GetXDocument().Root?.Element(w + "defaultTabStop")?.Attribute(w + "val") ?? "")
+            Mix(c);
         return sig;
     }
 
