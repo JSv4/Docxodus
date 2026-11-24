@@ -280,7 +280,7 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_edit",
-            "Insert, replace, move, delete, or undo/redo text and blocks, addressed by anchor id. move_block_range moves a run of top-level blocks as one edit, as Word's Navigation Pane drags a heading with its text (lastAnchorId from docxodus_get_content format=outline). update_fields is Word's Update Field (F9): tables of contents rebuilt from the headings, REF fields given their bookmark's current text or number, PAGEREF fields the page from pages, SEQ fields renumbered; one undo step, refused while changes are tracked.",
+            "Insert, replace, move, delete, or undo/redo text and blocks, addressed by anchor id. move_block_range moves a run of top-level blocks as one edit, as Word's Navigation Pane drags a heading with its text (lastAnchorId from docxodus_get_content format=outline). update_fields is Word's Update Field (F9): tables of contents rebuilt from the headings, REF fields given their bookmark's current text or number, PAGEREF fields the page from pages, SEQ fields renumbered; a field it cannot work out exactly keeps its result. One undo step, refused while changes are tracked.",
             """
             {
               "type": "object",
@@ -318,14 +318,14 @@ internal static class ToolCatalog
                 "lastAnchorId": { "type": "string", "description": "move_block_range: last top-level block of the run (inclusive, after firstAnchorId). Refused across a section break, when it would cut a bookmark or comment range, onto a target inside the run, and under tracked changes." },
                 "range": {
                   "type": "object",
-                  "description": "update_fields: only the fields that start in these paragraphs. Omitted: every field in the body, and the document no longer asks Word to update its fields on open.",
+                  "description": "update_fields: only the fields that start in these paragraphs. Omitted: every field in the body. The document stops asking Word to update its fields on open only when none is left that needs it.",
                   "properties": {
                     "startAnchorId": { "type": "string" }, "startOffset": { "type": "integer" },
                     "endAnchorId": { "type": "string" }, "endOffset": { "type": "integer" }
                   },
                   "required": ["startAnchorId", "startOffset", "endAnchorId", "endOffset"]
                 },
-                "pages": { "type": "object", "additionalProperties": { "type": ["string", "integer"] }, "description": "update_fields: the page each paragraph is on, keyed by anchor id or unid, for contents entries and PAGEREF results (a paragraph missing here keeps its cached page)." },
+                "pages": { "type": "object", "additionalProperties": { "type": ["string", "integer"] }, "description": "update_fields: the page each paragraph is on, keyed by anchor id or unid, for contents entries and PAGEREF results (a paragraph missing here keeps the page its fields show; a contents entry that had none shows 1 and is marked dirty)." },
                 "tablesOfContentsOnly": { "type": "boolean", "description": "update_fields: only tables of contents (Word's Update Table)." }
               },
               "required": ["sessionId", "action"]

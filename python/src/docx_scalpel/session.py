@@ -1481,8 +1481,8 @@ class DocxSession:
         heading); ``REF`` fields take their bookmark's current text or number; ``PAGEREF`` fields
         take the page from ``pages`` (keyed by anchor id or unid); ``SEQ`` fields are numbered
         again. ``range`` limits it to the fields that start in those paragraphs; without it every
-        field in the body is updated and the document no longer asks Word to update fields on
-        open. ``tables_of_contents_only`` is Word's Update Table. One undo step (none when there is
+        field in the body is updated. A field it cannot work out exactly keeps its result, and the
+        document stops asking Word to update fields on open only when none is left that needs it. ``tables_of_contents_only`` is Word's Update Table. One undo step (none when there is
         nothing to update); refused while changes are tracked."""
         args: dict[str, Any] = {}
         if range is not None:

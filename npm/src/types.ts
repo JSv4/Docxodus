@@ -3531,9 +3531,10 @@ export interface CrossBlockMatch {
 /** Options for {@link DocxSession.updateFields}. */
 export interface UpdateFieldsOptions {
   /** Only the fields that start in these paragraphs; absent: every field in the body (and the
-   *  document then no longer asks Word to update its fields on open). */
+   *  document stops asking Word to update its fields on open once none is left that needs it). */
   range?: DocumentRange;
-  /** The page each paragraph is on (keyed by anchor id or unid), for contents entries and PAGEREF. */
+  /** The page each paragraph is on (keyed by anchor id or unid), for contents entries and PAGEREF.
+   *  A paragraph missing here keeps the page its fields show. */
   pages?: Record<string, string>;
   /** Only tables of contents (Word's Update Table). */
   tablesOfContentsOnly?: boolean;

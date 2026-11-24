@@ -8,6 +8,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
 using Docxodus.Internal;
 
 namespace Docxodus;
@@ -16,14 +17,14 @@ namespace Docxodus;
 public sealed record UpdateFieldsOptions
 {
     /// <summary>Only the fields that start in these paragraphs (a selection: Word's F9); null updates
-    /// every field in the body (Ctrl+A, F9) and, the cached results then being current, clears the
-    /// document's request that Word update its fields on open.</summary>
+    /// every field in the body (Ctrl+A, F9).</summary>
     public DocumentRange? Range { get; init; }
 
     /// <summary>The page each paragraph is on, as the caller's layout shows it, keyed by the
     /// paragraph's anchor id or its unid: the page numbers of a table of contents and of
     /// <c>PAGEREF</c> fields. The session has no page layout of its own. A paragraph missing from
-    /// the map leaves a <c>PAGEREF</c> as it was and gives a contents entry page <c>1</c>.</summary>
+    /// the map keeps the page its fields show; a contents entry that had none shows <c>1</c> and is
+    /// marked dirty, so Word updates it.</summary>
     public IReadOnlyDictionary<string, string>? Pages { get; init; }
 
     /// <summary>Only tables of contents (Word's Update Table); other fields are left as they are.</summary>
@@ -33,18 +34,31 @@ public sealed record UpdateFieldsOptions
 public sealed partial class DocxSession
 {
     private const string ReferenceSourceNotFound = "Error! Reference source not found.";
+    private const string BookmarkNotDefined = "Error! Bookmark not defined.";
     private const string NoTocEntries = "No table of contents entries found.";
 
+    /// <summary>Fields with no cached result that can go stale: Word computes them as it lays the page
+    /// out, or they only mark or accept something.</summary>
+    private static readonly HashSet<string> FieldsThatNeedNoUpdate = new(StringComparer.Ordinal)
+    {
+        "HYPERLINK", "PAGE", "TC", "XE", "TA", "RD", "FORMTEXT", "FORMCHECKBOX", "FORMDROPDOWN",
+        "MACROBUTTON", "GOTOBUTTON", "SYMBOL", "ADVANCE", "PRIVATE",
+    };
+
     /// <summary>
-    /// Word's Update Field (F9) over the body: a table of contents is built again from the headings
-    /// (its <c>\o</c> levels, <c>\h</c> hyperlinks; each entry a <c>TOC n</c> paragraph with the
-    /// heading's number and text and a <c>PAGEREF</c> to a hidden <c>_Toc</c> bookmark on it);
-    /// <c>REF</c> fields take their bookmark's current text or number (<c>\r</c>, <c>\n</c>,
-    /// <c>\w</c>, <c>\p</c>); <c>PAGEREF</c> fields their bookmark's page from
-    /// <see cref="UpdateFieldsOptions.Pages"/>; <c>SEQ</c> fields are numbered again in document
-    /// order. Other fields (tables of figures and authorities among them) are left as they are. One
-    /// undo step. Refused while changes are tracked: Word regenerates these results wholesale, which
-    /// no revision mark can take back.
+    /// Word's Update Field (F9) over the body. A table of contents is built again from the headings
+    /// (its <c>\o</c> levels and <c>\u</c> outline levels, <c>\h</c> hyperlinks; each entry a
+    /// <c>TOC n</c> paragraph with the heading's number and text and a <c>PAGEREF</c> to a hidden
+    /// <c>_Toc</c> bookmark on it); <c>REF</c> fields take their bookmark's current text or number
+    /// (<c>\r</c>, <c>\n</c>, <c>\w</c>, <c>\t</c>, <c>\p</c>); <c>PAGEREF</c> fields their bookmark's
+    /// page from <see cref="UpdateFieldsOptions.Pages"/>; <c>SEQ</c> fields are numbered again in
+    /// document order. One undo step, or none when nothing changes.
+    /// <para>A field whose result the engine cannot work out exactly keeps the result it has: a locked
+    /// field, another kind of field (a table of figures or authorities among them), a switch not listed
+    /// here, a result that holds tracked changes, comments or one end of a range. The document's
+    /// request that Word update its fields on open is cleared only when no such field is left in any
+    /// story. Refused while changes are tracked: Word regenerates these results wholesale, which no
+    /// revision mark can take back.</para>
     /// </summary>
     public EditResult UpdateFields(UpdateFieldsOptions? options = null)
     {
@@ -79,71 +93,46 @@ public sealed partial class DocxSession
         var pages = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (key, value) in o.Pages ?? new Dictionary<string, string>())
             pages[key.Contains(':') ? key[(key.LastIndexOf(':') + 1)..] : key] = value;
-        string? PageOf(XElement paragraph) =>
-            (string?)paragraph.Attribute(PtOpenXml.Unid) is { } unid && pages.TryGetValue(unid, out var page) ? page : null;
 
         // (no field this updates: no edit, and no undo step, as when printing a document without any)
         var updatable = o.TablesOfContentsOnly ? new[] { "TOC" } : new[] { "TOC", "REF", "PAGEREF", "SEQ" };
-        if (!ScanFields(body).Any(f => updatable.Contains(f.Kind) && (inRange is null || inRange.Contains(f.Paragraph)
-                || (f.Kind == "TOC" && f.Paragraphs().Any(inRange.Contains)))))
+        if (!ScanFields(body).Any(f => updatable.Contains(f.Kind) && f.StartsIn(inRange)))
             return new EditResult { Success = true };
 
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            // 1. Tables of contents, rebuilt (their entries' PAGEREFs come out current).
-            foreach (var toc in ScanFields(body).Where(f => f.Kind == "TOC" && f.Complex && f.Depth == 0).ToList())
+            var update = new FieldUpdate(pages);
+            foreach (var toc in ScanFields(body).Where(f => f.Kind == "TOC" && f.StartsIn(inRange)).ToList())
+                RebuildTableOfContents(body, toc, update);
+            if (update.Changed) InvalidateProjectionCache();
+
+            if (!o.TablesOfContentsOnly)
             {
-                if (inRange is not null && !toc.Paragraphs().Any(inRange.Contains)) continue;
-                RebuildTableOfContents(toc, PageOf);
+                var fields = ScanFields(body);
+                UpdateSequences(body, fields, inRange, update);
+                foreach (var field in fields.Where(f => f.Kind is "REF" or "PAGEREF" && f.StartsIn(inRange)))
+                    if (field.Begin.Ancestors(W.body).Any() && ReferenceResult(field, update) is { } result)
+                        update.Set(field, result);
+                update.CopyToFallbacks(body);
+                if (inRange is null && !FieldsLeft(main, body, update) && ClearFieldUpdateOnOpen(main)) update.Changed = true;
+            }
+
+            if (!update.Changed)
+            {
+                _ = _history.PopForUndo();
+                return new EditResult { Success = true };
             }
             InvalidateProjectionCache();
-            if (o.TablesOfContentsOnly) return new EditResult { Success = true };
-
-            // 2. SEQ numbers, counted over the whole body even when only part is updated.
-            var counters = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var fields = ScanFields(body);
-            foreach (var field in fields.Where(f => f.Kind == "SEQ"))
+            Anchor[] Anchors(IEnumerable<XElement> paragraphs) => paragraphs.Distinct()
+                .Where(p => p.Ancestors(W.body).Any()).Select(AnchorForElement).OfType<Anchor>().ToArray();
+            return new EditResult
             {
-                var result = SequenceResult(field.Tokens, counters);
-                if (result is null || (inRange is not null && !inRange.Contains(field.Paragraph))) continue;
-                field.SetResult(result);
-            }
-
-            // 3. REF and PAGEREF.
-            foreach (var field in fields.Where(f => f.Kind is "REF" or "PAGEREF"))
-            {
-                if (inRange is not null && !inRange.Contains(field.Paragraph)) continue;
-                if (field.Tokens.Length < 2 || field.Tokens[1].StartsWith('\\')) continue;
-                var bookmark = field.Tokens[1];
-                var switches = new HashSet<string>(field.Tokens.Skip(2).Select(t => t.ToLowerInvariant()));
-                string? result;
-                if (ResolveBookmarkPair(bookmark, hyperlinkTarget: true, null, out var start, out _) is not null)
-                    result = ReferenceSourceNotFound;
-                else if (field.Kind == "PAGEREF")
-                {
-                    var target = start.Ancestors(W.p).FirstOrDefault()
-                        ?? start.ElementsAfterSelf(W.p).FirstOrDefault();
-                    var page = target is null ? null : PageOf(target);
-                    if (page is null) continue;
-                    result = page;
-                    if (switches.Contains("\\p"))
-                        result = PageOf(field.Paragraph) == page
-                            ? (XNode.DocumentOrderComparer.Compare(start, field.Begin) < 0 ? "above" : "below")
-                            : "on page " + page;
-                }
-                else
-                {
-                    string? numberSwitch = switches.Contains("\\w") ? "\\w" : switches.Contains("\\n") ? "\\n"
-                        : switches.Contains("\\r") ? "\\r" : null;
-                    result = ReferenceResult(bookmark, numberSwitch, switches.Contains("\\p"), field.Begin, start);
-                }
-                field.SetResult(result);
-            }
-
-            if (inRange is null) ClearFieldUpdateOnOpen(main);
-            InvalidateProjectionCache();
-            return new EditResult { Success = true };
+                Success = true,
+                Created = Anchors(update.Created),
+                Removed = update.Removed.ToArray(),
+                Modified = Anchors(update.Modified.Where(p => !update.Created.Contains(p))),
+            };
         }
         catch (Exception ex)
         {
@@ -151,68 +140,192 @@ public sealed partial class DocxSession
         }
     }
 
-    /// <summary>A <c>REF</c> field's result, as Word renders it now: the bookmarked text, or with a
-    /// number switch the target's number (<c>\n</c> and <c>\w</c> without its trailing period),
-    /// then with <c>\p</c> the word above / below.</summary>
-    private string ReferenceResult(string bookmarkName, string? numberSwitch, bool position, XElement field, XElement bookmarkStart)
+    /// <summary>What one <see cref="UpdateFields"/> call has done so far.</summary>
+    private sealed class FieldUpdate
     {
-        string cached;
-        if (numberSwitch is not null)
+        private readonly IReadOnlyDictionary<string, string> _pages;
+        private readonly HashSet<XElement> _current = new();
+
+        public FieldUpdate(IReadOnlyDictionary<string, string> pages) => _pages = pages;
+
+        public bool Changed;
+        public readonly HashSet<XElement> Created = new();
+        public readonly List<XElement> Modified = new();
+        public readonly List<Anchor> Removed = new();
+
+        public string? PageOf(XElement paragraph) =>
+            (string?)paragraph.Attribute(PtOpenXml.Unid) is { } unid && _pages.TryGetValue(unid, out var page) ? page : null;
+
+        /// <summary>The field's result is known to be what Word would show now.</summary>
+        public bool IsCurrent(FoundField field) => _current.Contains(field.Begin);
+        public void MarkCurrent(XElement begin) => _current.Add(begin);
+
+        public void Set(FoundField field, string result)
         {
-            var prefix = ResolveBookmarkAnchors(bookmarkName)
-                .Select(covered => covered.AutoNumberPrefix)
-                .FirstOrDefault(value => !string.IsNullOrEmpty(value));
-            cached = prefix ?? "0";
-            if (numberSwitch != "\\r" && cached.Length > 1) cached = cached.TrimEnd('.');
+            if (field.SetResult(result) is not { } changed) return;
+            MarkCurrent(field.Begin);
+            if (!changed) return;
+            Changed = true;
+            Modified.Add(field.Paragraph);
         }
-        else
+
+        /// <summary>A drawing's fallback holds a copy of its text: give each field in it the result its
+        /// counterpart took.</summary>
+        public void CopyToFallbacks(XElement body)
         {
-            cached = BookmarkedText(bookmarkName);
+            foreach (var alternate in body.Descendants(MC.AlternateContent))
+            {
+                if (alternate.Element(MC.Choice) is not { } choice || alternate.Element(MC.Fallback) is not { } fallback) continue;
+                var from = ScanFields(choice);
+                var to = ScanFields(fallback);
+                if (from.Count == 0 || !from.Select(f => f.Instr).SequenceEqual(to.Select(f => f.Instr))) continue;
+                foreach (var (source, copy) in from.Zip(to))
+                    if (IsCurrent(source) && copy.SetResult(source.ResultText()) == true) Changed = true;
+            }
         }
-        if (position && ReferenceEquals(field.AncestorsAndSelf().Last(), bookmarkStart.AncestorsAndSelf().Last()))
-        {
-            var word = XNode.DocumentOrderComparer.Compare(bookmarkStart, field) < 0 ? "above" : "below";
-            cached = numberSwitch is not null ? cached + " " + word : word;
-        }
-        return cached;
     }
 
-    /// <summary>The next value of a <c>SEQ</c> field (<c>\r n</c> resets, <c>\c</c> repeats,
-    /// <c>\h</c> hides; <c>\* ARABIC/alphabetic/ALPHABETIC/roman/ROMAN</c>), or null for one
-    /// without an identifier.</summary>
-    private static string? SequenceResult(string[] tokens, Dictionary<string, int> counters)
+    /// <summary>Whether any story still holds a field that only Word can bring up to date.</summary>
+    private bool FieldsLeft(MainDocumentPart main, XElement body, FieldUpdate update) =>
+        ScanFields(body).Any(f => !update.IsCurrent(f) && NeedsUpdate(f))
+        || OwnedPartRelationships.StoryParts(_doc!).Any(story => story.Part != main
+            && story.Part.GetXDocument().Root is { } root && ScanFields(root).Any(NeedsUpdate));
+
+    private static bool NeedsUpdate(FoundField field) => !field.Locked && !FieldsThatNeedNoUpdate.Contains(field.Kind);
+
+    // ─── REF and PAGEREF ────────────────────────────────────────────────────
+
+    /// <summary>What a <c>REF</c> or <c>PAGEREF</c> field shows now, or null when that is not known.</summary>
+    private string? ReferenceResult(FoundField field, FieldUpdate update)
     {
-        if (tokens.Length < 2 || tokens[1].StartsWith('\\')) return null;
-        var id = tokens[1];
-        counters.TryGetValue(id, out var value);
-        string? format = null;
-        bool hidden = false, repeat = false;
-        int? reset = null;
-        for (int i = 2; i < tokens.Length; i++)
+        if (field.Locked || field.Tokens.Length < 2 || field.Tokens[1].StartsWith('\\')) return null;
+        var bookmark = field.Tokens[1];
+        var switches = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 2; i < field.Tokens.Length; i++)
         {
-            var t = tokens[i];
-            if (t.Equals("\\h", StringComparison.OrdinalIgnoreCase)) hidden = true;
-            else if (t.Equals("\\c", StringComparison.OrdinalIgnoreCase)) repeat = true;
-            else if (t.Equals("\\r", StringComparison.OrdinalIgnoreCase) && i + 1 < tokens.Length
-                && int.TryParse(tokens[i + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var r)) { reset = r; i++; }
-            else if (t == "\\*" && i + 1 < tokens.Length) { format = tokens[i + 1]; i++; }
+            var token = field.Tokens[i].ToLowerInvariant();
+            if (token == "\\*" && i + 1 < field.Tokens.Length && IsKeepFormat(field.Tokens[i + 1])) { i++; continue; }
+            if (token is not ("\\h" or "\\p") && (field.Kind == "PAGEREF" || token is not ("\\n" or "\\r" or "\\w" or "\\t"))) return null;
+            switches.Add(token);
         }
-        value = reset ?? (repeat ? Math.Max(value, 1) : value + 1);
-        counters[id] = value;
-        if (hidden) return string.Empty;
-        return format switch
+
+        if (ResolveBookmarkPair(bookmark, hyperlinkTarget: true, null, out var start, out var end) is not null)
+            // (bookmark names match in any case, and a malformed pair may still be one to Word)
+            return OwnedPartRelationships.StoryParts(_doc!).Any(story => story.Part.GetXDocument().Descendants(W.bookmarkStart)
+                    .Any(b => string.Equals((string?)b.Attribute(W.name), bookmark, StringComparison.OrdinalIgnoreCase)))
+                ? null
+                : field.Kind == "PAGEREF" ? BookmarkNotDefined : ReferenceSourceNotFound;
+
+        bool sameStory = ReferenceEquals(field.Begin.AncestorsAndSelf().Last(), start.AncestorsAndSelf().Last());
+        string? position = !switches.Contains("\\p") ? null : !sameStory ? ""
+            : XNode.DocumentOrderComparer.Compare(start, field.Begin) < 0 ? "above" : "below";
+
+        if (field.Kind == "PAGEREF")
         {
-            "alphabetic" => Letters(value).ToLowerInvariant(),
-            "ALPHABETIC" => Letters(value),
-            "roman" => Roman(value).ToLowerInvariant(),
-            "ROMAN" => Roman(value),
-            _ => value.ToString(CultureInfo.InvariantCulture),
+            var target = start.Ancestors(W.p).FirstOrDefault() ?? start.ElementsAfterSelf(W.p).FirstOrDefault();
+            if ((target is null ? null : update.PageOf(target)) is not { } page) return null;
+            if (position is null) return page;
+            if (update.PageOf(field.Paragraph) is not { } here) return null;
+            return here != page ? "on page " + page : position.Length > 0 ? position : null;
+        }
+
+        if (position is "") return null;
+        string? numberSwitch = new[] { ReferenceNumber.NoContext, ReferenceNumber.FullContext, ReferenceNumber.RelativeContext }
+            .FirstOrDefault(switches.Contains);
+        if (numberSwitch is null) return position ?? TextBetween(start, end);
+        var number = ReferenceNumberOf(bookmark, field.Paragraph, numberSwitch, switches.Contains("\\t"));
+        return number is null || position is null ? number : number + " " + position;
+    }
+
+    /// <summary>The text a bookmark inside one paragraph covers, or null for one that covers more (other
+    /// paragraphs, a picture, a note, an equation) or nothing.</summary>
+    private static string? TextBetween(XElement start, XElement end)
+    {
+        var paragraph = start.Ancestors(W.p).FirstOrDefault();
+        if (paragraph is null || !ReferenceEquals(paragraph, end.Ancestors(W.p).FirstOrDefault())) return null;
+        var covered = paragraph.Descendants().SkipWhile(e => !ReferenceEquals(e, start)).TakeWhile(e => !ReferenceEquals(e, end));
+        if (covered.Any(e => e.Name == W.drawing || e.Name == W.pict || e.Name == W._object || e.Name == MC.AlternateContent
+                || e.Name == W.footnoteReference || e.Name == W.endnoteReference || e.Name == M.oMath))
+            return null;
+        int from = MarkerOffset(paragraph, start), to = MarkerOffset(paragraph, end);
+        return to > from ? RunTextMap.Build(paragraph).FlatText[from..to] : null;
+    }
+
+    /// <summary>The general format switches that only keep formatting.</summary>
+    private static bool IsKeepFormat(string format) =>
+        format.Equals("MERGEFORMAT", StringComparison.OrdinalIgnoreCase) || format.Equals("CHARFORMAT", StringComparison.OrdinalIgnoreCase);
+
+    // ─── SEQ ────────────────────────────────────────────────────────────────
+
+    /// <summary>Number the <c>SEQ</c> fields again, counting over the whole body even when only part is
+    /// updated.</summary>
+    private void UpdateSequences(XElement body, IReadOnlyList<FoundField> fields, HashSet<XElement>? inRange, FieldUpdate update)
+    {
+        var sequences = fields.Where(f => f.Kind == "SEQ").ToList();
+        if (sequences.Count == 0) return;
+        var place = new Dictionary<XElement, int>();
+        foreach (var e in body.Descendants()) place[e] = place.Count;
+        var levels = new OutlineLevels(_doc!.MainDocumentPart!);
+        var headings = body.Descendants(W.p).Select(p => (Place: place[p], Level: levels.BuiltInHeading(p) + 1))
+            .Where(h => h.Level is not null).ToList();
+        var counters = new Dictionary<string, (int Value, int Place)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var field in sequences)
+        {
+            // (an identifier is required, and one followed by a bookmark repeats that bookmark's number)
+            if (field.Tokens.Length < 2 || field.Tokens[1].StartsWith('\\')
+                || (field.Tokens.Length > 2 && !field.Tokens[2].StartsWith('\\'))) continue;
+            var id = field.Tokens[1];
+            counters.TryGetValue(id, out var counter);
+            int value = counter.Value;
+            string format = "Arabic";
+            bool hidden = false, repeat = false, known = true;
+            int? reset = null;
+            for (int i = 2; i < field.Tokens.Length; i++)
+            {
+                var token = field.Tokens[i].ToLowerInvariant();
+                int? Number(int at) => int.TryParse(token.Length > 2 ? token[2..] : at < field.Tokens.Length ? field.Tokens[at] : "",
+                    NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) ? n : null;
+                if (token == "\\h") hidden = true;
+                else if (token == "\\c") repeat = true;
+                else if (token == "\\n") continue;
+                else if (token == "\\*" && i + 1 < field.Tokens.Length)
+                {
+                    if (!IsKeepFormat(field.Tokens[++i])) format = field.Tokens[i];
+                }
+                else if (token.StartsWith("\\r", StringComparison.Ordinal) && Number(i + 1) is { } restart)
+                {
+                    reset = restart;
+                    if (token.Length == 2) i++;
+                }
+                else if (token.StartsWith("\\s", StringComparison.Ordinal) && Number(i + 1) is { } level)
+                {
+                    if (headings.Any(h => h.Level <= level && h.Place > counter.Place && h.Place < place[field.Begin])) value = 0;
+                    if (token.Length == 2) i++;
+                }
+                else known = false;
+            }
+            value = reset ?? (repeat ? Math.Max(value, 1) : value + 1);
+            counters[id] = (value, place[field.Begin]);
+            if (!known || field.Locked || !field.StartsIn(inRange) || FormatSequence(value, format) is not { } shown) continue;
+            update.Set(field, hidden ? string.Empty : shown);
+        }
+    }
+
+    /// <summary>A sequence number in a <c>\*</c> format, whose first letter's case Word follows; null for
+    /// a format this does not write.</summary>
+    private static string? FormatSequence(int value, string format)
+    {
+        string Cased(string text) => char.IsLower(format[0]) ? text.ToLowerInvariant() : text;
+        return format.ToLowerInvariant() switch
+        {
+            "arabic" => value.ToString(CultureInfo.InvariantCulture),
+            "alphabetic" when value > 0 => Cased(new string((char)('A' + (value - 1) % 26), (value - 1) / 26 + 1)),
+            "roman" when value is > 0 and < 4000 => Cased(Roman(value)),
+            _ => null,
         };
 
-        static string Letters(int n) => n <= 0 ? "0" : new string((char)('A' + (n - 1) % 26), (n - 1) / 26 + 1);
         static string Roman(int n)
         {
-            if (n <= 0 || n >= 4000) return n.ToString(CultureInfo.InvariantCulture);
             var sb = new StringBuilder();
             foreach (var (v, s) in new[] { (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"),
                          (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I") })
@@ -221,21 +334,23 @@ public sealed partial class DocxSession
         }
     }
 
-    // ─── Fields as found in the body ────────────────────────────────────────
+    // ─── Fields as found in a story ─────────────────────────────────────────
 
     private sealed class FoundField
     {
-        public required string Kind;
-        public required string[] Tokens;
+        public string Kind = "";
+        public string[] Tokens = Array.Empty<string>();
         /// <summary>The instruction as written.</summary>
         public string Instr = "";
         public required bool Complex;
-        public int Depth;
         /// <summary>The <c>w:fldSimple</c>, or the run holding the begin <c>w:fldChar</c>.</summary>
         public required XElement Begin;
         public XElement? Separate;
         public XElement? End;
         public XElement Paragraph => Begin.AncestorsAndSelf(W.p).First();
+
+        public bool Locked => WordprocessingMLUtil.OnOffValue(
+            (string?)(Complex ? Begin.Element(W.fldChar) : Begin)?.Attribute(W.fldLock)) == true;
 
         /// <summary>The paragraphs from the field's begin to its end.</summary>
         public IEnumerable<XElement> Paragraphs()
@@ -251,257 +366,310 @@ public sealed partial class DocxSession
             }
         }
 
-        /// <summary>Replace the cached result with one run of <paramref name="text"/>, keeping the
-        /// first result run's formatting; the field's dirty mark goes.</summary>
-        public void SetResult(string text)
-        {
-            if (!Complex)
-            {
-                var keep = Begin.Elements(W.r).FirstOrDefault()?.Element(W.rPr);
-                foreach (var child in Begin.Nodes().ToList()) child.Remove();
-                Begin.Add(ResultRun(keep, text));
-                Begin.Attribute(W.dirty)?.Remove();
-                return;
-            }
-            if (End is null) return;
-            Begin.Element(W.fldChar)?.Attribute(W.dirty)?.Remove();
-            if (Separate is null)
-            {
-                Separate = new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate")));
-                End.AddBeforeSelf(Separate, ResultRun(Begin.Element(W.rPr), text));
-                return;
-            }
-            // (a result over paragraphs is not a REF / PAGEREF / SEQ Word writes: left alone)
-            if (!ReferenceEquals(Separate.Parent, End.Parent)) return;
-            var between = Separate.NodesAfterSelf().TakeWhile(n => !ReferenceEquals(n, End)).ToList();
-            var rPr = between.OfType<XElement>().Where(e => e.Name == W.r).Select(r => r.Element(W.rPr)).FirstOrDefault(r => r is not null)
-                ?? Begin.Element(W.rPr);
-            foreach (var node in between) node.Remove();
-            Separate.AddAfterSelf(ResultRun(rPr, text));
-        }
+        /// <summary>Whether the field starts in <paramref name="paragraphs"/> (null: anywhere); a table of
+        /// contents also when one of its entries is there.</summary>
+        public bool StartsIn(HashSet<XElement>? paragraphs) => paragraphs is null || paragraphs.Contains(Paragraph)
+            || (Kind == "TOC" && Paragraphs().Any(paragraphs.Contains));
 
-        private static XElement ResultRun(XElement? rPr, string text)
+        /// <summary>The nodes of the cached result, or null when it runs over paragraphs.</summary>
+        private List<XNode>? Result() => !Complex ? Begin.Nodes().ToList()
+            : Separate is null ? new List<XNode>()
+            : End is null || !ReferenceEquals(Separate.Parent, End.Parent) ? null
+            : Separate.NodesAfterSelf().TakeWhile(n => !ReferenceEquals(n, End)).ToList();
+
+        public string ResultText() => string.Concat((Result() ?? new List<XNode>()).OfType<XElement>().Select(VisibleText));
+
+        /// <summary>Replace the cached result with one run of <paramref name="text"/>, keeping the
+        /// first result run's formatting; the field's dirty mark goes. True when that changed the field,
+        /// false when it already shows the text, null when the result is not one to replace.</summary>
+        public bool? SetResult(string text)
         {
+            if (Complex && End is null) return null;
+            if (Result() is not { } result || result.OfType<XElement>().Any(HoldsMoreThanText)) return null;
+            var dirty = (Complex ? Begin.Element(W.fldChar) : Begin)?.Attribute(W.dirty);
+            bool wasDirty = dirty is not null;
+            dirty?.Remove();
+            if (ResultText() == text) return wasDirty;
+            var rPr = result.OfType<XElement>().SelectMany(e => e.DescendantsAndSelf(W.r)).Select(r => r.Element(W.rPr)).FirstOrDefault(r => r is not null)
+                ?? (Complex ? Begin.Element(W.rPr) : null);
+            foreach (var node in result) node.Remove();
             var run = new XElement(W.r, rPr is null ? null : new XElement(rPr), TextContent(text, W.t));
             UnidHelper.AssignToSelfAndDescendants(run);
-            return run;
+            if (!Complex) Begin.Add(run);
+            else if (Separate is null)
+            {
+                Separate = new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate")));
+                UnidHelper.AssignToSelfAndDescendants(Separate);
+                End!.AddBeforeSelf(Separate, run);
+            }
+            else Separate.AddAfterSelf(run);
+            return true;
         }
     }
 
+    /// <summary>Content a regenerated field result would take with it: a revision, a comment, a note, or
+    /// a marker whose other end may be elsewhere.</summary>
+    private static bool HoldsMoreThanText(XElement content) => content.DescendantsAndSelf().Any(e =>
+        e.Name == W.ins || e.Name == W.del || e.Name == W.moveFrom || e.Name == W.moveTo
+        || e.Name == W.rPrChange || e.Name == W.pPrChange || e.Name == W.sectPrChange
+        || e.Name == W.commentReference || e.Name == W.footnoteReference || e.Name == W.endnoteReference
+        || CrossBlockRangePairs.Any(pair => e.Name == pair.Start || e.Name == pair.End));
+
     /// <summary>Every field in <paramref name="root"/> in document order, simple and complex, with
     /// its kind (the first word of the instruction, upper-case) and instruction tokens. Fields in
-    /// deleted text are left out.</summary>
+    /// removed text are left out, and so is a drawing's fallback, which repeats its text.</summary>
     private static List<FoundField> ScanFields(XElement root)
     {
-        var found = new List<(FoundField Field, StringBuilder? Instr)>();
+        var found = new List<FoundField>();
         var open = new Stack<(FoundField Field, StringBuilder Instr)>();
+        void Add(FoundField field, string instr)
+        {
+            field.Instr = instr;
+            field.Tokens = Regex.Matches(instr, "\"([^\"]*)\"|(\\S+)")
+                .Select(m => m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value).ToArray();
+            if (field.Tokens.Length == 0) return;
+            field.Kind = field.Tokens[0].ToUpperInvariant();
+            found.Add(field);
+        }
         foreach (var e in root.Descendants())
         {
-            if (e.Ancestors(W.del).Any()) continue;
+            if (e.Name != W.fldSimple && e.Name != W.fldChar && e.Name != W.instrText) continue;
+            if (e.Ancestors().TakeWhile(a => !ReferenceEquals(a, root))
+                .Any(a => a.Name == W.del || a.Name == W.moveFrom || a.Name == MC.Fallback)) continue;
             if (e.Name == W.fldSimple)
+                Add(new FoundField { Complex = false, Begin = e }, (string?)e.Attribute(W.instr) ?? "");
+            else if (e.Name == W.instrText)
             {
-                var tokens = Tokens((string?)e.Attribute(W.instr) ?? "");
-                if (tokens.Length > 0)
-                    found.Add((new FoundField { Kind = tokens[0].ToUpperInvariant(), Tokens = tokens, Complex = false, Begin = e, Instr = (string?)e.Attribute(W.instr) ?? "" }, null));
+                if (open.Count > 0 && open.Peek().Field.Separate is null) open.Peek().Instr.Append(e.Value);
             }
-            else if (e.Name == W.fldChar && e.Parent?.Name == W.r)
+            else if (e.Parent?.Name == W.r)
             {
                 var type = (string?)e.Attribute(W.fldCharType);
-                if (type == "begin")
-                {
-                    var field = new FoundField { Kind = "", Tokens = Array.Empty<string>(), Complex = true, Begin = e.Parent!, Depth = open.Count };
-                    open.Push((field, new StringBuilder()));
-                }
-                else if (type == "separate" && open.Count > 0 && open.Peek().Field.Separate is null)
-                    open.Peek().Field.Separate = e.Parent;
+                if (type == "begin") open.Push((new FoundField { Complex = true, Begin = e.Parent }, new StringBuilder()));
+                else if (type == "separate" && open.Count > 0) open.Peek().Field.Separate ??= e.Parent;
                 else if (type == "end" && open.Count > 0)
                 {
                     var (field, instr) = open.Pop();
                     field.End = e.Parent;
-                    var tokens = Tokens(instr.ToString());
-                    if (tokens.Length > 0)
-                    {
-                        field.Kind = tokens[0].ToUpperInvariant();
-                        field.Tokens = tokens;
-                        field.Instr = instr.ToString();
-                        found.Add((field, instr));
-                    }
+                    Add(field, instr.ToString());
                 }
             }
-            else if (e.Name == W.instrText && open.Count > 0 && open.Peek().Field.Separate is null)
-                open.Peek().Instr.Append(e.Value);
         }
-        return found.Select(f => f.Field).OrderBy(f => f.Begin, Comparer<XElement>.Create(XNode.DocumentOrderComparer.Compare)).ToList();
+        return found.OrderBy(f => f.Begin, Comparer<XElement>.Create(XNode.DocumentOrderComparer.Compare)).ToList();
     }
-
-    /// <summary>An instruction's words; a quoted argument is one word, without its quotes.</summary>
-    private static string[] Tokens(string instruction) =>
-        Regex.Matches(instruction, "\"([^\"]*)\"|(\\S+)")
-            .Select(m => m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value)
-            .ToArray();
 
     // ─── Table of contents ──────────────────────────────────────────────────
 
-    private void RebuildTableOfContents(FoundField toc, Func<XElement, string?> pageOf)
+    /// <summary>What a <c>TOC</c> instruction asks for, when it asks only for headings.</summary>
+    private sealed record TocSwitches(int From, int To, bool OutlineLevels, bool Links, int NoPagesFrom, int NoPagesTo)
     {
-        if (toc.End is null || toc.Separate is null) return;
+        /// <summary>Null for an instruction with a switch that selects other entries or lays them out
+        /// otherwise (<c>\c</c> figures, <c>\t</c> styles, <c>\b</c> bookmark, <c>\f</c>, <c>\p</c>…).</summary>
+        public static TocSwitches? Parse(string[] tokens)
+        {
+            var result = new TocSwitches(1, 9, false, false, 0, -1);
+            for (int i = 1; i < tokens.Length; i++)
+            {
+                bool hasArgument = i + 1 < tokens.Length && !tokens[i + 1].StartsWith('\\');
+                (int From, int To)? levels = !hasArgument ? (1, 9)
+                    : Regex.Match(tokens[i + 1], @"^([1-9])\s*-\s*([1-9])$") is { Success: true } m
+                        ? (m.Groups[1].Value[0] - '0', m.Groups[2].Value[0] - '0') : null;
+                switch (tokens[i].ToLowerInvariant())
+                {
+                    case "\\o" when levels is { } l: result = result with { From = l.From, To = l.To }; break;
+                    case "\\n" when levels is { } l: result = result with { NoPagesFrom = l.From, NoPagesTo = l.To }; break;
+                    case "\\h" when !hasArgument: result = result with { Links = true }; break;
+                    case "\\u" when !hasArgument: result = result with { OutlineLevels = true }; break;
+                    case "\\z" or "\\w" or "\\x" when !hasArgument: break;
+                    case "\\*" when hasArgument && IsKeepFormat(tokens[i + 1]): break;
+                    default: return null;
+                }
+                if (hasArgument) i++;
+            }
+            return result;
+        }
+    }
+
+    private void RebuildTableOfContents(XElement body, FoundField toc, FieldUpdate update)
+    {
+        if (toc.Locked || !toc.Complex || toc.End is null || toc.Separate is null || TocSwitches.Parse(toc.Tokens) is not { } switches) return;
         var paragraphs = toc.Paragraphs().ToList();
-        var first = paragraphs[0];
-        var last = paragraphs[^1];
-        if (!ReferenceEquals(first.Parent, last.Parent)) return;
+        XElement first = paragraphs[0], last = paragraphs[^1];
+        // Only a table that is whole paragraphs, one after another: nothing else goes with them.
+        if (!ReferenceEquals(toc.Begin.Parent, first) || !ReferenceEquals(toc.End.Parent, last) || !ReferenceEquals(first.Parent, last.Parent)
+            || first.ElementsAfterSelf().TakeWhile(e => !ReferenceEquals(e, last) && !ReferenceEquals(first, last)).Any(e => e.Name != W.p)
+            || paragraphs.SkipLast(1).Any(p => p.Element(W.pPr)?.Element(W.sectPr) is not null))
+            return;
+        var before = first.Elements().Where(e => e.Name != W.pPr).TakeWhile(e => !ReferenceEquals(e, toc.Begin)).ToList();
+        var after = toc.End.ElementsAfterSelf().ToList();
+        var content = paragraphs.SelectMany(p => p.Elements()).Where(e => !before.Contains(e) && !after.Contains(e)).ToList();
+        if (content.Any(HoldsMoreThanText)) return;
 
-        // Levels: \o "a-b" (else 1-9); \h makes each entry a link; \n leaves the page numbers out.
-        int from = 1, to = 9;
-        bool links = false, noPages = false;
-        for (int i = 1; i < toc.Tokens.Length; i++)
+        var inTable = new HashSet<XElement>(paragraphs);
+        var levels = new OutlineLevels(_doc!.MainDocumentPart!);
+        var shownPages = ScanFields(body).Where(f => f.Kind == "PAGEREF" && f.Tokens.Length > 1 && inTable.Contains(f.Paragraph))
+            .GroupBy(f => f.Tokens[1]).ToDictionary(g => g.Key, g => g.First().ResultText());
+        var bookmarks = ListBookmarks();
+        var entries = new List<(int Level, string? Number, string Text, string Bookmark, string? Page, bool IsCurrent)>();
+        foreach (var heading in body.Descendants(W.p).Where(p => !inTable.Contains(p)
+                     && !p.Ancestors().Any(a => a.Name == W.txbxContent || a.Name == MC.Fallback)).ToList())
         {
-            var t = toc.Tokens[i];
-            if (t.Equals("\\o", StringComparison.OrdinalIgnoreCase) && i + 1 < toc.Tokens.Length && !toc.Tokens[i + 1].StartsWith('\\'))
+            int? level = (levels.BuiltInHeading(heading) ?? (switches.OutlineLevels ? levels.Of(heading) : null)) + 1;
+            if (level is null || level < switches.From || level > switches.To) continue;
+            var text = Regex.Replace(VisibleText(heading), @"\s+", " ").Trim();
+            if (text.Length == 0 || AnchorForElement(heading) is not { } anchor) continue;
+            // A hidden _Toc bookmark over the heading's text; one there already is kept, first the one the
+            // table used (Word leaves a heading several over time).
+            var bookmark = bookmarks.FirstOrDefault(b => shownPages.ContainsKey(b.Name) && b.IsPaired && b.IsValid
+                    && b.Range?.StartAnchorId == anchor.Id)?.Name
+                ?? ParagraphBookmark(bookmarks, anchor.Id, heading, "_Toc");
+            if (bookmark is null)
             {
-                var m = Regex.Match(toc.Tokens[++i], @"^(\d)\s*-\s*(\d)$");
-                if (m.Success) { from = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture); to = int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture); }
+                bookmark = NewHiddenBookmarkName("_Toc");
+                BookmarkWholeParagraph(heading, bookmark);
+                update.Modified.Add(heading);
             }
-            else if (t.Equals("\\h", StringComparison.OrdinalIgnoreCase)) links = true;
-            else if (t.Equals("\\n", StringComparison.OrdinalIgnoreCase)) noPages = true;
+            var page = update.PageOf(heading);
+            entries.Add((level.Value, ListNumberResolver.Resolve(heading, _doc!), text, bookmark,
+                page ?? shownPages.GetValueOrDefault(bookmark), page is not null));
         }
 
-        var tocSet = new HashSet<XElement>(paragraphs);
-        var headings = ListOutline()
-            .Where(h => h.Level >= from && h.Level <= to && h.Text.Trim().Length > 0)
-            .Select(h => (Entry: h, Target: FindAnchor(h.AnchorId)))
-            .Where(h => h.Target?.Resolve(_doc!) is { } p && !tocSet.Contains(p))
-            .ToList();
-
-        // A hidden _Toc bookmark over each heading's text (one there already is kept).
-        var existing = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var b in ListBookmarks())
-            if (b.Name.StartsWith("_Toc", StringComparison.Ordinal) && b.IsPaired && b.IsValid && b.Range is { } r
-                && r.StartAnchorId == r.EndAnchorId && r.StartOffset == 0 && !existing.ContainsKey(r.StartAnchorId))
-                existing[r.StartAnchorId] = b.Name + "|" + r.EndOffset.ToString(CultureInfo.InvariantCulture);
-        var entries = new List<(int Level, string? Number, string Text, string Bookmark, string Page)>();
-        foreach (var (entry, target) in headings)
-        {
-            var paragraph = target!.Resolve(_doc!)!;
-            int length = RunTextMap.Build(paragraph).FlatText.Length;
-            string? name = existing.TryGetValue(entry.AnchorId, out var known) && known.EndsWith("|" + length.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
-                ? known[..known.IndexOf('|')] : null;
-            if (name is null)
-            {
-                do name = "_Toc" + Random.Shared.Next(100_000_000, 1_000_000_000).ToString(CultureInfo.InvariantCulture);
-                while (BookmarkStarts(name).Count != 0);
-                var ends = ValidateDocumentRange(new DocumentRange(entry.AnchorId, 0, entry.AnchorId, length));
-                if (ends.Error is not null) continue;
-                InsertRangeMarkers(ends, NextGlobalBookmarkId(), name);
-            }
-            var number = GetAnchorInfo(entry.AnchorId)?.AutoNumberPrefix;
-            entries.Add((entry.Level, string.IsNullOrEmpty(number) ? null : number, entry.Text, name, pageOf(paragraph) ?? "1"));
-        }
-
-        // The entries' styles: TOC 1-9, indented by level, as Word's.
-        foreach (var level in entries.Select(e => e.Level).Distinct()) EnsureTocLevelStyle(level);
-
-        // The page numbers' right tab (dot leader) as the table had it, else Word's at the right margin.
+        // The page numbers' right tab as the table had it, else (unless the entry style sets one) Word's,
+        // just inside the right margin.
         var pageTab = first.Element(W.pPr)?.Element(W.tabs)?.Elements(W.tab)
-            .LastOrDefault(t => (string?)t.Attribute(W.val) == "right") is { } right
-            ? new XElement(right)
-            : new XElement(W.tab, new XAttribute(W.val, "right"), new XAttribute(W.leader, "dot"), new XAttribute(W.pos, "9350"));
-        var before = first.Elements().Where(n => n.Name != W.pPr).TakeWhile(n => !ReferenceEquals(n, toc.Begin) && !n.DescendantsAndSelf().Contains(toc.Begin)).ToList();
-        var after = last.Elements().SkipWhile(n => !ReferenceEquals(n, toc.End) && !n.DescendantsAndSelf().Contains(toc.End)).Skip(1).ToList();
-        var fieldStart = new[]
+            .LastOrDefault(t => (string?)t.Attribute(W.val) is "right" or "end");
+        var begin = new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin")));
+        var opening = new[]
         {
-            new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin"))),
-            new XElement(W.r, new XElement(W.instrText, new XAttribute(XNamespace.Xml + "space", "preserve"),
-                toc.Instr)),
+            begin,
+            new XElement(W.r, new XElement(W.instrText, new XAttribute(XNamespace.Xml + "space", "preserve"), toc.Instr)),
             new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate"))),
         };
-        var fieldEnd = new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "end")));
-
         var built = new List<XElement>();
         if (entries.Count == 0)
+            built.Add(new XElement(W.p, WithoutSection(first.Element(W.pPr)),
+                new XElement(W.r, new XElement(W.rPr, new XElement(W.b)), TextContent(NoTocEntries, W.t))));
+        foreach (var (level, number, text, bookmark, page, isCurrent) in entries)
         {
-            built.Add(new XElement(W.p, first.Element(W.pPr) is { } pPr ? new XElement(pPr) : null,
-                before.Select(n => new XElement(n)), fieldStart,
-                new XElement(W.r, new XElement(W.rPr, new XElement(W.b)), new XElement(W.t, NoTocEntries)),
-                fieldEnd, after.Select(n => new XElement(n))));
-        }
-        else
-        {
-            for (int i = 0; i < entries.Count; i++)
+            var runs = new List<XElement>();
+            if (number is not null) { runs.Add(TextRun(number)); runs.Add(new XElement(W.r, new XElement(W.tab))); }
+            runs.Add(TextRun(text));
+            bool showsPage = level < switches.NoPagesFrom || level > switches.NoPagesTo;
+            if (showsPage)
             {
-                var (level, number, text, bookmark, page) = entries[i];
-                var content = new List<XElement>();
-                if (number is not null) { content.Add(TextRun(number)); content.Add(new XElement(W.r, new XElement(W.tab))); }
-                content.Add(TextRun(text));
-                if (!noPages)
-                {
-                    content.Add(new XElement(W.r, new XElement(W.tab)));
-                    content.Add(new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin"))));
-                    content.Add(new XElement(W.r, new XElement(W.instrText, new XAttribute(XNamespace.Xml + "space", "preserve"), $" PAGEREF {bookmark} \\h ")));
-                    content.Add(new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate"))));
-                    content.Add(TextRun(page));
-                    content.Add(new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "end"))));
-                }
-                var paragraph = new XElement(W.p,
-                    new XElement(W.pPr,
-                        new XElement(W.pStyle, new XAttribute(W.val, "TOC" + level.ToString(CultureInfo.InvariantCulture))),
-                        EntryTabs(level, number, pageTab),
-                        new XElement(W.rPr, new XElement(W.noProof))));
-                if (i == 0) paragraph.Add(before.Select(n => new XElement(n)), fieldStart);
-                if (links)
-                    paragraph.Add(new XElement(W.hyperlink, new XAttribute(W.anchor, bookmark), new XAttribute(W.history, "1"), content));
-                else paragraph.Add(content);
-                if (i == entries.Count - 1) paragraph.Add(fieldEnd, after.Select(n => new XElement(n)));
-                built.Add(paragraph);
+                runs.Add(new XElement(W.r, new XElement(W.tab)));
+                runs.Add(new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin"),
+                    page is null ? new XAttribute(W.dirty, "true") : null)));
+                runs.Add(new XElement(W.r, new XElement(W.instrText, new XAttribute(XNamespace.Xml + "space", "preserve"), $" PAGEREF {bookmark} \\h ")));
+                runs.Add(new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate"))));
+                runs.Add(TextRun(page ?? "1"));
+                runs.Add(new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "end"))));
             }
+            var style = TocLevelStyle(level);
+            var tabs = new XElement(W.tabs);
+            if (number is not null)
+                tabs.Add(new XElement(W.tab, new XAttribute(W.val, "left"), new XAttribute(W.pos,
+                    ((level - 1) * 220 + Math.Max(440, (number.Length + 1) * 120)).ToString(CultureInfo.InvariantCulture))));
+            if (showsPage)
+                tabs.Add(pageTab is not null ? new XElement(pageTab)
+                    : StyleHasRightTab(style) ? null : PageNumberTab(first));
+            built.Add(new XElement(W.p,
+                new XElement(W.pPr, new XElement(W.pStyle, new XAttribute(W.val, style)),
+                    tabs.HasElements ? tabs : null, new XElement(W.rPr, new XElement(W.noProof))),
+                switches.Links
+                    ? new XElement(W.hyperlink, new XAttribute(W.anchor, bookmark), new XAttribute(W.history, "1"), runs)
+                    : runs));
         }
         foreach (var p in built) UnidHelper.AssignToSelfAndDescendants(p);
-        first.AddBeforeSelf(built);
-        foreach (var p in paragraphs) p.Remove();
 
-        static XElement TextRun(string text) => new XElement(W.r, TextContent(text, W.t));
-    }
-
-    /// <summary>An entry's tab stops, as Word writes them: after a heading number, a left tab where
-    /// the heading's text starts (past the number, at the entry's indent plus 22 pt or more), so
-    /// the number's tab does not run on to the page number's right tab; then that right tab.</summary>
-    private static XElement EntryTabs(int level, string? number, XElement pageTab)
-    {
-        var tabs = new XElement(W.tabs);
-        if (number is not null)
+        // The paragraph that closes the field stays when it holds no entry: Word keeps it, and it is
+        // where the document's text (and often a section break) goes on.
+        bool keepsClosing = !ReferenceEquals(first, last)
+            && !toc.End.ElementsBeforeSelf().Any(e => e.Name != W.pPr && VisibleText(e).Length > 0);
+        update.Removed.AddRange(paragraphs.Where(p => !keepsClosing || !ReferenceEquals(p, last)).Select(AnchorForElement).OfType<Anchor>());
+        foreach (var e in before) e.Remove();
+        if (keepsClosing)
+            foreach (var e in toc.End.ElementsBeforeSelf().Where(e => e.Name != W.pPr).ToList()) e.Remove();
+        else
         {
-            int indent = (level - 1) * 220;
-            int textAt = indent + Math.Max(440, (number.Length + 1) * 120);
-            tabs.Add(new XElement(W.tab, new XAttribute(W.val, "left"),
-                new XAttribute(W.pos, textAt.ToString(CultureInfo.InvariantCulture))));
+            toc.End.Remove();
+            foreach (var e in after) e.Remove();
+            built[^1].Add(toc.End, after);
+            if (last.Element(W.pPr)?.Element(W.sectPr) is { } section)
+            {
+                section.Remove();
+                var pPr = built[^1].Element(W.pPr);
+                if (pPr is null) built[^1].AddFirst(pPr = new XElement(W.pPr));
+                SetPPrChildInOrder(pPr, section);
+            }
         }
-        tabs.Add(new XElement(pageTab));
-        return tabs;
+        if (built[0].Element(W.pPr) is { } openingPPr) openingPPr.AddAfterSelf(before, opening);
+        else built[0].AddFirst(before, opening);
+        foreach (var run in opening) UnidHelper.AssignToSelfAndDescendants(run);
+        first.AddBeforeSelf(built);
+        foreach (var p in paragraphs)
+            if (!keepsClosing || !ReferenceEquals(p, last)) p.Remove();
+
+        update.Changed = true;
+        update.MarkCurrent(begin);
+        foreach (var p in built) update.Created.Add(p);
+        if (keepsClosing) update.Modified.Add(last);
+
+        static XElement TextRun(string text) => new(W.r, TextContent(text, W.t));
+        static XElement? WithoutSection(XElement? pPr)
+        {
+            if (pPr is null) return null;
+            var copy = new XElement(pPr);
+            copy.Elements(W.sectPr).Remove();
+            return copy;
+        }
     }
 
-    /// <summary>Word's <c>TOC n</c> paragraph style (entries of level n), made when the document has
-    /// none: Normal, indented 11 pt a level.</summary>
-    private void EnsureTocLevelStyle(int level)
+    /// <summary>The style of a contents entry at <paramref name="level"/>: the document's own (found by
+    /// its built-in name, so a localized id counts), else Word's, indented 11 pt a level.</summary>
+    private string TocLevelStyle(int level)
     {
-        var id = "TOC" + level.ToString(CultureInfo.InvariantCulture);
-        StyleFactory.EnsureReferenceFieldStyles(_doc!, id, "toc " + level.ToString(CultureInfo.InvariantCulture), withHeading: false);
-        if (level <= 1) return;
-        var part = _doc!.MainDocumentPart!.StyleDefinitionsPart;
-        var style = part?.GetXDocument().Root?.Elements(W.style).FirstOrDefault(s => (string?)s.Attribute(W.styleId) == id);
-        var pPr = style?.Element(W.pPr);
-        // (only a style just made here, still without an indent: a document's own is left as it is)
-        if (style is null || pPr is null || pPr.Element(W.ind) is not null || style.Element(W.autoRedefine) is null) return;
-        pPr.Add(new XElement(W.ind, new XAttribute(W.left, ((level - 1) * 220).ToString(CultureInfo.InvariantCulture))));
-        part!.PutXDocument();
+        var number = level.ToString(CultureInfo.InvariantCulture);
+        IEnumerable<XElement> Styles() => _doc!.MainDocumentPart!.StyleDefinitionsPart?.GetXDocument().Root?
+            .Elements(W.style).Where(s => (string?)s.Attribute(W.type) == "paragraph") ?? Enumerable.Empty<XElement>();
+        if (Styles().FirstOrDefault(s => string.Equals((string?)s.Element(W.name)?.Attribute(W.val), "toc " + number, StringComparison.OrdinalIgnoreCase))
+                ?.Attribute(W.styleId)?.Value is { } own)
+            return own;
+        var id = "TOC" + number;
+        if (Styles().Any(s => (string?)s.Attribute(W.styleId) == id)) return id;
+        StyleFactory.EnsureReferenceFieldStyles(_doc!, id, "toc " + number, withHeading: false);
+        if (level > 1 && Styles().FirstOrDefault(s => (string?)s.Attribute(W.styleId) == id)?.Element(W.pPr) is { } pPr)
+        {
+            pPr.Add(new XElement(W.ind, new XAttribute(W.left, ((level - 1) * 220).ToString(CultureInfo.InvariantCulture))));
+            _doc!.MainDocumentPart!.StyleDefinitionsPart!.PutXDocument();
+        }
+        return id;
+    }
+
+    private bool StyleHasRightTab(string styleId) => FormattingAssembler.ResolveEffectiveParagraphProperties(_doc!,
+            new XElement(W.p, new XElement(W.pPr, new XElement(W.pStyle, new XAttribute(W.val, styleId)))))
+        .Element(W.tabs)?.Elements(W.tab).Any(t => (string?)t.Attribute(W.val) is "right" or "end") == true;
+
+    /// <summary>The dotted right tab Word gives a contents entry: half a point inside the text width of
+    /// the section the table is in.</summary>
+    private XElement PageNumberTab(XElement paragraph)
+    {
+        int width = AnchorForElement(paragraph) is { } anchor && FindAnchor(anchor.Id) is { } target
+            && BlockMetadataOps.GetSectionInfo(_doc!, target) is { } section
+            ? section.PageWidthTwips - section.MarginLeftTwips - section.MarginRightTwips : 9360;
+        return new XElement(W.tab, new XAttribute(W.val, "right"), new XAttribute(W.leader, "dot"),
+            new XAttribute(W.pos, Math.Max(width - 10, 720).ToString(CultureInfo.InvariantCulture)));
     }
 
     /// <summary>The cached results are current: the document no longer asks Word to update its
-    /// fields when it is opened.</summary>
-    private static void ClearFieldUpdateOnOpen(DocumentFormat.OpenXml.Packaging.MainDocumentPart main)
+    /// fields when it is opened. True when it did ask.</summary>
+    private static bool ClearFieldUpdateOnOpen(MainDocumentPart main)
     {
         var part = main.DocumentSettingsPart;
         var update = part?.GetXDocument().Root?.Element(W.updateFields);
-        if (update is null) return;
+        if (update is null) return false;
         update.Remove();
         part!.PutXDocument();
+        return true;
     }
 }

@@ -713,7 +713,7 @@ public static partial class DocxSessionBridge
         DocxSessionOps.AddReferenceBookmark(h, anchor);
 
     /// <summary>Word's Update Field over the body or a range; <paramref name="optionsJson"/> is
-    /// <c>""</c> or <c>{"range"?: DocumentRange, "pages"?: {anchorOrUnid: page}}</c>.</summary>
+    /// <c>""</c> or <c>{"range"?: DocumentRange, "pages"?: {anchorOrUnid: page}, "tablesOfContentsOnly"?: bool}</c>.</summary>
     [JSExport]
     public static string UpdateFields(int h, string optionsJson) =>
         DocxSessionOps.UpdateFields(h, optionsJson);
