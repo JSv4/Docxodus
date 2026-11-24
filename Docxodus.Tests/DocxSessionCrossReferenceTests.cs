@@ -404,6 +404,46 @@ public class DocxSessionCrossReferenceTests
     }
 
     [Fact]
+    public void XR016_StampReferenceFields_LeavesATextBoxOutOfTheCachedText()
+    {
+        var bytes = Mutate(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), document =>
+        {
+            var part = document.MainDocumentPart!;
+            part.GetXDocument().Descendants(W + "p").First().ReplaceNodes(new XElement(W + "fldSimple", new XAttribute(W + "instr", " REF x "),
+                new XElement(W + "r", new XElement(W + "t", "A")),
+                XElement.Parse($"<w:r {Ns}><w:pict><v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\"><v:textbox><w:txbxContent><w:p><w:r><w:t>Box</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>")));
+            part.PutXDocument();
+        });
+        var marked = Reference(HtmlConversionOps.ConvertToHtml(bytes, new HtmlConversionOptions { StampReferenceFields = true }));
+        Assert.Equal("A", (string?)marked.Attribute("data-field-cached"));
+    }
+
+    [Fact]
+    public void XR017_StampReferenceFields_MarksReferencesInHeadersAndNotes()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var paragraph = BodyParagraphs(session)[0];
+        Assert.True(session.SetHeaderText(paragraph, HeaderFooterKind.Default, "Header").Success);
+        Assert.True(session.InsertFootnote(paragraph, 0, "Note").Success);
+        XElement Char(string type) => new(W + "r", new XElement(W + "fldChar", new XAttribute(W + "fldCharType", type)));
+        var bytes = Mutate(session.Save(), document =>
+        {
+            var main = document.MainDocumentPart!;
+            foreach (var part in new OpenXmlPart[] { main.HeaderParts.Single(), main.FootnotesPart! })
+            {
+                part.GetXDocument().Descendants(W + "p").Last().Add(Char("begin"), new XElement(W + "r", new XElement(W + "instrText", " REF x ")),
+                    Char("separate"), new XElement(W + "r", new XElement(W + "t", "cached")), Char("end"));
+                part.PutXDocument();
+            }
+        });
+        var html = HtmlConversionOps.ConvertToHtml(bytes, new HtmlConversionOptions
+        {
+            StampReferenceFields = true, RenderHeadersAndFooters = true, RenderFootnotesAndEndnotes = true,
+        });
+        Assert.Equal(2, XDocument.Parse(html).Descendants().Count(e => (string?)e.Attribute("data-field") == "REF"));
+    }
+
+    [Fact]
     public void XR011_EditorRenderOptions_ReferenceFields_StampsThem()
     {
         using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());

@@ -1402,9 +1402,13 @@ namespace Docxodus
             AnnotateOwningContentParts(wordDoc);
             XElement rootElement = wordDoc.MainDocumentPart!.GetXDocument().Root!;
             FieldRetriever.AnnotateWithFieldInfo(wordDoc.MainDocumentPart!);
+            if (htmlConverterSettings.StampReferenceFields && htmlConverterSettings.RenderFootnotesAndEndnotes)
+                foreach (var part in new OpenXmlPart?[] { wordDoc.MainDocumentPart!.FootnotesPart, wordDoc.MainDocumentPart.EndnotesPart })
+                    if (part != null) FieldRetriever.AnnotateWithFieldInfo(part);
             // Complex running-story fields need the same grouping in flow and paginated output.
             if (htmlConverterSettings.RenderHeadersAndFooters &&
-                (htmlConverterSettings.RenderPagination == PaginationMode.Paginated || htmlConverterSettings.StampPageNumberFields))
+                (htmlConverterSettings.RenderPagination == PaginationMode.Paginated || htmlConverterSettings.StampPageNumberFields
+                    || htmlConverterSettings.StampReferenceFields))
                 foreach (var part in wordDoc.MainDocumentPart!.HeaderParts.Cast<OpenXmlPart>()
                     .Concat(wordDoc.MainDocumentPart.FooterParts))
                     FieldRetriever.AnnotateWithFieldInfo(part);
@@ -12639,7 +12643,8 @@ namespace Docxodus
             new XElement(Xhtml.span,
                 new XAttribute("data-field", field.Kind),
                 new XAttribute("data-field-target", field.Target),
-                new XAttribute("data-field-cached", string.Concat(source.SelectMany(e => e.DescendantsAndSelf(W.r))
+                new XAttribute("data-field-cached", string.Concat(source.SelectMany(e => e.DescendantsAndSelf(W.r)
+                        .Where(r => ReferenceEquals(r.Ancestors(W.p).FirstOrDefault(), e.Ancestors(W.p).FirstOrDefault())))
                     .Where(r => !r.Ancestors().TakeWhile(a => a.Name != W.p).Any(a => a.Name == W.del || a.Name == W.moveFrom))
                     .Select(DocxSession.RunText))),
                 field.Hyperlink ? new XAttribute("data-field-hyperlink", "true") : null,
