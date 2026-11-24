@@ -290,8 +290,32 @@ test.describe('DocxEditor — block drag handle', () => {
     await page.locator('.docx-block-handle').click();
     await page.getByRole('menuitem', { name: 'Move to bottom' }).click();
     const units = await unitState(page);
-    expect(units.at(-1)?.tag).toBe('TABLE');
+    expect(units.at(-2)?.tag).toBe('TABLE');
     expect(units.filter((x) => x.tag === 'TABLE')).toHaveLength(1);
+  });
+
+  // A table that would end the document gets an empty paragraph after it, so the edit creates a block that
+  // is not the one that moved.
+  test('a move that adds a paragraph after a table still focuses and reports the moved block', async ({ page }) => {
+    await openParagraphDocument(page, ['Before', 'After']);
+    const result = await page.evaluate(() => {
+      const { editor, moves } = (window as any).__drag;
+      (editor['editableList']()[0] as HTMLElement).focus();
+      editor.insertTable(2, 2);
+      const units = editor['bodyUnitNodes']() as HTMLElement[];
+      const [before, after] = [units[0], units.at(-1)!].map((el) => editor['anchorIdOf'](el));
+      editor.moveBlock(after, before, 'before');
+      const moved = editor['bodyUnitNodes']() as HTMLElement[];
+      return {
+        order: moved.map((el) => el.tagName === 'TABLE' ? 'TABLE' : (el.textContent ?? '').trim()),
+        reported: moves.at(-1).destinationAnchorId === after,
+        focused: document.activeElement?.textContent?.trim(),
+        lastIsEditable: moved.at(-1)!.getAttribute('contenteditable'),
+      };
+    });
+    expect(result).toEqual({
+      order: ['After', 'Before', 'TABLE', ''], reported: true, focused: 'After', lastIsEditable: 'true',
+    });
   });
 
   // A section break partitions the body into regions a block cannot move between. The engine has

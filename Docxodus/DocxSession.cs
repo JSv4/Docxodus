@@ -1038,7 +1038,16 @@ public sealed partial class DocxSession : IDisposable
         (W.permStart, W.permEnd, "permission"),
         (W.moveFromRangeStart, W.moveFromRangeEnd, "move-source"),
         (W.moveToRangeStart, W.moveToRangeEnd, "move-destination"),
+        (W.customXmlInsRangeStart, W.customXmlInsRangeEnd, "content-control revision"),
+        (W.customXmlDelRangeStart, W.customXmlDelRangeEnd, "content-control revision"),
+        (W.customXmlMoveFromRangeStart, W.customXmlMoveFromRangeEnd, "content-control revision"),
+        (W.customXmlMoveToRangeStart, W.customXmlMoveToRangeEnd, "content-control revision"),
     };
+
+    // (declared here, after the pairs: static initializers run in textual order)
+    private static readonly Dictionary<XName, (XName End, string Label)> CrossBlockRangeNames =
+        CrossBlockRangePairs.SelectMany(pair => new[] { (Name: pair.Start, pair.End, pair.Label), (Name: pair.End, pair.End, pair.Label) })
+            .ToDictionary(n => n.Name, n => (n.End, n.Label));
 
     private static readonly HashSet<string> AllowedXmlNamespaces = new()
     {

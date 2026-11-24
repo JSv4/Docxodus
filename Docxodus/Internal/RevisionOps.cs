@@ -1312,10 +1312,25 @@ internal static class RevisionOps
         // (issue #1649) comes ahead of the rows it belongs with, so it joins them only now.
         foreach (var lone in groups.Where(g => g.Units.Count == 1 && g.Units[0].Kind == UnitKind.ParaMark).ToList())
         {
-            if (ClosingTableGroup(lone.Units[0], rowGroupByTr, tableAfter: true) is not { } table) continue;
-            table.Units.Add(lone.Units[0]);
+            if ((ClosingTableGroup(lone.Units[0], rowGroupByTr, tableAfter: true)
+                ?? MoveLeavingParagraph(lone.Units[0], moveGroups.Values)) is not { } owner) continue;
+            owner.Units.Add(lone.Units[0]);
             groups.Remove(lone);
         }
+    }
+
+    /// <summary>The move that left <paramref name="mark"/>'s empty inserted paragraph in place of the
+    /// paragraph it moves away, to keep two tables apart (issue #1861): the same edit's, right after
+    /// its source, and with no paragraph after it.</summary>
+    private static RevisionGroup? MoveLeavingParagraph(RevisionUnit mark, IEnumerable<RevisionGroup> moves)
+    {
+        var paragraph = mark.Paragraph;
+        if (paragraph is null || mark.Type != TypeInsert || paragraph.Elements().Any(e => !IsIgnorableBetween(e))
+            || SiblingBlock(paragraph, forward: true)?.Name == W.p || SiblingBlock(paragraph, forward: false) is not { } source)
+            return null;
+        return moves.FirstOrDefault(move => move.Author == mark.Author && move.Date == mark.Date
+            && move.DateUtc == DateUtcOf(mark.Element)
+            && move.Units.Any(u => u.Kind == UnitKind.ParaMark && u.Element.Name == W.moveFrom && u.Paragraph == source));
     }
 
     /// <summary>
@@ -1354,9 +1369,16 @@ internal static class RevisionOps
     internal static bool ClosesTable(XElement paragraph)
     {
         if (SiblingBlock(paragraph, forward: false)?.Name != W.tbl) return false;
-        var next = SiblingBlock(paragraph, forward: true);
+        // The end of a content control is not the end of what holds it.
+        XElement? next = null;
+        for (XElement? e = paragraph; e is not null && next is null; e = BlockWrapperOf(e)) next = SiblingBlock(e, forward: true);
         return next is null || next.Name == W.sectPr || next.Name == W.tbl;
     }
+
+    /// <summary>The block content control or custom XML element <paramref name="block"/> is directly in, or null.</summary>
+    internal static XElement? BlockWrapperOf(XElement block) =>
+        block.Parent is { } parent && parent.Name == W.sdtContent ? parent.Parent
+        : block.Parent?.Name == W.customXml ? block.Parent : null;
 
     /// <summary>The nearest sibling element before or after <paramref name="element"/> that is not
     /// a range marker (<see cref="IsIgnorableBetween"/>), walking only as far as it has to.</summary>

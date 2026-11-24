@@ -25,7 +25,11 @@ public sealed partial class DocxSession
     /// Reorder one top-level body block relative to another. Paragraphs, headings,
     /// list items, and whole tables are supported. A direct edit moves the existing
     /// XML element; <see cref="TrackedChangeMode.RenderInline"/> emits a native named
-    /// paragraph move or a Word-native deleted/inserted table pair.
+    /// paragraph move or a Word-native deleted/inserted table pair. What a bookmark, comment,
+    /// permission or field covers never changes: a marker between blocks goes with the block when
+    /// its other end does, and any other such move is refused. Where a move would leave two tables
+    /// touching, or a table ending the body, the empty paragraph it adds is in
+    /// <see cref="EditResult.Created"/> (after the destination of a tracked move).
     /// </summary>
     public EditResult MoveBlock(string sourceAnchorId, string targetAnchorId, Position pos)
     {
@@ -66,17 +70,18 @@ public sealed partial class DocxSession
                 "MoveBlock only supports top-level body blocks (including flattened body content controls)",
                 sourceAnchorId);
 
+        var context = BuildBlockMoveContext(parent);
+        var run = MovingRun(context, context.Index[source], context.Index[source]);
+        var landing = LandRun(context, run, context.Index[target], pos);
         // A source already in the requested slot is a true no-op: do not consume undo.
-        if ((pos == Position.Before && ReferenceEquals(source.NextNode, target)) ||
-            (pos == Position.After && ReferenceEquals(target.NextNode, source)))
-            return new EditResult { Success = true };
+        if (landing.InPlace) return new EditResult { Success = true };
 
         if (TrackedBookmarkMoveRejection(source) is { } bookmarkRejection)
             return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary, bookmarkRejection, sourceAnchorId);
 
-        if (MoveSourceRejection(source) is { } sourceRejection)
+        if (MoveSourceRejection(context, run) is { } sourceRejection)
             return EditResult.Fail(EditErrorCode.InvalidPosition, sourceRejection, sourceAnchorId);
-        if (BlockMoveSafetyError(BuildBlockMoveContext(parent), source, target, pos) is { } safetyError)
+        if (landing.Error is { } safetyError)
             return EditResult.Fail(EditErrorCode.InvalidPosition, safetyError, sourceAnchorId);
 
         _history.RecordPreOp(TakeSnapshot());
@@ -84,15 +89,13 @@ public sealed partial class DocxSession
         {
             if (_trackedChanges != TrackedChangeMode.RenderInline)
             {
-                source.Remove();
-                if (pos == Position.Before) target.AddBeforeSelf(source);
-                else target.AddAfterSelf(source);
-
+                var added = RelocateRun(context, run, landing.Slot);
                 InvalidateProjectionCache();
                 return new EditResult
                 {
                     Success = true,
                     Modified = new[] { sourceTarget.Anchor },
+                    Created = added.Count == 0 ? Array.Empty<Anchor>() : ResolveAnchorsForElements(added),
                     Patch = PatchFor(sourceTarget),
                 };
             }
@@ -109,7 +112,7 @@ public sealed partial class DocxSession
                 Internal.CommentOps.CloneCommentsForMoveSource(commentHost, source, NextRevisionId);
 
             var author = _revisionAuthor ?? "docxodus";
-            var date = RevisionDateNow();
+            var date = NextTrackedFormatRevisionDate();
             if (source.Name == W.p)
             {
                 var moveName = $"move{NextRevisionId()}";
@@ -123,8 +126,12 @@ public sealed partial class DocxSession
             }
 
             UnidHelper.AssignToSelfAndDescendants(destination);
-            if (pos == Position.Before) target.AddBeforeSelf(destination);
-            else target.AddAfterSelf(destination);
+            InsertAtSlot(context, run, landing.Slot, destination);
+            // The paragraphs that keep tables apart once the move is accepted are inserted with it.
+            var leftBehind = new XElement(W.p);
+            source.AddAfterSelf(leftBehind);
+            var separators = KeepTablesApart(leftBehind, destination, destination);
+            foreach (var separator in separators) MarkParagraphMark(separator, W.ins, author, date);
 
             var destinationUnid = (string)destination.Attribute(PtOpenXml.Unid)!;
             var destinationAnchor = new Anchor(
@@ -136,7 +143,8 @@ public sealed partial class DocxSession
             {
                 Success = true,
                 Modified = new[] { sourceTarget.Anchor },
-                Created = new[] { destinationAnchor },
+                Created = separators.Count == 0 ? new[] { destinationAnchor }
+                    : ResolveAnchorsForElements(separators).Prepend(destinationAnchor).ToArray(),
                 Patch = PatchFor(sourceTarget),
             };
         }
@@ -185,6 +193,9 @@ public sealed partial class DocxSession
         return null;
     }
 
+    private string? MoveSourceRejection(BlockMoveContext context, (int First, int Last) run) =>
+        context.Run(run).Select(MoveSourceRejection).FirstOrDefault(why => why is not null);
+
     /// <summary>
     /// The anchors this block may legally be moved next to, in document order — the drop targets a
     /// drag UI should offer. Empty when the block cannot move at all (it owns a section break, or
@@ -210,16 +221,17 @@ public sealed partial class DocxSession
         var source = sourceTarget.Resolve(_doc!);
         if (source?.Parent is not { } parent)
             return empty;
-        if (!IsEditorBodyBlock(source, parent) || MoveSourceRejection(source) is not null)
+        if (!IsEditorBodyBlock(source, parent))
             return empty;
 
         // One context for the whole sweep: each candidate then costs index arithmetic over the
         // container's cross-block ranges instead of its own pass over the story.
         var context = BuildBlockMoveContext(parent);
-        if (context.UniversalRejection is not null) return empty;
+        var run = MovingRun(context, context.Index[source], context.Index[source]);
+        if (MoveSourceRejection(context, run) is not null) return empty;
 
         var targets = new List<MoveTarget>();
-        foreach (var candidate in context.Blocks)
+        foreach (var candidate in context.Children)
         {
             if (ReferenceEquals(candidate, source) || !IsEditorBodyBlock(candidate, parent))
                 continue;
@@ -228,8 +240,9 @@ public sealed partial class DocxSession
             var kind = candidate.Name == W.tbl ? "tbl" : WmlToMarkdownConverter.KindFor(candidate);
             if (kind is null) continue;
 
-            bool before = BlockMoveSafetyError(context, source, candidate, Position.Before) is null;
-            bool after = BlockMoveSafetyError(context, source, candidate, Position.After) is null;
+            int target = context.Index[candidate];
+            bool before = LandRun(context, run, target, Position.Before).Error is null;
+            bool after = LandRun(context, run, target, Position.After).Error is null;
             if (before || after)
                 targets.Add(new MoveTarget($"{kind}:{sourceTarget.Anchor.Scope}:{unid}", before, after));
         }
@@ -274,9 +287,10 @@ public sealed partial class DocxSession
     }
 
     /// <summary>
-    /// The move-independent facts about one block container: the body render units in document
-    /// order, which of them own a section break, and where each cross-block comment/bookmark/
-    /// permission/native-move range starts and ends.
+    /// The move-independent facts about one block container: its children in document order, which
+    /// of them hold a section break, and where each range and field that reaches from one child
+    /// to another starts and ends. <see cref="MoveBlock"/>, <see cref="ValidMoveTargets"/> and
+    /// <see cref="MoveBlockRange"/> all decide on it.
     /// </summary>
     /// <remarks>
     /// Everything here is a property of the CONTAINER, not of a particular move, so a whole
@@ -289,149 +303,269 @@ public sealed partial class DocxSession
     /// </remarks>
     private sealed class BlockMoveContext
     {
-        /// <summary>Body render units in document order.</summary>
-        public required IReadOnlyList<XElement> Blocks { get; init; }
+        /// <summary>The container's children: its blocks, and the content controls, range markers
+        /// and section properties among them.</summary>
+        public required IReadOnlyList<XElement> Children { get; init; }
 
-        /// <summary>Position of each block in <see cref="Blocks"/>, by reference.</summary>
+        /// <summary>Position of each child in <see cref="Children"/>, by reference.</summary>
         public required Dictionary<XElement, int> Index { get; init; }
 
-        /// <summary>Number of section-break-owning blocks in <c>Blocks[0..i)</c>, so
-        /// "is there one between these two blocks" is a subtraction.</summary>
+        /// <summary>Number of section breaks in <c>Children[0..i)</c>, so "is there one between
+        /// these two children" is a subtraction.</summary>
         public required int[] SectionBreaksBefore { get; init; }
 
-        /// <summary>Every range whose start and end sit in DIFFERENT blocks, as the
-        /// index pair the move has to leave intact.</summary>
-        public required IReadOnlyList<(int Start, int End, string Label)> CrossBlockRanges { get; init; }
+        /// <summary>Every range and field whose two ends sit in DIFFERENT children, as the index
+        /// pair the move has to leave intact; an end outside the container is past its first or
+        /// last child. A null label is a pair to keep when possible (see
+        /// <see cref="BuildBlockMoveContext"/>).</summary>
+        public required IReadOnlyList<(int Start, int End, string? Label)> CrossBlockRanges { get; init; }
 
-        /// <summary>Set when the container holds an inverted range (its end precedes its
-        /// start): that rejects every move, so no candidate needs testing.</summary>
-        public string? UniversalRejection { get; init; }
+        public IEnumerable<XElement> Run((int First, int Last) run) => Children.Take(run.Last + 1).Skip(run.First);
+
+        /// <summary>The child at <paramref name="i"/> once the run is lifted out.</summary>
+        public XElement Other((int First, int Last) run, int i) => Children[i < run.First ? i : i + run.Last - run.First + 1];
     }
 
-    private static BlockMoveContext BuildBlockMoveContext(XElement parent)
+    private static BlockMoveContext BuildBlockMoveContext(XElement container)
     {
-        var blocks = parent.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).ToList();
-        // XElement does not override Equals, so the default comparer IS reference identity —
-        // the same relation the previous List.IndexOf lookups used.
-        var index = new Dictionary<XElement, int>(blocks.Count);
-        for (int i = 0; i < blocks.Count; i++) index[blocks[i]] = i;
-
-        var sectionBreaksBefore = new int[blocks.Count + 1];
-        for (int i = 0; i < blocks.Count; i++)
+        var children = container.Elements().ToList();
+        // XElement does not override Equals, so the default comparer IS reference identity.
+        var index = new Dictionary<XElement, int>(children.Count);
+        for (int i = 0; i < children.Count; i++) index[children[i]] = i;
+        var sectionBreaksBefore = new int[children.Count + 1];
+        var ranges = new List<(int, int, string?)>();
+        void Add(int start, int end, string label)
         {
-            bool owns = blocks[i].Name == W.p &&
-                blocks[i].Element(W.pPr)?.Element(W.sectPr) is not null;
-            sectionBreaksBefore[i + 1] = sectionBreaksBefore[i] + (owns ? 1 : 0);
+            if (start == end) return;
+            ranges.Add((start, end, label));
+            if (start < 0 || end == children.Count || !children.Take(end + 1).Skip(start).All(IsBlockLevelMarker)) return;
+            // An empty range between blocks marks the start of the block after it: they stay together when they can.
+            int next = end;
+            while (next < children.Count && IsBlockLevelMarker(children[next])) next++;
+            if (next < children.Count) ranges.Add((end, next, null));
         }
 
-        // One traversal collects every marker of interest; the five names are matched
-        // against each element rather than walking the story once per name.
-        var starts = new Dictionary<XName, Dictionary<string, XElement>>();
-        var ends = new Dictionary<XName, List<XElement>>();
-        foreach (var (startName, endName, _) in CrossBlockRangePairs)
+        // One traversal finds every marker, with the child it is in: -1 before the container, and past its
+        // last child after it. The first start wins for a duplicated id. An end before its start is no range.
+        var body = container.AncestorsAndSelf(W.body).First();
+        var past = container.AncestorsAndSelf().TakeWhile(e => e != body)
+            .Select(e => e.ElementsAfterSelf().FirstOrDefault()).FirstOrDefault(e => e is not null);
+        var starts = new Dictionary<(XName End, string Id), int>();
+        var fields = new Stack<int>();
+        int at = -1;
+        foreach (var e in body.Descendants())
         {
-            starts[startName] = new Dictionary<string, XElement>();
-            ends[endName] = new List<XElement>();
-        }
-        foreach (var el in parent.Descendants())
-        {
-            if (starts.TryGetValue(el.Name, out var byId))
+            if (ReferenceEquals(e.Parent, container)) at = index[e];
+            else if (ReferenceEquals(e, past)) at = children.Count;
+            if (e.Name == W.fldChar)
             {
-                // First start wins for a duplicated id, matching the previous grouping.
-                var id = (string?)el.Attribute(W.id) ?? "";
-                if (!byId.ContainsKey(id)) byId[id] = el;
+                var type = (string?)e.Attribute(W.fldCharType);
+                if (type == "begin") fields.Push(at);
+                else if (type == "end" && fields.Count > 0) Add(fields.Pop(), at, "field");
             }
-            else if (ends.TryGetValue(el.Name, out var list))
+            else if (e.Name == W.sectPr)
             {
-                list.Add(el);
+                if (at >= 0 && at < children.Count && e.Parent!.Name == W.pPr && IsStoryParagraph(e.Parent.Parent!))
+                    sectionBreaksBefore[at + 1]++;
             }
-        }
-
-        var ranges = new List<(int, int, string)>();
-        string? universalRejection = null;
-        foreach (var (startName, endName, label) in CrossBlockRangePairs)
-        {
-            var byId = starts[startName];
-            foreach (var end in ends[endName])
+            else if (CrossBlockRangeNames.TryGetValue(e.Name, out var range))
             {
-                var id = (string?)end.Attribute(W.id) ?? "";
-                if (!byId.TryGetValue(id, out var start)) continue;
-                var startBlock = TopLevelOwner(start, parent);
-                var endBlock = TopLevelOwner(end, parent);
-                if (startBlock is null || endBlock is null || ReferenceEquals(startBlock, endBlock))
-                    continue;
-                if (!index.TryGetValue(startBlock, out var a) || !index.TryGetValue(endBlock, out var b))
-                    continue;
-                if (b < a)
-                {
-                    // An inverted range was `before is null` for every candidate before.
-                    universalRejection ??= $"move would change or invert a cross-block {label} range";
-                    continue;
-                }
-                ranges.Add((a, b, label));
+                var key = (range.End, (string?)e.Attribute(W.id) ?? "");
+                if (e.Name != range.End) starts.TryAdd(key, at);
+                else if (starts.TryGetValue(key, out int start)) Add(start, at, range.Label);
             }
         }
+        for (int i = 0; i < children.Count; i++) sectionBreaksBefore[i + 1] += sectionBreaksBefore[i];
 
         return new BlockMoveContext
         {
-            Blocks = blocks,
+            Children = children,
             Index = index,
             SectionBreaksBefore = sectionBreaksBefore,
             CrossBlockRanges = ranges,
-            UniversalRejection = universalRejection,
         };
     }
 
-    /// <summary>Reject a move when it would change the membership/order of a cross-block
-    /// comment, bookmark, permission, or native-move range, or cross a section break.</summary>
+    /// <summary>What moves with the children from <paramref name="first"/> to <paramref name="last"/>:
+    /// the markers right beside them (Word ends a bookmark over whole paragraphs there) whose other
+    /// ends move too, and an empty range before them. A native move range never moves. A tracked move
+    /// takes no markers: both its copies are live, and a marker could go with only one of them.</summary>
+    private (int First, int Last) MovingRun(BlockMoveContext context, int first, int last)
+    {
+        if (_trackedChanges == TrackedChangeMode.RenderInline) return (first, last);
+        int lo = first, hi = last;
+        while (lo > 0 && IsBlockLevelMarker(context.Children[lo - 1])) lo--;
+        while (hi + 1 < context.Children.Count && IsBlockLevelMarker(context.Children[hi + 1])) hi++;
+
+        // The other ends of the ranges that end at a child, the kept-when-possible ones left out.
+        IEnumerable<(int Other, string Label)> Ends(int child)
+        {
+            foreach (var (start, end, label) in context.CrossBlockRanges)
+                if (label is not null && (start == child || end == child)) yield return (start == child ? end : start, label);
+        }
+        bool Goes(int marker) => Ends(marker).All(e =>
+            e.Other >= lo && e.Other <= hi && !e.Label.StartsWith("move-", StringComparison.Ordinal));
+        // A marker that stays keeps the ones beyond it, which may keep another one's other end.
+        for (bool stays = true; stays;)
+        {
+            stays = false;
+            for (int i = first - 1; i >= lo; i--) if (!Goes(i)) { lo = i + 1; stays = true; }
+            for (int i = last + 1; i <= hi; i++) if (!Goes(i)) { hi = i - 1; stays = true; }
+        }
+        while (lo < first && !Ends(lo).Any()) lo++;
+        // After the run, only as far as those need: an empty range there belongs to the next block.
+        int needed = last;
+        for (int i = lo; i <= needed; i++)
+            foreach (var (other, _) in Ends(i))
+                if (other > needed && other <= hi) needed = other;
+        return (lo, needed);
+    }
+
+    /// <summary>Where a run of children lands beside <paramref name="target"/>: its slot among the
+    /// container's other children, whether that is where it already is, or why it may not land
+    /// there: it would cross a section break, or change the membership or order of a cross-block
+    /// comment, bookmark, permission, native-move or field range.</summary>
     /// <remarks>
-    /// A move relocates exactly ONE element, so the reordered document order is a function of
-    /// three indices and needs no second list. A range survives iff its two endpoints still
-    /// bound a window of the same width: the elements strictly between them can only change by
-    /// the source entering or leaving, so equal width and equal membership are the same
-    /// condition — including when the source IS an endpoint, where any relocation but the
+    /// The run can land on either side of the markers between the target and the next block, so
+    /// the first such slot that keeps every range is taken. The reordered document order is a function
+    /// of the run's bounds and the slot and needs no second list. A range survives iff its two
+    /// endpoints still bound a window of the same width: the elements strictly between them can
+    /// only change by the run entering or leaving, so equal width and equal membership are the
+    /// same condition — including when an endpoint is IN the run, where any relocation but the
     /// identity one changes the width.
     /// </remarks>
-    private static string? BlockMoveSafetyError(
-        BlockMoveContext ctx, XElement source, XElement target, Position pos)
+    private static (int Slot, bool InPlace, string? Error) LandRun(
+        BlockMoveContext context, (int First, int Last) run, int target, Position pos)
     {
-        if (!ctx.Index.TryGetValue(source, out var sourceIndex) ||
-            !ctx.Index.TryGetValue(target, out var targetIndex))
-            return "source or target is not a body render unit";
+        int length = run.Last - run.First + 1, others = context.Children.Count - length;
 
-        int lo = Math.Min(sourceIndex, targetIndex);
-        int hi = Math.Max(sourceIndex, targetIndex);
-        if (ctx.SectionBreaksBefore[hi + 1] - ctx.SectionBreaksBefore[lo] > 0)
-            return "cannot move a block across a section-break paragraph";
-
-        // Checked after the section break, matching the order the messages were produced in
+        // Checked before the ranges, matching the order the messages were produced in
         // when the range scan ran per candidate.
-        if (ctx.UniversalRejection is { } universal) return universal;
+        int from = Math.Min(run.First, target), to = Math.Max(run.Last, target);
+        var error = context.SectionBreaksBefore[to + 1] - context.SectionBreaksBefore[from] > 0
+            ? "cannot move a block across a section-break paragraph" : null;
 
-        // Where the source lands once it has been lifted out of the sequence.
-        int targetAfterRemoval = targetIndex > sourceIndex ? targetIndex - 1 : targetIndex;
-        int insertAt = pos == Position.Before ? targetAfterRemoval : targetAfterRemoval + 1;
-
-        int Reordered(int i)
+        int step = pos == Position.Before ? -1 : 1, best = -1;
+        string? firstBroken = null;
+        bool bestKeepsAll = false;
+        for (int slot = (target > run.Last ? target - length : target) + (pos == Position.Before ? 0 : 1); ; slot += step)
         {
-            if (i == sourceIndex) return insertAt;
-            int afterRemoval = i > sourceIndex ? i - 1 : i;
-            return afterRemoval >= insertAt ? afterRemoval + 1 : afterRemoval;
+            if (slot == run.First) return (slot, true, error);
+            var (required, all) = Keeps(slot);
+            if (required is not null) firstBroken ??= required;
+            else if (best < 0 || (all && !bestKeepsAll)) (best, bestKeepsAll) = (slot, all);
+            int beside = pos == Position.Before ? slot - 1 : slot;
+            if (beside < 0 || beside >= others || !IsBlockLevelMarker(context.Other(run, beside))) break;
         }
+        return (best, false, error ?? (best < 0 ? $"move would change or invert a cross-block {firstBroken} range" : null));
 
-        foreach (var (start, end, label) in ctx.CrossBlockRanges)
+        (string? Broken, bool All) Keeps(int slot)
         {
-            int a = Reordered(start);
-            int b = Reordered(end);
-            if (b < a || b - a != end - start)
-                return $"move would change or invert a cross-block {label} range";
+            int Reordered(int i)
+            {
+                if (i >= run.First && i <= run.Last) return slot + (i - run.First);
+                int afterRemoval = i > run.Last ? i - length : i;
+                return afterRemoval >= slot ? afterRemoval + length : afterRemoval;
+            }
+            bool all = true;
+            foreach (var (start, end, label) in context.CrossBlockRanges)
+            {
+                if (Reordered(end) - Reordered(start) == end - start) continue;
+                if (label is not null) return (label, false);
+                all = false;
+            }
+            return (null, all);
+        }
+    }
+
+    /// <summary>Move a run of children to a slot <see cref="LandRun"/> chose, and return the
+    /// paragraphs it took to keep tables apart.</summary>
+    private List<XElement> RelocateRun(BlockMoveContext context, (int First, int Last) run, int slot)
+    {
+        XElement first = context.Children[run.First], last = context.Children[run.Last];
+        // The run's own siblings between its ends travel with it.
+        var nodes = new List<XNode> { first };
+        while (!ReferenceEquals(nodes[^1], last)) nodes.Add(nodes[^1].NextNode!);
+        var leftBehind = new XElement(W.p);
+        first.AddBeforeSelf(leftBehind);
+        foreach (var node in nodes) node.Remove();
+        InsertAtSlot(context, run, slot, nodes);
+        return KeepTablesApart(leftBehind, first, last);
+    }
+
+    private static void InsertAtSlot(BlockMoveContext context, (int First, int Last) run, int slot, object content)
+    {
+        if (slot < context.Children.Count - (run.Last - run.First + 1)) context.Other(run, slot).AddBeforeSelf(content);
+        else context.Other(run, slot - 1).AddAfterSelf(content);
+    }
+
+    /// <summary>Keep the empty paragraph <paramref name="leftBehind"/>, put where the moved blocks came from, and
+    /// add one before <paramref name="first"/> or after <paramref name="last"/> of them, wherever a table
+    /// would otherwise touch another one or end the body (as <see cref="InsertTable"/> does): tables
+    /// that touch are read as one, and Word always has a paragraph after the last one. Returns the
+    /// ones kept.</summary>
+    private List<XElement> KeepTablesApart(XElement? leftBehind, XElement first, XElement last)
+    {
+        var kept = new List<XElement>();
+        foreach (var place in new Action<XElement>?[] { null, first.AddBeforeSelf, last.AddAfterSelf })
+        {
+            if (place is null && leftBehind is null) continue;
+            var separator = place is null ? leftBehind! : new XElement(W.p);
+            place?.Invoke(separator);
+            // After the ends of the ranges that cover the table, so that none of them covers it.
+            while (separator.ElementsAfterSelf().FirstOrDefault() is { } next
+                && CrossBlockRangeNames.TryGetValue(next.Name, out var range) && next.Name == range.End)
+            {
+                separator.Remove();
+                next.AddAfterSelf(separator);
+            }
+            // A tracked move is accepted or rejected; any other has to hold however the pending changes are.
+            if (TablesMeet(separator, accepted: true)
+                || (_trackedChanges != TrackedChangeMode.RenderInline && TablesMeet(separator, accepted: false)))
+            {
+                UnidHelper.AssignToSelfAndDescendants(separator);
+                kept.Add(separator);
+            }
+            else separator.Remove();
+        }
+        return kept;
+    }
+
+    private static bool TablesMeet(XElement separator, bool accepted) =>
+        NeighbourBlock(separator, forward: false, accepted)?.Name == W.tbl
+        && NeighbourBlock(separator, forward: true, accepted)?.Name is var next
+        && (next is null || next == W.sectPr || next == W.tbl);
+
+    /// <summary>The block before or after <paramref name="block"/> once the pending changes are accepted
+    /// or rejected: past markers, the edges of block content controls (neither keeps two tables
+    /// apart) and blocks that go. Null at the body's start or end.</summary>
+    private static XElement? NeighbourBlock(XElement block, bool forward, bool accepted)
+    {
+        for (XElement? e = block; e is not null; e = Internal.RevisionOps.BlockWrapperOf(e))
+        {
+            var beside = WmlToMarkdownConverter.ExpandBlockWrappers(forward ? e.ElementsAfterSelf() : e.ElementsBeforeSelf());
+            if ((forward ? beside : beside.Reverse())
+                .FirstOrDefault(b => !IsBlockLevelMarker(b) && b.Name != W.customXmlPr && !Goes(b, accepted)) is { } found) return found;
         }
         return null;
     }
 
-    private static XElement? TopLevelOwner(XElement marker, XElement parent) =>
-        marker.Ancestors().FirstOrDefault(e => ReferenceEquals(e.Parent, parent) &&
-            (e.Name == W.p || e.Name == W.tbl));
+    /// <summary>Whether a paragraph with its mark, or a table, goes when every pending change is accepted
+    /// (a deletion or move source) or rejected (an insertion or move destination).</summary>
+    private static bool Goes(XElement block, bool accepted)
+    {
+        XName revised = accepted ? W.del : W.ins, moved = accepted ? W.moveFrom : W.moveTo;
+        bool IsMark(XElement e) => e.Name == revised || e.Name == moved;
+        return block.Name == W.tbl
+            ? WordprocessingMLUtil.TableRows(block).All(row => row.Element(W.trPr)?.Element(revised) is not null)
+            : block.Element(W.pPr)?.Element(W.rPr)?.Elements().Any(IsMark) == true
+                && block.Descendants().Where(e => e.Name == W.r || e.Name == M.r).All(r => r.Ancestors().Any(IsMark));
+    }
+
+    /// <summary>A range marker (or a proofing mark) that is itself a child of the body or of a block
+    /// content control, so not a block.</summary>
+    private static bool IsBlockLevelMarker(XElement child) =>
+        child.Name == W.proofErr || CrossBlockRangeNames.ContainsKey(child.Name);
 
     /// <summary>
     /// Wrap the live runs of <paramref name="paragraph"/> in a

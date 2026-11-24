@@ -312,10 +312,10 @@ internal static class ToolCatalog
                 "headingAnchorId": { "type": "string", "description": "delete_section: heading whose section (heading + everything until the next same-or-higher heading) should be removed." },
                 "characterOffset": { "type": "integer", "description": "split_paragraph: character offset to split at." },
                 "secondAnchorId": { "type": "string", "description": "merge_paragraphs: the paragraph absorbed into anchorId." },
-                "sourceAnchorId": { "type": "string", "description": "move_block: block to relocate." },
+                "sourceAnchorId": { "type": "string", "description": "move_block: block to relocate. Refused where it would change what a bookmark, comment, permission or field covers; created holds a tracked move's destination, then any empty paragraph added between two tables or after the last." },
                 "targetAnchorId": { "type": "string", "description": "move_block/move_block_range: reference block used with position." },
                 "firstAnchorId": { "type": "string", "description": "move_block_range: first top-level block of the run (inclusive)." },
-                "lastAnchorId": { "type": "string", "description": "move_block_range: last top-level block of the run (inclusive, after firstAnchorId). Refused across a section break, when it would cut a bookmark or comment range, onto a target inside the run, and under tracked changes." },
+                "lastAnchorId": { "type": "string", "description": "move_block_range: last top-level block of the run (inclusive, after firstAnchorId). Refused across a section break, when it would change what a bookmark, comment, permission or field covers, onto a target inside the run, and under tracked changes." },
                 "range": {
                   "type": "object",
                   "description": "update_fields: only the fields that start in these paragraphs. Omitted: every field in the body. The document stops asking Word to update its fields on open only when none is left that needs it.",

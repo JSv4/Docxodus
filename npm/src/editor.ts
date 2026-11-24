@@ -2299,7 +2299,9 @@ export class DocxEditor {
       return true;
     }
 
-    const destination = res.created?.[0] ?? res.modified?.[0];
+    // A tracked move creates the moved block; any other created block is a paragraph a table needed.
+    const tracked = this.options.trackedChanges === TrackedChangeMode.RenderInline;
+    const destination = (tracked && res.created?.[0]) || res.modified?.[0];
     // Both modes reconcile. A direct move relocates the existing element, so the reconciler moves
     // the exact DOM node it already has. Review rendering additionally rewrites the SOURCE in
     // place — it becomes the move-from half — and that is visible to the diff because the plan
@@ -6311,6 +6313,33 @@ export class DocxEditor {
       return f && appliedFresh.has(j) ? f : null;
     };
 
+    // A block move changes one exact-token unit's slot. Move only that existing
+    // wrapper beside its final neighbor; this preserves identity without disturbing
+    // unrelated nodes or assuming every rendered unit shares one DOM parent. Before the
+    // insertions, which find their place by neighbors that may be moved ones.
+    for (const { newIndex } of [...diff.moved].sort((a, b) => a.newIndex - b.newIndex)) {
+      const moving = nodeAt(newIndex);
+      if (!moving?.isConnected) return "move source is not connected";
+      const movingW = this.unitWrapperOf(moving);
+      let prevW: HTMLElement | null = null;
+      for (let k = newIndex - 1; k >= 0 && !prevW; k--) {
+        const n = nodeAt(k);
+        if (n?.isConnected) prevW = this.unitWrapperOf(n);
+      }
+      let nextW: HTMLElement | null = null;
+      for (let k = newIndex + 1; k < units.length && !nextW; k++) {
+        const n = nodeAt(k);
+        if (n?.isConnected) nextW = this.unitWrapperOf(n);
+      }
+      if (prevW && prevW !== movingW && prevW.parentElement === movingW.parentElement) {
+        prevW.after(movingW);
+      } else if (nextW && nextW !== movingW && nextW.parentElement === movingW.parentElement) {
+        nextW.before(movingW);
+      } else {
+        return "move neighbors in different parents";
+      }
+    }
+
     // Preserve the established incremental insertion path: body render output may
     // legitimately use several wrapper parents (for example border groups), so it is
     // not valid to normalize the whole body against one common parent.
@@ -6335,32 +6364,6 @@ export class DocxEditor {
     // move sources remain live even though the LCS also reports them as removed.
     for (const i of pureRemoved) {
       this.unitWrapperOf(oldNodes[i]).remove();
-    }
-
-    // A block move changes one exact-token unit's slot. Move only that existing
-    // wrapper beside its final neighbor; this preserves identity without disturbing
-    // unrelated nodes or assuming every rendered unit shares one DOM parent.
-    for (const { newIndex } of [...diff.moved].sort((a, b) => a.newIndex - b.newIndex)) {
-      const moving = nodeAt(newIndex);
-      if (!moving?.isConnected) return "move source is not connected";
-      const movingW = this.unitWrapperOf(moving);
-      let prevW: HTMLElement | null = null;
-      for (let k = newIndex - 1; k >= 0 && !prevW; k--) {
-        const n = nodeAt(k);
-        if (n?.isConnected) prevW = this.unitWrapperOf(n);
-      }
-      let nextW: HTMLElement | null = null;
-      for (let k = newIndex + 1; k < units.length && !nextW; k++) {
-        const n = nodeAt(k);
-        if (n?.isConnected) nextW = this.unitWrapperOf(n);
-      }
-      if (prevW && prevW !== movingW && prevW.parentElement === movingW.parentElement) {
-        prevW.after(movingW);
-      } else if (nextW && nextW !== movingW && nextW.parentElement === movingW.parentElement) {
-        nextW.before(movingW);
-      } else {
-        return "move neighbors in different parents";
-      }
     }
     return true;
   }

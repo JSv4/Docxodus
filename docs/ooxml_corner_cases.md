@@ -8347,6 +8347,24 @@ It now looks for the nearest block on both sides past range markers
 changes are tracked, a paragraph added before the new table is inserted with it, and the
 registry attaches it to that table's revision the same way as the one after it.
 
+Nor do a permission marker or the edge of a content control (#1861):
+
+```xml
+<w:tbl>…</w:tbl><w:permStart w:id="1" w:edGrp="everyone"/><w:permEnd w:id="1"/><w:tbl>…</w:tbl>
+<w:sdt><w:sdtContent><w:p>…</w:p><w:tbl>…</w:tbl></w:sdtContent></w:sdt><w:tbl>…</w:tbl>
+```
+
+| | Permission markers between two tables | A control's edge between two tables |
+|---|---|---|
+| Word | not measured | not measured |
+| LibreOffice 25.8.7 | one two-row table | one two-row table |
+| Docxodus before #1861 | no paragraph added | no paragraph added |
+| Docxodus with #1861 | paragraph added | paragraph added |
+
+`InsertTable`, `MoveBlock` and `MoveBlockRange` see past both when they decide whether a table needs the
+paragraph (`DocxSession.KeepTablesApart`). Resolving a revision (`RevisionOps.ClosesTable`) takes the end
+of a content control for the end of the body only where nothing follows the control.
+
 One placement has no reversible encoding: right after a paragraph whose mark is a pending
 insertion and which keeps something once it is rejected, such as the first half of a pending
 tracked split. Rejecting that mark has to merge the paragraph into the next one, and

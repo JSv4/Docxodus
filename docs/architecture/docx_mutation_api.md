@@ -846,10 +846,25 @@ is succeeds as a no-op **and records no undo snapshot**.
 
 | Tracking | Behaviour |
 |---|---|
-| Off (`Accept`) | Detaches and re-inserts the EXISTING element. Descendant Unids, hyperlink/image/comment/note relationship ids all stay valid — v1 only moves within one part. |
+| Off (`Accept`) | Detaches and re-inserts the EXISTING element. Descendant Unids, hyperlink/image/comment/note relationship ids all stay valid — v1 only moves within one part. `EditResult.Modified` is the moved block. |
 | `RenderInline` | Keeps a revision-marked source and adds a revision-marked destination. A paragraph-like block uses one named `w:moveFrom`/`w:moveTo` pair (`ListRevisions` reports it as a single `move` revision that resolves both sides); a table lowers to Word's row delete + insert, which Word may present as two revisions. `EditResult.Created` carries the destination anchor so focus can follow the moved block. |
 
 `accept ≡ the requested order` and `reject ≡ the original order` hold for both shapes.
+
+**Markers between blocks.** Word ends a bookmark over a whole paragraph with a `w:bookmarkEnd` directly
+in the body, so the container's children decide a move, not just its blocks. A marker beside the moved
+block goes with it when the range's other end does (in the block, or on its other side); the block lands
+on whichever side of the markers beside its target keeps every range as it was. An empty range between
+blocks, such as Word's `_GoBack`, covers nothing: it stays with the block after it when it can, and never
+stops a move. An end before its start is no range. A tracked move takes no markers, because both its
+copies are live, so a block that would have to take the end of a range that covers it cannot move.
+
+**Tables stay apart.** Two tables with nothing but markers between them are read as one, and Word always
+has a paragraph after the last one. Where a move would leave either, also across the edge of a content
+control, it adds the empty paragraph `InsertTable` adds by the same rule (`KeepTablesApart`), reported in
+`EditResult.Created` (after a tracked move's destination). A paragraph or table that a pending change takes
+away keeps nothing apart. With changes tracked the paragraph is inserted with the move: the revision of a
+moved paragraph, or of the table beside it, resolves it too.
 
 **Two live copies, so identities must stay unambiguous.** A tracked move duplicates the block:
 
@@ -866,8 +881,9 @@ is succeeds as a no-op **and records no undo snapshot**.
 
 `InvalidPosition` for: a different parent or part; a source owning an inline `w:pPr/w:sectPr`
 (a section boundary, not an ordinary visual block); a move that would change or invert a
-cross-block comment, bookmark, permission or native-move range; a move whose span crosses a
-section-break paragraph; a source already inside a native move range; and — in tracked mode
+cross-block comment, bookmark, permission, native-move or complex-field range (a block that lands
+in a table of contents is deleted by the next update); a move whose span crosses a
+section-break paragraph, one in a table cell or a content control included; a source already inside a native move range; and — in tracked mode
 only — a source that already contains revision markup a move would have to re-wrap.
 Tracked moves containing bookmark markers are also refused with `UnsupportedInlineBoundary`.
 `AnchorWrongKind` for a non-block kind or a non-top-level block (a table cell paragraph: move
@@ -899,18 +915,19 @@ defect — and it is why the UI must ask rather than offer everything and fail o
 typed error. WASM/npm only, like the other editor-support endpoints.
 
 **Cost.** One call answers a whole drag, so it is built that way: the facts that belong to the
-CONTAINER — block order, which blocks own a section break (kept as a prefix sum), and each
-cross-block range as a pair of block indices — are computed once, and each of the 2N candidate
-questions is then index arithmetic. A move relocates exactly one element, so the reordered
-sequence is a function of three indices and needs no second list; a range survives iff its two
-endpoints still bound a window of the same width, which is equivalent to comparing the member
-sets because the only element that can enter or leave is the source (including when the source IS
-an endpoint, where any relocation but the identity one changes the width).
+CONTAINER — its children in order, which of them hold a section break (kept as a prefix sum), and
+each range or field that reaches from one child to another as a pair of child indices — are computed
+once (`BlockMoveContext`, which `MoveBlockRange` uses too), and each of the 2N candidate questions is
+then index arithmetic. A move relocates one run of children (the block and the markers that go with
+it), so the reordered sequence is a function of the run's bounds and its slot and needs no second
+list; a range survives iff its two endpoints still bound a window of the same width, which is
+equivalent to comparing the member sets because only the run can enter or leave (including when an
+endpoint is IN the run, where any relocation but the identity one changes the width).
 
 That equivalence is not obvious, so it is tested rather than argued: `DocxSessionMoveBlockTests`
 carries the original set-membership implementation as an oracle and asserts the two agree for
 every (source, target, side) triple over documents with nested, overlapping, table-spanning,
-single-block, inverted, and dangling ranges plus section breaks. The naive version cost seconds
+single-block and dangling ranges plus section breaks. The naive version cost seconds
 on a 234-block charter with 392 bookmarks, which the drag UI paid on every drag start.
 
 ## The outline — `ListOutline` and `MoveBlockRange`
@@ -926,14 +943,11 @@ EditResult MoveBlockRange(string firstAnchorId, string lastAnchorId, string targ
 `LastAnchorId` is the last block of the heading's part, up to the next heading at its level or above.
 
 `MoveBlockRange` moves a run of top-level blocks beside another block as one undo step, which is how
-a heading is dragged with its text. A block content control moves whole: a run that reaches into one
+a heading is dragged with its text. It decides and moves as `MoveBlock` does: the same markers travel,
+the same moves are refused and the same paragraphs are added between tables. A block content control moves whole: a run that reaches into one
 must cover it, and a target inside one stands for the place just outside it, so membership never
-changes. A body-level range marker next to the run travels with it when its other end is in the run
-(Word ends a bookmark over whole paragraphs that way). It refuses (`InvalidPosition`) a move that
-would split a control, cross a section break, or change or invert what a bookmark, comment,
-permission, native move or complex field covers. Where a move would leave two tables touching, or a
-table ending the body, it adds the empty paragraph `InsertTable` would (reported in `Created`). A move to where the run already is succeeds and
-takes no undo step.
+changes; a move that would split a control is refused (`InvalidPosition`). A move to where the run
+already is succeeds and takes no undo step.
 
 ## Bulk block removal — `DeleteRange` and `DeleteSection`
 

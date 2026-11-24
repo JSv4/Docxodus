@@ -174,114 +174,31 @@ public sealed partial class DocxSession
             return EditResult.Fail(EditErrorCode.InvalidPosition,
                 "the move would split a content control, or put blocks inside one", firstAnchorId);
 
-        var children = container.Elements().ToList();
-        var index = new Dictionary<XElement, int>(children.Count);
-        for (int i = 0; i < children.Count; i++) index[children[i]] = i;
-        int s0 = index[Unit(first)], s1 = index[Unit(last)], t = index[Unit(target)];
+        var context = BuildBlockMoveContext(container);
+        int s0 = context.Index[Unit(first)], s1 = context.Index[Unit(last)], t = context.Index[Unit(target)];
         if (s1 < s0)
             return EditResult.Fail(EditErrorCode.InvalidPosition, "the last block comes before the first", lastAnchorId);
         if (t >= s0 && t <= s1)
             return EditResult.Fail(EditErrorCode.InvalidPosition, "the target lies inside the blocks to move", targetAnchorId);
 
-        // Every range and field, as the children its two ends are in (or are); one end outside the
-        // container is past its first or last child.
-        int At(XElement marker) =>
-            marker.AncestorsAndSelf().FirstOrDefault(e => ReferenceEquals(e.Parent, container)) is { } child ? index[child]
-            : XNode.DocumentOrderComparer.Compare(marker, container) < 0 ? -1 : children.Count;
-        var ranges = CrossBlockRangesAndFields(body).Select(r => (Start: At(r.Start), End: At(r.End), r.Label)).ToList();
-        // A marker right beside the run (Word writes the end of a bookmark over whole paragraphs there)
-        // travels with it when its other end does.
-        bool Travels(int marker) => ranges.Any(r =>
-            (r.Start == marker && r.End >= s0 && r.End <= s1) || (r.End == marker && r.Start >= s0 && r.Start <= s1));
-        for (bool grew = true; grew;)
-        {
-            grew = false;
-            if (s1 + 1 < children.Count && IsBlockLevelMarker(children[s1 + 1]) && Travels(s1 + 1)) { s1++; grew = true; }
-            if (s0 > 0 && IsBlockLevelMarker(children[s0 - 1]) && Travels(s0 - 1)) { s0--; grew = true; }
-        }
-
-        // Where it can land: beside the target, on either side of the markers between it and the next block.
-        int n = s1 - s0 + 1;
-        var rest = children.Where((_, i) => i < s0 || i > s1).ToList();
-        int at = t > s1 ? t - n : t;
-        var slots = new List<int> { pos == Position.Before ? at : at + 1 };
-        if (pos == Position.Before)
-            while (slots[^1] > 0 && IsBlockLevelMarker(rest[slots[^1] - 1])) slots.Add(slots[^1] - 1);
-        else
-            while (slots[^1] < rest.Count && IsBlockLevelMarker(rest[slots[^1]])) slots.Add(slots[^1] + 1);
+        var run = MovingRun(context, s0, s1);
+        var landing = LandRun(context, run, t, pos);
         // Already there: a no-op that takes no undo step.
-        if (slots.Contains(s0)) return new EditResult { Success = true };
-
-        var run = children.GetRange(s0, n);
-        foreach (var block in run)
-            if (MoveSourceRejection(block) is { } why)
-                return EditResult.Fail(EditErrorCode.InvalidPosition, why, firstAnchorId);
-        if (children.Skip(Math.Min(s0, t)).Take(Math.Max(s1, t) - Math.Min(s0, t) + 1)
-            .Any(c => StoryParagraphs(c).Any(p => p.Element(W.pPr)?.Element(W.sectPr) is not null)))
-            return EditResult.Fail(EditErrorCode.InvalidPosition, "cannot move blocks across a section-break paragraph", firstAnchorId);
-
-        // A range or field must keep its two ends in order and the same distance apart.
-        string? Broken(int slot)
-        {
-            int Reordered(int i)
-            {
-                if (i >= s0 && i <= s1) return slot + (i - s0);
-                int r = i > s1 ? i - n : i;
-                return r >= slot ? r + n : r;
-            }
-            foreach (var (start, end, label) in ranges)
-                if (end < start || Reordered(end) - Reordered(start) != end - start) return label;
-            return null;
-        }
-        int chosen = slots.FindIndex(slot => Broken(slot) is null);
-        if (chosen < 0)
-            return EditResult.Fail(EditErrorCode.InvalidPosition,
-                $"move would change or invert a cross-block {Broken(slots[0])} range", firstAnchorId);
+        if (landing.InPlace) return new EditResult { Success = true };
+        if ((MoveSourceRejection(context, run) ?? landing.Error) is { } why)
+            return EditResult.Fail(EditErrorCode.InvalidPosition, why, firstAnchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            // The blocks' own siblings between them travel with them: everything from the first to the last.
-            var nodes = new List<XNode>();
-            for (XNode? node = run[0]; node is not null; node = node.NextNode)
-            {
-                nodes.Add(node);
-                if (ReferenceEquals(node, run[^1])) break;
-            }
-            var (gapBefore, gapAfter) = (RevisionOps.SiblingBlock(run[0], forward: false), RevisionOps.SiblingBlock(run[^1], forward: true));
-            foreach (var node in nodes) node.Remove();
-            int slot = slots[chosen];
-            if (slot < rest.Count) rest[slot].AddBeforeSelf(nodes);
-            else rest[^1].AddAfterSelf(nodes);
-            // Where the blocks came from, and both edges of where they went: a paragraph must stand between
-            // two tables, and after one that would end the body (as InsertTable keeps it).
-            var separators = new List<XElement>();
-            // (the run's own first and last block: a marker that travels with it may be outside them)
-            XElement firstBlock = run.First(b => !IsBlockLevelMarker(b)), lastBlock = run.Last(b => !IsBlockLevelMarker(b));
-            foreach (var (left, right) in new[]
-                {
-                    (gapBefore, gapAfter),
-                    (RevisionOps.SiblingBlock(firstBlock, forward: false), firstBlock),
-                    (lastBlock, RevisionOps.SiblingBlock(lastBlock, forward: true)),
-                })
-            {
-                if (left?.Name != W.tbl || !ReferenceEquals(RevisionOps.SiblingBlock(left, forward: true), right)
-                    || !(right?.Name == W.tbl || right?.Name == W.sectPr || (right is null && container.Name == W.body))) continue;
-                var separator = new XElement(W.p);
-                UnidHelper.AssignToSelfAndDescendants(separator);
-                // After the ends of the ranges that cover the table, so that none of them covers it.
-                var after = left;
-                while (after.ElementsAfterSelf().FirstOrDefault() is { } next && CrossBlockRangePairs.Any(pair => next.Name == pair.End)) after = next;
-                after.AddAfterSelf(separator);
-                separators.Add(separator);
-            }
+            var separators = RelocateRun(context, run, landing.Slot);
             InvalidateProjectionCache();
             var anchors = BodyAnchors();
             return new EditResult
             {
                 Success = true,
                 Created = separators.Select(p => AnchorIn(anchors, p)).OfType<Anchor>().ToArray(),
-                Modified = run.SelectMany(TopLevelBlocks).Select(b => AnchorIn(anchors, b)).OfType<Anchor>().ToArray(),
+                Modified = context.Run(run).SelectMany(TopLevelBlocks).Select(b => AnchorIn(anchors, b)).OfType<Anchor>().ToArray(),
                 Patch = PatchFor(firstTarget),
             };
         }
@@ -308,35 +225,8 @@ public sealed partial class DocxSession
     /// <summary>The story's own paragraphs in <paramref name="root"/>, table cells included: a text box's
     /// are another story, whose section properties break no section of this one.</summary>
     private static IEnumerable<XElement> StoryParagraphs(XElement root) =>
-        root.DescendantsAndSelf(W.p).Where(p => !p.Ancestors().Any(a => a.Name == W.txbxContent)
-            && WmlToMarkdownConverter.IsSelectedMarkup(p));
+        root.DescendantsAndSelf(W.p).Where(IsStoryParagraph);
 
-    /// <summary>A range marker (or a proofing mark) that is itself a child of the body or of a block
-    /// content control, so not a block.</summary>
-    private static bool IsBlockLevelMarker(XElement child) => child.Name == W.proofErr
-        || CrossBlockRangePairs.Any(pair => child.Name == pair.Start || child.Name == pair.End);
-
-    /// <summary>The two ends of every paired range marker and every complex field in
-    /// <paramref name="root"/>.</summary>
-    private static IEnumerable<(XElement Start, XElement End, string Label)> CrossBlockRangesAndFields(XElement root)
-    {
-        var starts = new Dictionary<(XName Name, string Id), XElement>();
-        var fields = new Stack<XElement>();
-        foreach (var e in root.Descendants())
-        {
-            if (e.Name == W.fldChar)
-            {
-                var type = (string?)e.Attribute(W.fldCharType);
-                if (type == "begin") fields.Push(e);
-                else if (type == "end" && fields.Count > 0) yield return (fields.Pop(), e, "field");
-                continue;
-            }
-            foreach (var (startName, endName, _) in CrossBlockRangePairs)
-                if (e.Name == startName) starts.TryAdd((endName, (string?)e.Attribute(W.id) ?? ""), e);
-        }
-        foreach (var e in root.Descendants())
-            foreach (var (_, endName, label) in CrossBlockRangePairs)
-                if (e.Name == endName && starts.TryGetValue((endName, (string?)e.Attribute(W.id) ?? ""), out var start))
-                    yield return (start, e, label);
-    }
+    private static bool IsStoryParagraph(XElement p) =>
+        !p.Ancestors().Any(a => a.Name == W.txbxContent) && WmlToMarkdownConverter.IsSelectedMarkup(p);
 }

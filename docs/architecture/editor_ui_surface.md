@@ -468,8 +468,8 @@ passes over the document, each materializing a member set per cross-block range 
 UI called it (plus a re-registration of one drop listener per block) every time the pointer
 crossed a paragraph boundary. On this charter that was seconds of work to move the mouse.
 
-The guard now precomputes what is a property of the CONTAINER — block order, which blocks own a
-section break (as a prefix sum), and each cross-block range as an index pair — once per sweep,
+The guard now precomputes what is a property of the CONTAINER — its children in order, which hold a
+section break (as a prefix sum), and each cross-block range or field as an index pair — once per sweep,
 and answers each candidate with index arithmetic. `DocxSessionMoveBlockTests` pins the rewrite
 against the original set-membership definition for every (source, target, side) triple, because
 "faster" is only interesting if it decides identically. On the UI side, hovering consumes a
