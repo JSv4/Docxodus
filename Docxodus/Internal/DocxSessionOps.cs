@@ -1423,6 +1423,23 @@ internal static class DocxSessionOps
     public static string GetTableProperties(int handle, string cellAnchorId) =>
         DocxSessionJson.SerializeTablePropertiesInfo(SessionRegistry.Get(handle).GetTableProperties(cellAnchorId));
 
+    /// <summary><paramref name="stopsJson"/> is a JSON array of tab stops ({ positionTwips,
+    /// alignment?, leader? }): they become the paragraph's tab stops in effect.</summary>
+    public static string SetTabStops(int handle, string anchorId, string stopsJson,
+        MutationPreconditions? preconditions = null)
+    {
+        var stops = DocxSessionJson.ParseTabStops(stopsJson);
+        return Mutate(handle, preconditions, anchorId, s => s.SetTabStops(anchorId, stops));
+    }
+
+    /// <summary>A TabStopsInfo object, or "null" when the anchor is not a paragraph.</summary>
+    public static string GetTabStops(int handle, string anchorId) =>
+        DocxSessionJson.SerializeTabStopsInfo(SessionRegistry.Get(handle).GetTabStops(anchorId));
+
+    /// <summary>The document's default tab interval (settings w:defaultTabStop), twips.</summary>
+    public static string SetDefaultTabStop(int handle, int twips, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.SetDefaultTabStop(twips));
+
     public static string SetTableRowOptions(int handle, string cellAnchorId, bool? repeatHeader,
         bool? allowBreakAcrossPages, int? heightTwips, string? heightRule,
         MutationPreconditions? preconditions = null)

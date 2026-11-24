@@ -1912,6 +1912,9 @@ export interface DocxodusWasmExports {
     SetTableBorders: (handle: number, cellAnchor: string, specJson: string) => string;
     SetCellShading: (handle: number, cellAnchor: string, fill: string, scope: string) => string;
     SetRepeatHeaderRow: (handle: number, cellAnchor: string, repeat: boolean | null) => string;
+    SetTabStops: (handle: number, anchorId: string, stopsJson: string) => string;
+    GetTabStops: (handle: number, anchorId: string) => string;
+    SetDefaultTabStop: (handle: number, twips: number) => string;
     SetTableRowOptions: (handle: number, cellAnchor: string, repeatHeader: boolean | null,
       allowBreakAcrossPages: boolean | null, heightTwips: number | null, heightRule: string) => string;
     /** Word's Table Properties. */
@@ -3143,6 +3146,26 @@ export interface TableAnchorMapping {
   retained: { before: TableAnchorLocation; after: TableAnchorLocation }[];
   added: TableAnchorLocation[];
   invalidated: TableAnchorLocation[];
+}
+
+/** How text lines up at a tab stop; a bar tab draws a vertical line instead. */
+export type TabStopAlignment = "left" | "center" | "right" | "decimal" | "bar";
+
+/** The characters filling the space before a tab stop. */
+export type TabStopLeader = "none" | "dot" | "hyphen" | "underscore" | "heavy" | "middleDot";
+
+/** One tab stop, positioned from the paragraph's leading text edge (not its indent), in twips. */
+export interface TabStop {
+  positionTwips: number;
+  alignment?: TabStopAlignment;
+  leader?: TabStopLeader;
+}
+
+/** A paragraph's tab stops in effect, the ones its styles give it, and the default tab interval. */
+export interface TabStopsInfo {
+  stops: Required<TabStop>[];
+  styleStops: Required<TabStop>[];
+  defaultTabStopTwips: number;
 }
 
 export type TableRowHeightRule = "auto" | "atLeast" | "exact";

@@ -6610,9 +6610,37 @@ parsed at the host's offset, an explicit offset, or a `DateTimeOffset` from a C#
 
 Fix: `DocxSession.SetContentControlDate` writes the value's own calendar day, the one its default
 display text shows, as `yyyy-MM-ddT00:00:00Z`, and `DocxSessionOps.SetContentControlDate` parses an
-input without an offset as UTC so the host's time zone no longer matters. The default display text is
-still `yyyy-MM-dd` rather than the control's own format; that is tracked in #1851, because
-the browser build has no localized month names. Tests: `ContentControlDateTests`.
+input without an offset as UTC so the host's time zone no longer matters. Tests: `ContentControlDateTests`.
+
+### Default display text (#1851)
+
+With no display text, Docxodus now shows the day as the desktop word processor shows a date typed into
+the control. These are its displays for 15 December 2026, which `ContentControlDateText` reproduces:
+
+| `w:dateFormat` | `w:lid` | `w:calendar` | Desktop word processor (build 16.0.20326) | Docxodus |
+| --- | --- | --- | --- | --- |
+| `dddd, d MMMM yyyy` | `en-GB` | `gregorian` | Tuesday, 15 December 2026 | same |
+| `dddd, d. MMMM yyyy` | `de-DE` | `gregorian` | Dienstag, 15. Dezember 2026 | same |
+| `d MMMM yyyy` | `pl-PL` | `gregorian` | 15 grudnia 2026 (genitive month) | same |
+| `yyyy年M月d日` | `ja-JP` | `gregorian` | 2026年12月15日 | same |
+| `'Due' d MMM yy` | `en-GB` | `gregorian` | Due 15 Dec 26 | same |
+| `d MMM yyyy \x` | `en-GB` | `gregorian` | 15 Dec 2026 \x (a backslash is literal) | same |
+| `M/d/yyyy h:mm am/pm` | `en-US` | `gregorian` | 12/15/2026 12:00 AM (either case gives `AM`) | same |
+| `d MMMM yyyy` | none (even with a German document default language) | `gregorian` | 15 December 2026 (US English) | same |
+| none | `en-GB` | `gregorian` | 15/12/2026 (the language's short date) | same |
+| `d MMMM yyyy` | `en-GB` | none | 15 December 2026 (Gregorian) | same |
+| `dd/MM/yyyy` | `ar-SA` | `hijri` | 06/07/1448 | 2026-12-15 |
+| `d MMMM yyyy` | `th-TH` | `gregorian` | 15 December 2026 (English month names) | 2026-12-15 |
+| none | `th-TH` | `gregorian` | 15/12/69 (Buddhist year) | 2026-12-15 |
+| `dd MMMM yyyy` | `ar-SA` | `gregorian` | 15 كانون الأول 2026 (a Levantine month name) | 2026-12-15 |
+
+Docxodus formats only the Gregorian calendar, and only for a language whose usual calendar is the
+Gregorian one. For the others the reference application switches between calendar variants (English
+month names, a Buddhist year in the short date, a Levantine month name) that the formatter does not
+model, so they keep the ISO day, which the reference application reads back as the right day. The browser build runs in globalization-invariant
+mode and has month and day names only in English. There an English or all-number picture still formats as
+above, and a picture that needs another language's names (or a control with no picture, whose short date
+depends on the language) shows the ISO day.
 
 ## Raised inline text boxes can paint above the body margin
 

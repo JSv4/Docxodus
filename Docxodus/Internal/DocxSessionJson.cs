@@ -3651,4 +3651,65 @@ internal static class DocxSessionJson
         value = null;
         return false;
     }
+
+    private static readonly (string Token, TabStopAlignment Value)[] TabAlignmentTokens =
+    {
+        ("left", TabStopAlignment.Left), ("center", TabStopAlignment.Center), ("right", TabStopAlignment.Right),
+        ("decimal", TabStopAlignment.Decimal), ("bar", TabStopAlignment.Bar),
+    };
+
+    private static readonly (string Token, TabStopLeader Value)[] TabLeaderTokens =
+    {
+        ("none", TabStopLeader.None), ("dot", TabStopLeader.Dot), ("hyphen", TabStopLeader.Hyphen),
+        ("underscore", TabStopLeader.Underscore), ("heavy", TabStopLeader.Heavy), ("middleDot", TabStopLeader.MiddleDot),
+    };
+
+    /// <summary>Parse a JSON array of tab stops ({ positionTwips, alignment?: "left"|"center"|"right"|
+    /// "decimal"|"bar", leader?: "none"|"dot"|"hyphen"|"underscore"|"heavy"|"middleDot" }); "" is none.</summary>
+    public static IReadOnlyList<ParagraphTabStop> ParseTabStops(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return Array.Empty<ParagraphTabStop>();
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            throw new ArgumentException("tab stops must be a JSON array");
+        var stops = new List<ParagraphTabStop>();
+        foreach (var item in doc.RootElement.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object
+                || !TryGetIntNullable(item, "positionTwips", out var position) || position is null)
+                throw new ArgumentException("a tab stop must be an object with an integer positionTwips");
+            stops.Add(new ParagraphTabStop
+            {
+                PositionTwips = position.Value,
+                Alignment = ParseToken(TryGetString(item, "alignment", null), "tab alignment", TabStopAlignment.Left, TabAlignmentTokens),
+                Leader = ParseToken(TryGetString(item, "leader", null), "tab leader", TabStopLeader.None, TabLeaderTokens),
+            });
+        }
+        return stops;
+    }
+
+    public static string SerializeTabStopsInfo(TabStopsInfo? info)
+    {
+        if (info is null) return "null";
+        var sb = new StringBuilder(256);
+        void Stops(IReadOnlyList<ParagraphTabStop> stops)
+        {
+            sb.Append('[');
+            for (int i = 0; i < stops.Count; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append("{\"positionTwips\":").Append(stops[i].PositionTwips.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                    .Append(",\"alignment\":").Append(JsonString(TabAlignmentTokens.First(t => t.Value == stops[i].Alignment).Token))
+                    .Append(",\"leader\":").Append(JsonString(TabLeaderTokens.First(t => t.Value == stops[i].Leader).Token))
+                    .Append('}');
+            }
+            sb.Append(']');
+        }
+        sb.Append("{\"stops\":");
+        Stops(info.Stops);
+        sb.Append(",\"styleStops\":");
+        Stops(info.StyleStops);
+        sb.Append(",\"defaultTabStopTwips\":").Append(info.DefaultTabStopTwips.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return sb.Append('}').ToString();
+    }
 }

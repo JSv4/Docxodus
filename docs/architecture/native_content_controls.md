@@ -204,7 +204,12 @@ session.set_content_control_date(anchor, "2032-03-04T23:30:00-12:00")
 ```
 
 A .NET caller passing a date with an offset gets the day as written too. Without display text the
-control shows the day as year-month-day, 2032-03-04; with empty display text it shows nothing.
+control shows the day the way it is set up to show dates, as the desktop word processor does when a
+date is picked: a control showing the month's name in British English reads "4 March 2032", and one
+with no language set uses US English. A control on a calendar other than the Gregorian one, or in a
+language whose usual calendar is another one (such as Thai), shows 2032-03-04, and so does, in the
+browser build, a format that needs month or day names in a language other than English. Empty
+display text leaves the control showing nothing.
 
 Failures are structured `EditErrorCode` values, including not found, malformed,
 unsupported family/placement, wrong type, locked, bound, invalid value, unsafe nested

@@ -360,6 +360,12 @@ single/480 = double; `exact`/`atLeast` = twips); `topBorder`/`bottomBorder` add 
 `w:pBdr` edge, `clearBorders` removes the whole `w:pBdr` before either is applied in the same
 call), `set_list_level`, `remove_list_membership`, `apply_list_format`.
 
+`get_tab_stops` is a read: the paragraph's stops in effect, the ones its styles give it, and the
+default tab interval. `set_tab_stops` takes `stops`, an array of
+`{positionTwips, alignment?, leader?}`, and makes them the ones in effect; an empty array clears
+them all. `set_default_tab_stop` takes `twips` and no `anchorId`, and is refused while changes are
+tracked.
+
 ### `docxodus_create` — new structural content
 
 `insert_paragraph`, `insert_heading` (sugar: builds a `"#".."######" + " " + text` markdown
