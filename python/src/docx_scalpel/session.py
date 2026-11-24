@@ -2450,7 +2450,8 @@ class DocxSession:
 
     def set_default_tab_stop(self, twips: int) -> EditResult:
         """Set the document's default tab interval (``w:defaultTabStop`` in settings), in
-        twips. One undo step; not tracked (Word records no revision for a settings change)."""
+        twips. One undo step; refused while changes are tracked (no revision records a settings
+        change)."""
         return EditResult._from_wire(self._call("set_default_tab_stop", {"twips": twips}))
 
     def set_list_level(self, anchor_id: str, level_delta: int) -> EditResult:

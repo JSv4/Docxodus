@@ -1067,7 +1067,8 @@ export class DocxSession {
     return JSON.parse(this.wasm.GetTabStops(this.handle, anchorId)) as TabStopsInfo | null;
   }
 
-  /** The document's default tab interval (settings w:defaultTabStop), twips. One undo step. */
+  /** The document's default tab interval (settings w:defaultTabStop), twips. One undo step; refused
+   *  while changes are tracked. */
   setDefaultTabStop(twips: number): EditResult {
     return JSON.parse(this.wasm.SetDefaultTabStop(this.handle, twips)) as EditResult;
   }

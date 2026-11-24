@@ -320,7 +320,7 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_format",
-            "Apply character or paragraph formatting, addressed by anchor id. get_tab_stops reads a paragraph's tab stops in effect, the ones its styles give it and the default tab interval; set_tab_stops makes a list of stops the ones in effect, as Word's Tabs dialog does (the paragraph's own w:tabs holds the stops its styles lack and clears unwanted style stops); set_default_tab_stop sets the document's default tab interval.",
+            "Apply character or paragraph formatting, addressed by anchor id. get_tab_stops reads a paragraph's tab stops in effect, the ones its styles give it and the default tab interval; set_tab_stops makes a list of stops the ones in effect, as Word's Tabs dialog does (the paragraph's own w:tabs holds the stops its styles lack and clears unwanted style stops); set_default_tab_stop sets the document's default tab interval (refused while changes are tracked).",
             """
             {
               "type": "object",
@@ -328,7 +328,7 @@ internal static class ToolCatalog
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
                 "action": { "type": "string", "enum": ["apply_format", "apply_format_by_substring", "set_paragraph_style", "set_paragraph_format", "set_list_level", "remove_list_membership", "apply_list_format", "get_tab_stops", "set_tab_stops", "set_default_tab_stop"] },
-                "anchorId": { "type": "string" },
+                "anchorId": { "type": "string", "description": "Required by every action except set_default_tab_stop." },
                 "span": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "apply_format only. Omit to format the whole block." },
                 "substring": { "type": "string", "description": "apply_format_by_substring: literal text within the block to format." },
                 "format": {
@@ -405,7 +405,7 @@ internal static class ToolCatalog
                 },
                 "twips": { "type": "integer", "minimum": 1, "description": "set_default_tab_stop: the default tab interval (w:defaultTabStop), twips; 720 = 0.5 inch." }
               },
-              "required": ["sessionId", "action", "anchorId"]
+              "required": ["sessionId", "action"]
             }
             """),
         new ToolDefinition(

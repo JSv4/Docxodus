@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
@@ -87,7 +86,7 @@ public sealed partial class DocxSession
             return EditResult.Fail(EditErrorCode.AnchorWrongKind, "SetTabStops requires a paragraph anchor", anchorId);
         var element = target.Resolve(_doc!);
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
-        if (stops.Any(s => s is null || Math.Abs(s.PositionTwips) > MaxTabPositionTwips))
+        if (stops.Any(s => s is null || s.PositionTwips is < -MaxTabPositionTwips or > MaxTabPositionTwips))
             return EditResult.Fail(EditErrorCode.InvalidParagraphFormat,
                 $"tab positions must be within ±{MaxTabPositionTwips} twips", anchorId);
         if (stops.GroupBy(s => s.PositionTwips).Any(g => g.Count() > 1))
@@ -131,8 +130,8 @@ public sealed partial class DocxSession
 
     /// <summary>
     /// Set the document's default tab interval (<c>w:defaultTabStop</c> in settings), the spacing
-    /// of the automatic stops after the last set one. One undo step. Not tracked: Word records no
-    /// revision for a settings change.
+    /// of the automatic stops after the last set one. One undo step. Refused while changes are
+    /// tracked: OOXML has no revision element for a settings change, so no reject could take it back.
     /// </summary>
     public EditResult SetDefaultTabStop(int twips)
     {
@@ -144,6 +143,9 @@ public sealed partial class DocxSession
         if (main is null) return EditResult.Fail(EditErrorCode.InternalError, "no main document part", null);
         if (DefaultTabStopTwips() == twips && main.DocumentSettingsPart?.GetXDocument().Root?.Element(W.defaultTabStop) is not null)
             return new EditResult { Success = true };
+        if (_trackedChanges == TrackedChangeMode.RenderInline)
+            return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
+                "the default tab stop is a document setting, which no revision can record; no changes were made", null);
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -183,8 +185,9 @@ public sealed partial class DocxSession
     {
         var value = (string?)_doc!.MainDocumentPart?.DocumentSettingsPart?.GetXDocument().Root?
             .Element(W.defaultTabStop)?.Attribute(W.val);
-        return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) && n > 0
-            ? n : WordDefaultTabStopTwips;
+        // ST_TwipsMeasure: a bare number of twips, or one with a unit ("0.5in").
+        return value is not null && WordprocessingMLUtil.StringToTwips(value) is > 0 and var twips
+            ? twips : WordDefaultTabStopTwips;
     }
 
     /// <summary>The set stops of a merged w:tabs (clear entries dropped), by position. A

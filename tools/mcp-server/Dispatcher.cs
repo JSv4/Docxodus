@@ -1614,13 +1614,10 @@ internal static partial class Dispatcher
                 break;
             case ("docxodus_format", "set_tab_stops"):
                 RequireStrings(args, "anchorId");
-                _ = RawArray(args, "stops");
+                _ = DocxSessionJson.ParseTabStops(RawArray(args, "stops"));
                 break;
             case ("docxodus_format", "set_default_tab_stop"):
                 RequireNumbers(args, "twips");
-                break;
-            case ("docxodus_format", "get_tab_stops"):
-                RequireStrings(args, "anchorId");
                 break;
             case ("docxodus_format", "set_list_level"):
                 RequireStrings(args, "anchorId");

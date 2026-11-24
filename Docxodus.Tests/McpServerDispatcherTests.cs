@@ -625,6 +625,35 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Contains("stops", bad.Message);
     }
 
+    [Theory]
+    [InlineData("[1440]")]
+    [InlineData("[{\"alignment\":\"left\"}]")]
+    [InlineData("[{\"positionTwips\":720,\"alignment\":\"start\"}]")]
+    public void MCP044b_Format_BatchStepWithBadTabStopsIsRefusedBeforeAnyStepRuns(string stops)
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "atomic",
+              "steps": [
+                { "tool": "docxodus_format", "args": { "action": "set_default_tab_stop", "twips": 500 } },
+                { "tool": "docxodus_format", "args": { "action": "set_tab_stops", "anchorId": "{{anchor}}", "stops": {{stops}} } }
+              ]
+            }
+            """)));
+
+        Assert.Equal("invalid_batch_step",
+            batch.GetProperty("failure").GetProperty("error").GetProperty("code").GetString());
+        var info = Parse(Dispatcher.Call(_store, "docxodus_format", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"get_tab_stops","anchorId":"{{anchor}}"}""")));
+        Assert.NotEqual(500, info.GetProperty("defaultTabStopTwips").GetInt32());
+    }
+
     // ─── Create / Table ─────────────────────────────────────────────────
 
     [Fact]

@@ -3659,11 +3659,12 @@ internal static class DocxSessionJson
         var stops = new List<ParagraphTabStop>();
         foreach (var item in doc.RootElement.EnumerateArray())
         {
-            var position = TryGetIntNullable(item, "positionTwips")
-                ?? throw new ArgumentException("a tab stop needs positionTwips");
+            if (item.ValueKind != JsonValueKind.Object
+                || !TryGetIntNullable(item, "positionTwips", out var position) || position is null)
+                throw new ArgumentException("a tab stop must be an object with an integer positionTwips");
             stops.Add(new ParagraphTabStop
             {
-                PositionTwips = position,
+                PositionTwips = position.Value,
                 Alignment = ParseToken(TryGetString(item, "alignment", null), "tab alignment", TabStopAlignment.Left, TabAlignmentTokens),
                 Leader = ParseToken(TryGetString(item, "leader", null), "tab leader", TabStopLeader.None, TabLeaderTokens),
             });
