@@ -107,25 +107,19 @@ public sealed partial class DocxSession
         var update = new FieldUpdate(pages, () => _history.RecordPreOp(TakeSnapshot()));
         try
         {
-            void References(string kind)
-            {
-                foreach (var field in ScanFields(body).Where(f => f.Kind == kind && f.StartsIn(inRange)))
-                    if (field.Begin.Ancestors(W.body).Any() && ReferenceResult(field, update) is { } result)
-                        update.Set(field, result);
-            }
-            // The headings' own fields first: a table of contents copies their text. Page references last:
-            // its entries bring their own.
+            // What the headings hold first: a table of contents copies their text.
             if (!o.TablesOfContentsOnly)
             {
                 UpdateSequences(body, ScanFields(body), inRange, update);
-                References("REF");
+                UpdatePageReferences(body, inRange, update);
+                UpdateReferences(body, inRange, update);
                 if (update.Changed) InvalidateProjectionCache();
             }
             foreach (var toc in ScanFields(body).Where(f => f.Kind == "TOC" && f.StartsIn(inRange)).ToList())
                 RebuildTableOfContents(body, toc, update);
             if (!o.TablesOfContentsOnly)
             {
-                References("PAGEREF");
+                UpdatePageReferences(body, inRange, update); // (a rebuilt table's entries)
                 update.CopyToFallbacks(body);
                 if (inRange is null && !FieldsLeft(main, body, update)) ClearFieldUpdateOnOpen(main, update);
             }
@@ -195,18 +189,21 @@ public sealed partial class DocxSession
             if (changed) Modified.Add(field.Paragraph);
         }
 
-        /// <summary>A drawing's fallback holds a copy of its text: give each field in it the result its
-        /// counterpart took.</summary>
+        /// <summary>A drawing's other markup (its fallback) holds a copy of its text: give each field in it
+        /// the result its counterpart took.</summary>
         public void CopyToFallbacks(XElement body)
         {
             foreach (var alternate in body.Descendants(MC.AlternateContent))
             {
-                if (alternate.Element(MC.Choice) is not { } choice || alternate.Element(MC.Fallback) is not { } fallback) continue;
-                var from = ScanFields(choice);
-                var to = ScanFields(fallback);
-                if (from.Count == 0 || !from.Select(f => f.Instr).SequenceEqual(to.Select(f => f.Instr))) continue;
-                foreach (var (source, copy) in from.Zip(to))
-                    if (IsCurrent(source)) copy.SetResult(source.ResultText(), Changing);
+                if (WmlToHtmlConverter.SelectedMarkupBranch(alternate) is not { } shown) continue;
+                var from = ScanFields(shown);
+                foreach (var other in alternate.Elements().Where(branch => !ReferenceEquals(branch, shown)))
+                {
+                    var to = ScanFields(other);
+                    if (from.Count == 0 || !from.Select(f => f.Instr).SequenceEqual(to.Select(f => f.Instr))) continue;
+                    foreach (var (source, copy) in from.Zip(to))
+                        if (IsCurrent(source)) copy.SetResult(source.ResultText(), Changing);
+                }
             }
         }
     }
@@ -220,6 +217,44 @@ public sealed partial class DocxSession
     private static bool NeedsUpdate(FoundField field) => !field.Locked && !FieldsThatNeedNoUpdate.Contains(field.Kind);
 
     // ─── REF and PAGEREF ────────────────────────────────────────────────────
+
+    private void UpdatePageReferences(XElement body, HashSet<XElement>? inRange, FieldUpdate update)
+    {
+        foreach (var field in ScanFields(body).Where(f => f.Kind == "PAGEREF" && f.StartsIn(inRange)))
+            if (ReferenceResult(field, update) is { } result) update.Set(field, result);
+    }
+
+    /// <summary>Update the <c>REF</c> fields, one inside a bookmark before the fields that show that bookmark.
+    /// References that go round in a circle are left as they are.</summary>
+    private void UpdateReferences(XElement body, HashSet<XElement>? inRange, FieldUpdate update)
+    {
+        const int MaxDepth = 64;
+        var fields = ScanFields(body).Where(f => f.Kind == "REF").ToList();
+        var byParagraph = fields.ToLookup(f => f.Paragraph);
+        var settled = new Dictionary<FoundField, bool>();
+        foreach (var field in fields) Settle(field, 0);
+
+        // False while the field's own bookmark is being settled, and for good when that leads back to it.
+        bool Settle(FoundField field, int depth)
+        {
+            if (settled.TryGetValue(field, out var known)) return known;
+            settled[field] = false;
+            if (!field.StartsIn(inRange)) return settled[field] = true;
+            if (depth >= MaxDepth) return false;
+            if (field.Tokens.Length > 1 && ResolveBookmarkPair(field.Tokens[1], hyperlinkTarget: true, null, out var start, out var end) is null
+                && start.Ancestors(W.p).FirstOrDefault() is { } paragraph)
+            {
+                bool sound = true;
+                foreach (var inner in byParagraph[paragraph].Where(f => XNode.DocumentOrderComparer.Compare(start, f.Begin) < 0
+                             && XNode.DocumentOrderComparer.Compare(f.Begin, end) < 0))
+                    sound &= Settle(inner, depth + 1);
+                if (!sound) return false;
+            }
+            // (one inside another field's result may have gone with it)
+            if (field.Begin.Ancestors(W.body).Any() && ReferenceResult(field, update) is { } result) update.Set(field, result);
+            return settled[field] = true;
+        }
+    }
 
     /// <summary>What a <c>REF</c> or <c>PAGEREF</c> field shows now, or null when that is not known.</summary>
     private string? ReferenceResult(FoundField field, FieldUpdate update)
@@ -292,7 +327,7 @@ public sealed partial class DocxSession
         var place = new Dictionary<XElement, int>();
         foreach (var e in body.Descendants()) place[e] = place.Count;
         var levels = new OutlineLevels(_doc!.MainDocumentPart!);
-        var headings = body.Descendants(W.p).Select(p => (Place: place[p], Level: levels.BuiltInHeading(p) + 1))
+        var headings = StoryParagraphs(body).Select(p => (Place: place[p], Level: levels.BuiltInHeading(p) + 1))
             .Where(h => h.Level is not null).ToList();
         var counters = new Dictionary<string, (int Value, int Place)>(StringComparer.OrdinalIgnoreCase);
         foreach (var field in sequences)
@@ -446,7 +481,7 @@ public sealed partial class DocxSession
 
     /// <summary>Every field in <paramref name="root"/> in document order, simple and complex, with
     /// its kind (the first word of the instruction, upper-case) and instruction tokens. Fields in
-    /// removed text are left out, and so is a drawing's fallback, which repeats its text.</summary>
+    /// removed text are left out, and so is alternate markup that is not the one shown, which repeats it.</summary>
     private static List<FoundField> ScanFields(XElement root)
     {
         var found = new List<FoundField>();
@@ -464,7 +499,8 @@ public sealed partial class DocxSession
         {
             if (e.Name != W.fldSimple && e.Name != W.fldChar && e.Name != W.instrText) continue;
             if (e.Ancestors().TakeWhile(a => !ReferenceEquals(a, root))
-                .Any(a => a.Name == W.del || a.Name == W.moveFrom || a.Name == MC.Fallback)) continue;
+                .Any(a => a.Name == W.del || a.Name == W.moveFrom || (a.Parent?.Name == MC.AlternateContent
+                    && !ReferenceEquals(a, WmlToHtmlConverter.SelectedMarkupBranch(a.Parent))))) continue;
             if (e.Name == W.fldSimple)
                 Add(new FoundField { Complex = false, Begin = e }, (string?)e.Attribute(W.instr) ?? "");
             else if (e.Name == W.instrText)
@@ -493,7 +529,7 @@ public sealed partial class DocxSession
     private sealed record TocSwitches(int From, int To, bool OutlineLevels, bool Links, int NoPagesFrom, int NoPagesTo)
     {
         /// <summary>Null for an instruction with a switch that selects other entries or lays them out
-        /// otherwise (<c>\c</c> figures, <c>\t</c> styles, <c>\b</c> bookmark, <c>\f</c>, <c>\p</c>…).</summary>
+        /// otherwise (<c>\c</c> figures, <c>\t</c> styles, <c>\b</c> bookmark, <c>\f</c>, <c>\p</c>, <c>\w</c>…).</summary>
         public static TocSwitches? Parse(string[] tokens)
         {
             var result = new TocSwitches(1, 9, false, false, 0, -1);
@@ -509,7 +545,7 @@ public sealed partial class DocxSession
                     case "\\n" when levels is { } l: result = result with { NoPagesFrom = l.From, NoPagesTo = l.To }; break;
                     case "\\h" when !hasArgument: result = result with { Links = true }; break;
                     case "\\u" when !hasArgument: result = result with { OutlineLevels = true }; break;
-                    case "\\z" or "\\w" or "\\x" when !hasArgument: break;
+                    case "\\z" when !hasArgument: break;
                     case "\\*" when hasArgument && IsKeepFormat(tokens[i + 1]): break;
                     default: return null;
                 }
@@ -534,16 +570,14 @@ public sealed partial class DocxSession
         var content = paragraphs.SelectMany(p => p.Elements()).Where(e => !before.Contains(e) && !after.Contains(e)).ToList();
         if (content.Any(HoldsMoreThanText)) return;
 
-        update.Changing();
         var anchors = BodyAnchors();
         var inTable = new HashSet<XElement>(paragraphs);
         var levels = new OutlineLevels(_doc!.MainDocumentPart!);
         var shownPages = ScanFields(body).Where(f => f.Kind == "PAGEREF" && f.Tokens.Length > 1 && inTable.Contains(f.Paragraph))
             .GroupBy(f => f.Tokens[1]).ToDictionary(g => g.Key, g => g.First().ResultText());
         var bookmarks = ListBookmarks();
-        var entries = new List<(int Level, string? Number, string Text, string Bookmark, string? Page, bool IsCurrent)>();
-        foreach (var heading in body.Descendants(W.p).Where(p => !inTable.Contains(p)
-                     && !p.Ancestors().Any(a => a.Name == W.txbxContent || a.Name == MC.Fallback)).ToList())
+        var found = new List<(XElement Heading, int Level, string? Number, string Text, string? Bookmark, string? Page)>();
+        foreach (var heading in StoryParagraphs(body).Where(p => !inTable.Contains(p)))
         {
             int? level = (levels.BuiltInHeading(heading) ?? (switches.OutlineLevels ? levels.Of(heading) : null)) + 1;
             if (level is null || level < switches.From || level > switches.To) continue;
@@ -554,15 +588,44 @@ public sealed partial class DocxSession
             var bookmark = bookmarks.FirstOrDefault(b => shownPages.ContainsKey(b.Name) && b.IsPaired && b.IsValid
                     && b.Range?.StartAnchorId == anchor.Id)?.Name
                 ?? ParagraphBookmark(bookmarks, anchor.Id, heading, "_Toc");
+            found.Add((heading, level.Value, ListNumberResolver.Resolve(heading, _doc!), text, bookmark,
+                update.PageOf(heading) ?? (bookmark is null ? null : shownPages.GetValueOrDefault(bookmark))));
+        }
+
+        // A table that already shows this keeps its paragraphs, and their formatting.
+        bool ShowsPage(int level) => level < switches.NoPagesFrom || level > switches.NoPagesTo;
+        bool holdsNoEntry = !ReferenceEquals(first, last) && !toc.End.ElementsBeforeSelf().Any(e => e.Name != W.pPr && VisibleText(e).Length > 0);
+        var shown = paragraphs.Where(p => !holdsNoEntry || !ReferenceEquals(p, last)).Select(p => (Paragraph: p,
+            Text: string.Concat(p.Elements().Where(e => e.Name != W.pPr && !before.Contains(e) && !after.Contains(e)).Select(VisibleText)))).ToList();
+        if (found.Count == 0 ? shown.Count == 1 && shown[0].Text == NoTocEntries
+            : shown.Count == found.Count && shown.Zip(found).All(pair => pair.Second is { Bookmark: { } target } entry
+                && (string?)pair.First.Paragraph.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val) == FindTocLevelStyle(entry.Level)
+                && pair.First.Text == (entry.Number is null ? "" : entry.Number + "\t") + entry.Text
+                    + (ShowsPage(entry.Level) ? "\t" + entry.Page : "")
+                && (!ShowsPage(entry.Level) || (entry.Page is not null && ScanFields(pair.First.Paragraph).Any(f => f.Kind == "PAGEREF" && f.Tokens.ElementAtOrDefault(1) == target)))
+                && pair.First.Paragraph.Descendants(W.hyperlink).Any(h => (string?)h.Attribute(W.anchor) == target) == switches.Links))
+        {
+            if (toc.Begin.Element(W.fldChar)?.Attribute(W.dirty) is { } dirty)
+            {
+                update.Changing();
+                dirty.Remove();
+            }
+            update.MarkCurrent(toc.Begin);
+            return;
+        }
+
+        update.Changing();
+        var entries = new List<(int Level, string? Number, string Text, string Bookmark, string? Page)>();
+        foreach (var (heading, level, number, text, known, page) in found)
+        {
+            var bookmark = known;
             if (bookmark is null)
             {
                 bookmark = NewHiddenBookmarkName("_Toc");
                 BookmarkWholeParagraph(heading, bookmark);
                 update.Modified.Add(heading);
             }
-            var page = update.PageOf(heading);
-            entries.Add((level.Value, ListNumberResolver.Resolve(heading, _doc!), text, bookmark,
-                page ?? shownPages.GetValueOrDefault(bookmark), page is not null));
+            entries.Add((level, number, text, bookmark, page));
         }
 
         // The page numbers' right tab as the table had it, else (unless the entry style sets one) Word's,
@@ -580,12 +643,12 @@ public sealed partial class DocxSession
         if (entries.Count == 0)
             built.Add(new XElement(W.p, WithoutSection(first.Element(W.pPr)),
                 new XElement(W.r, new XElement(W.rPr, new XElement(W.b)), TextContent(NoTocEntries, W.t))));
-        foreach (var (level, number, text, bookmark, page, isCurrent) in entries)
+        foreach (var (level, number, text, bookmark, page) in entries)
         {
             var runs = new List<XElement>();
             if (number is not null) { runs.Add(TextRun(number)); runs.Add(new XElement(W.r, new XElement(W.tab))); }
             runs.Add(TextRun(text));
-            bool showsPage = level < switches.NoPagesFrom || level > switches.NoPagesTo;
+            bool showsPage = ShowsPage(level);
             if (showsPage)
             {
                 runs.Add(new XElement(W.r, new XElement(W.tab)));
@@ -615,8 +678,7 @@ public sealed partial class DocxSession
 
         // The paragraph that closes the field stays when it holds no entry: Word keeps it, and it is
         // where the document's text (and often a section break) goes on.
-        bool keepsClosing = !ReferenceEquals(first, last)
-            && !toc.End.ElementsBeforeSelf().Any(e => e.Name != W.pPr && VisibleText(e).Length > 0);
+        bool keepsClosing = holdsNoEntry;
         update.Removed.AddRange(paragraphs.Where(p => !keepsClosing || !ReferenceEquals(p, last)).Select(p => AnchorIn(anchors, p)).OfType<Anchor>());
         foreach (var e in before) e.Remove();
         if (keepsClosing)
@@ -660,22 +722,28 @@ public sealed partial class DocxSession
     /// its built-in name, so a localized id counts), else Word's, indented 11 pt a level.</summary>
     private string TocLevelStyle(int level)
     {
+        if (FindTocLevelStyle(level) is { } own) return own;
         var number = level.ToString(CultureInfo.InvariantCulture);
-        IEnumerable<XElement> Styles() => _doc!.MainDocumentPart!.StyleDefinitionsPart?.GetXDocument().Root?
-            .Elements(W.style).Where(s => (string?)s.Attribute(W.type) == "paragraph") ?? Enumerable.Empty<XElement>();
-        if (Styles().FirstOrDefault(s => string.Equals((string?)s.Element(W.name)?.Attribute(W.val), "toc " + number, StringComparison.OrdinalIgnoreCase))
-                ?.Attribute(W.styleId)?.Value is { } own)
-            return own;
         var id = "TOC" + number;
-        if (Styles().Any(s => (string?)s.Attribute(W.styleId) == id)) return id;
         StyleFactory.EnsureReferenceFieldStyles(_doc!, id, "toc " + number, withHeading: false);
-        if (level > 1 && Styles().FirstOrDefault(s => (string?)s.Attribute(W.styleId) == id)?.Element(W.pPr) is { } pPr)
+        if (level > 1 && ParagraphStyles().FirstOrDefault(s => (string?)s.Attribute(W.styleId) == id)?.Element(W.pPr) is { } pPr)
         {
             pPr.Add(new XElement(W.ind, new XAttribute(W.left, ((level - 1) * 220).ToString(CultureInfo.InvariantCulture))));
             _doc!.MainDocumentPart!.StyleDefinitionsPart!.PutXDocument();
         }
         return id;
     }
+
+    private string? FindTocLevelStyle(int level)
+    {
+        var number = level.ToString(CultureInfo.InvariantCulture);
+        return (string?)(ParagraphStyles().FirstOrDefault(s =>
+                string.Equals((string?)s.Element(W.name)?.Attribute(W.val), "toc " + number, StringComparison.OrdinalIgnoreCase))
+            ?? ParagraphStyles().FirstOrDefault(s => (string?)s.Attribute(W.styleId) == "TOC" + number))?.Attribute(W.styleId);
+    }
+
+    private IEnumerable<XElement> ParagraphStyles() => _doc!.MainDocumentPart!.StyleDefinitionsPart?.GetXDocument().Root?
+        .Elements(W.style).Where(s => (string?)s.Attribute(W.type) == "paragraph") ?? Enumerable.Empty<XElement>();
 
     private bool StyleHasRightTab(string styleId) => FormattingAssembler.ResolveEffectiveTabs(_doc!,
             new XElement(W.p, new XElement(W.pPr, new XElement(W.pStyle, new XAttribute(W.val, styleId)))), withDirect: false)

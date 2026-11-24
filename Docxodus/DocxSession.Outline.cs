@@ -303,7 +303,8 @@ public sealed partial class DocxSession
     /// <summary>The story's own paragraphs in <paramref name="root"/>, table cells included: a text box's
     /// are another story, whose section properties break no section of this one.</summary>
     private static IEnumerable<XElement> StoryParagraphs(XElement root) =>
-        root.DescendantsAndSelf(W.p).Where(p => !p.Ancestors().Any(a => a.Name == W.txbxContent));
+        root.DescendantsAndSelf(W.p).Where(p => !p.Ancestors().Any(a => a.Name == W.txbxContent)
+            && WmlToMarkdownConverter.IsSelectedMarkup(p));
 
     /// <summary>A range marker (or a proofing mark) that is itself a child of the body or of a block
     /// content control, so not a block.</summary>

@@ -291,6 +291,8 @@ public class DocxSessionUpdateFieldsTests
     [InlineData(" TOC \\o \"1-3\" \\b part ")]
     [InlineData(" TOC \\f A ")]
     [InlineData(" TOC \\o \"1-3\" \\p \"-\" ")]
+    [InlineData(" TOC \\o \"1-3\" \\w ")]
+    [InlineData(" TOC \\o \"1-3\" \\x ")]
     public void UF010_ATableThatIsNotOnlyOfHeadings_IsLeftAlone(string instr)
     {
         using var session = Open(Contents(instr, Closing(), R("Figure 1 A cat") + Tab + R("3")) + P(R("Intro"), "Heading1"));
@@ -574,6 +576,64 @@ public class DocxSessionUpdateFieldsTests
     {
         using var session = Open(P(Marked("b", 1, R("New"))) + P(Field(" REF b ", "Old")));
         Assert.Contains("New", session.UpdateFields().Patch!.Markdown);
+    }
+
+    [Fact]
+    public void UF033_AReferenceInsideABookmark_IsUpdatedBeforeTheFieldsThatShowIt()
+    {
+        using var session = Open(P(Field(" REF b ", "old")) + P(Marked("b", 1, R("see ") + Field(" REF a ", "old"))) + P(Marked("a", 2, R("New"))));
+        Assert.True(session.UpdateFields().Success);
+        Assert.Equal(new[] { "see New", "see New", "New" }, Lines(session));
+        Assert.False(AsksForUpdate(session));
+    }
+
+    [Fact]
+    public void UF034_ReferencesInACircle_AreLeftAlone()
+    {
+        using var session = Open(P(Marked("a", 1, R("x ") + Field(" REF b ", "1"))) + P(Marked("b", 2, R("y ") + Field(" REF a ", "2")))
+            + P(Marked("self", 3, R("z ") + Field(" REF self ", "3"))) + P(Field(" REF a ", "4")));
+        Assert.True(session.UpdateFields().Success);
+        Assert.Equal(new[] { "x 1", "y 2", "z 3", "4" }, Lines(session));
+        Assert.True(AsksForUpdate(session));
+    }
+
+    [Fact]
+    public void UF035_APageReferenceInAHeading_IsUpdatedBeforeTheTableCopiesIt()
+    {
+        using var session = Open(Contents(" TOC \\o \"1-3\" ", Closing(), R("x"))
+            + P(R("See page ") + Field(" PAGEREF b ", "1"), "Heading1") + P(Marked("b", 1, R("target"))));
+        var target = BodyParagraphs(session)[^1];
+        Assert.True(session.UpdateFields(new UpdateFieldsOptions { Pages = new Dictionary<string, string> { [target] = "7" } }).Success);
+        Assert.Equal(new[] { "See page 7\t1", "", "See page 7", "target" }, Lines(session));
+    }
+
+    [Theory]
+    [InlineData(" TOC \\o \"1-3\" ")]
+    [InlineData(" TOC \\o \"1-3\" \\h \\n 2-2 ")]
+    public void UF036_ATableThatIsUpToDate_IsNotTouched(string instr)
+    {
+        using var session = Open(Contents(instr, Closing(), R("x")) + P(R("Intro"), "Heading1") + P(R("Sub"), "Heading2"));
+        var pages = new UpdateFieldsOptions { Pages = session.ListOutline().ToDictionary(h => h.AnchorId, _ => "3") };
+        Assert.True(session.UpdateFields(pages).Success);
+        var anchors = BodyParagraphs(session);
+        long version = session.Version;
+
+        var again = session.UpdateFields(pages);
+
+        Assert.True(again.Success);
+        Assert.Empty(again.Created.Concat(again.Removed).Concat(again.Modified));
+        Assert.Equal(version, session.Version);
+        Assert.Equal(anchors, BodyParagraphs(session));
+        // another page changes that entry's number in place, and only it
+        var intro = session.ListOutline()[0].AnchorId;
+        pages = new UpdateFieldsOptions { Pages = session.ListOutline().ToDictionary(h => h.AnchorId, h => h.AnchorId == intro ? "4" : "3") };
+        Assert.Single(session.UpdateFields(pages).Modified);
+        Assert.Equal(anchors, BodyParagraphs(session));
+        Assert.Equal("Intro\t4", Lines(session)[0]);
+        // and a changed heading builds it again
+        Assert.True(session.ReplaceText(intro, "Opening").Success);
+        Assert.NotEmpty(session.UpdateFields(pages).Created);
+        Assert.StartsWith("Opening", Lines(session)[0]);
     }
 
     [Fact]
