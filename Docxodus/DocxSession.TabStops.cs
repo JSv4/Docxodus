@@ -34,7 +34,8 @@ public sealed record TabStopsInfo
     public required IReadOnlyList<ParagraphTabStop> Stops { get; init; }
     /// <summary>The stops the paragraph's styles give it, by position.</summary>
     public required IReadOnlyList<ParagraphTabStop> StyleStops { get; init; }
-    /// <summary><c>w:defaultTabStop</c> from settings, twips (720, half an inch, when absent).</summary>
+    /// <summary><c>w:defaultTabStop</c> from settings, twips (720, half an inch, when absent; 0 is no
+    /// automatic stops).</summary>
     public int DefaultTabStopTwips { get; init; }
 }
 
@@ -61,8 +62,7 @@ public sealed partial class DocxSession
         if (paragraph?.Name != W.p) return null;
         return new TabStopsInfo
         {
-            Stops = ReadTabStops(FormattingAssembler.ResolveEffectiveParagraphProperties(_doc!, paragraph)
-                .Element(W.tabs)),
+            Stops = ReadTabStops(FormattingAssembler.ResolveEffectiveTabs(_doc!, paragraph, withDirect: true)),
             StyleStops = InheritedTabStops(paragraph),
             DefaultTabStopTwips = DefaultTabStopTwips(),
         };
@@ -89,6 +89,8 @@ public sealed partial class DocxSession
         if (stops.Any(s => s is null || s.PositionTwips is < -MaxTabPositionTwips or > MaxTabPositionTwips))
             return EditResult.Fail(EditErrorCode.InvalidParagraphFormat,
                 $"tab positions must be within ±{MaxTabPositionTwips} twips", anchorId);
+        if (stops.Any(s => !Enum.IsDefined(s.Alignment) || !Enum.IsDefined(s.Leader)))
+            return EditResult.Fail(EditErrorCode.InvalidParagraphFormat, "unknown tab alignment or leader", anchorId);
         if (stops.GroupBy(s => s.PositionTwips).Any(g => g.Count() > 1))
             return EditResult.Fail(EditErrorCode.InvalidParagraphFormat,
                 "two tab stops cannot share a position", anchorId);
@@ -172,21 +174,16 @@ public sealed partial class DocxSession
     }
 
     /// <summary>The stops the paragraph's styles give it: its effective tabs without its own w:tabs.</summary>
-    private IReadOnlyList<ParagraphTabStop> InheritedTabStops(XElement paragraph)
-    {
-        var pPr = new XElement(paragraph.Element(W.pPr) ?? new XElement(W.pPr));
-        pPr.Elements(W.tabs).Remove();
-        var probe = new XElement(W.p, paragraph.Attributes(), pPr);
-        return ReadTabStops(FormattingAssembler.ResolveEffectiveParagraphProperties(_doc!, probe)
-            .Element(W.tabs));
-    }
+    private IReadOnlyList<ParagraphTabStop> InheritedTabStops(XElement paragraph) =>
+        ReadTabStops(FormattingAssembler.ResolveEffectiveTabs(_doc!, paragraph, withDirect: false));
 
     private int DefaultTabStopTwips()
     {
         var value = (string?)_doc!.MainDocumentPart?.DocumentSettingsPart?.GetXDocument().Root?
             .Element(W.defaultTabStop)?.Attribute(W.val);
-        // ST_TwipsMeasure: a bare number of twips, or one with a unit ("0.5in").
-        return value is not null && WordprocessingMLUtil.StringToTwips(value) is > 0 and var twips
+        // ST_TwipsMeasure: a bare number of twips, or one with a unit ("0.5in"). Zero turns the automatic
+        // stops off.
+        return value is not null && WordprocessingMLUtil.StringToTwips(value) is >= 0 and var twips
             ? twips : WordDefaultTabStopTwips;
     }
 
