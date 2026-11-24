@@ -1048,6 +1048,7 @@ EditResult RemoveBookmark(string name);
 
 EditResult InsertCrossReference(string anchorId, int characterOffset, string bookmarkName,
     CrossReferenceOptions? options = null);
+EditResult AddReferenceBookmark(string anchorId);
 ```
 
 `InsertCrossReference` (issue #545) writes a Word-faithful internal cross-reference: a
@@ -1057,11 +1058,21 @@ character offset with the same run-splitting discipline as `InsertFootnote`. The
 run holds what Word would currently render — the bookmarked text, the target's auto-number
 under `\r` (`0` when the target is unnumbered, as Word shows), and/or the `above`/`below`
 position word — so non-recomputing renderers display a faithful snapshot while Word updates
-the field like any hand-authored cross-reference. The bookmark must already exist as one
+the field like any hand-authored cross-reference. `NumberNoContext` (`\n`) and `NumberFullContext`
+(`\w`) are the other two number switches, at most one of the three being written. The number is the
+one Word shows (`Internal/ReferenceNumber.cs`): without its trailing period, `(i)` under `\n` and
+`2.3.1(a)(i)` under `\w`, and under `\r` only the levels the field's own list paragraph does not
+share. Where Word's text is not known (a number in words above another, a relative reference from
+outside the list) the number without context is cached and the field marked dirty. `PageNumber`
+writes a `PAGEREF` instead: its cached result is `CachedPage`, or `1` with the field marked dirty. The bookmark must already exist as one
 coherent same-story pair; otherwise the op fails with `MissingBookmarkTarget`. Under
 `RenderInline` the same field is a tracked insertion: complex-field runs (begin, instruction,
 separate, cached result, end) inside one `w:ins`, which is how Word records an inserted field and
 the only form a `w:ins` can hold, since `w:fldSimple` is not a run (issue #1313).
+
+`AddReferenceBookmark` puts the hidden `_Ref` bookmark Word allocates for a reference to a heading
+or numbered item around the whole paragraph (a field or link inside it is not cut), or returns the
+one already there; the name comes back in `EditResult.BookmarkName`.
 
 `HyperlinkTarget.External(uri)` creates or reuses a hyperlink relationship on the XML part that
 owns the link. A header link is related from its `HeaderPart`, a footnote link from its

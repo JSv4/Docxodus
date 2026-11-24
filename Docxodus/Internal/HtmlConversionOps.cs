@@ -80,7 +80,7 @@ internal sealed record HtmlConversionOptions
 
     /// <summary>Wrap REF / PAGEREF / NOTEREF field results in <c>&lt;span data-field&gt;</c> with the
     /// target bookmark (see <see cref="WmlToHtmlConverterSettings.StampReferenceFields"/>). Off by
-    /// default; the browser editor's render profile turns it on.</summary>
+    /// default; an editor turns it on with the <c>referenceFields</c> render option.</summary>
     public bool StampReferenceFields { get; init; }
 
     /// <summary>

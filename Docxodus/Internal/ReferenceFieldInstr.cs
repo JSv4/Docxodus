@@ -1,5 +1,3 @@
-#nullable enable
-
 using System;
 using System.Linq;
 
@@ -11,8 +9,8 @@ namespace Docxodus.Internal;
 /// jump to that bookmark.
 /// </summary>
 /// <remarks>
-/// The consumer is the editor render profile (<see cref="WmlToHtmlConverterSettings.StampReferenceFields"/>):
-/// the field's result is wrapped in a <c>data-field</c> marker so an editor can keep the cached
+/// The consumer is <see cref="WmlToHtmlConverterSettings.StampReferenceFields"/>, which an editor's
+/// render options turn on: the field's result is wrapped in a <c>data-field</c> marker so an editor can keep the cached
 /// result whole (typing cannot land inside it) and follow the reference. Like
 /// <see cref="PageNumberFieldInstr"/>, deliberately not <c>FieldRetriever.ParseField</c>, whose
 /// field-type allowlist leaves out <c>PAGEREF</c> and <c>NOTEREF</c>.

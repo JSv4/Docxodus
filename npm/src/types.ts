@@ -3062,6 +3062,9 @@ export interface EditorRenderOptions {
    *  ids match {@link CommentListEntry.id}. Default false, which renders exactly as the
    *  comment-less `RenderHtml` / `RenderBlockHtml` do. */
   comments?: boolean;
+  /** Wrap REF / PAGEREF / NOTEREF results in `data-field` spans that name their bookmark
+   *  (`data-field-target`), so an editor can keep each reference whole and follow it. Default false. */
+  referenceFields?: boolean;
 }
 
 /** Options for `DocxSession.insertTable`. */

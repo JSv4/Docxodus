@@ -465,8 +465,11 @@ the first-class session API, and `insert_cross_reference` (issue #545) inserts a
 on refresh, not an internal hyperlink. Its `options.referenceNumber`/`hyperlink`/`includePosition`
 booleans are the field's `\r`/`\h`/`\p` switches, and the written `w:fldSimple` carries a
 cached result run (the bookmarked text, or the target's auto-number under `referenceNumber`) so
-non-recomputing renderers show a faithful snapshot. A missing or incoherent bookmark fails with
-`missing_bookmark_target`. Hyperlink targets use `kind: "external"|"internal"`; bookmark
+non-recomputing renderers show a faithful snapshot. `options.numberNoContext`
+(`\n`) and `numberFullContext` (`\w`) are the other number switches; `pageNumber` writes a `PAGEREF`
+whose cached result is `cachedPage` (or a dirty `1`). `add_reference_bookmark` takes the `anchorId`
+of a heading or numbered item and returns, as `bookmarkName`, the hidden `_Ref` bookmark over it. A
+missing or incoherent bookmark fails with `missing_bookmark_target`. Hyperlink targets use `kind: "external"|"internal"`; bookmark
 ranges use `startAnchorId`/`startOffset` and `endAnchorId`/`endOffset`. List actions accept the
 same numeric `ProjectionScopes` flag mask as the core API, comments included — a comment
 paragraph is anchor-addressable and owns its own hyperlink relationships like any other story.
