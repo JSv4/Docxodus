@@ -931,7 +931,8 @@ must cover it, and a target inside one stands for the place just outside it, so 
 changes. A body-level range marker next to the run travels with it when its other end is in the run
 (Word ends a bookmark over whole paragraphs that way). It refuses (`InvalidPosition`) a move that
 would split a control, cross a section break, or change or invert what a bookmark, comment,
-permission, native move or complex field covers. A move to where the run already is succeeds and
+permission, native move or complex field covers. Where a move would leave two tables touching, or a
+table ending the body, it adds the empty paragraph `InsertTable` would (reported in `Created`). A move to where the run already is succeeds and
 takes no undo step.
 
 ## Bulk block removal — `DeleteRange` and `DeleteSection`

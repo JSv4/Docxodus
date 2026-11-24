@@ -257,6 +257,34 @@ public class DocxSessionTabStopsTests
         Assert.Equal(new[] { Stop(1440) }, session.GetTabStops(p)!.Stops);
     }
 
+    /// <summary>A block rendered after the interval changed (or the change was undone) is laid out with it.</summary>
+    [Fact]
+    public void TS015_ABlockRender_FollowsTheDefaultInterval()
+    {
+        using var ms = new MemoryStream();
+        ms.Write(Document());
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, true))
+        {
+            var part = doc.MainDocumentPart!;
+            part.GetXDocument().Descendants(W + "p").Last().ReplaceNodes(new XElement(W + "r", new XElement(W + "t", "A"), new XElement(W + "tab"), new XElement(W + "t", "B")));
+            part.PutXDocument();
+        }
+        int handle = SessionRegistry.OpenSession(ms.ToArray(), null);
+        try
+        {
+            var session = SessionRegistry.Get(handle);
+            string Render() => DocxSessionOps.RenderBlockHtml(handle, Paragraphs(session)[1], "docx-", false, false);
+            var before = Render();
+            Assert.True(session.SetDefaultTabStop(2880).Success);
+            var after = Render();
+            Assert.NotEqual(before, after);
+            Assert.True(session.Undo());
+            Assert.Equal(before, Render());
+        }
+        finally { SessionRegistry.CloseSession(handle); }
+    }
+
     [Theory]
     [InlineData("[1440]")]
     [InlineData("[{\"alignment\":\"left\"}]")]
