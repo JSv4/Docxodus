@@ -217,7 +217,12 @@ du -sh "$WASM_DIST"
 # main at 6,101,383 on the same job, which had 5,753 bytes of room under 5964 KiB, so the branch
 # was 258 bytes over. 8 KiB more covers it and the spread between runners; assembly roots,
 # dependencies and the AOT profile are unchanged.
-WIRE_BUDGET_BYTES=$((5972 * 1024))
+# Tab stops (GetTabStops, SetTabStops, SetDefaultTabStop, their JSON and bridge exports), with main's
+# content-control date formats (#1853) below it: CI measured the branch at 6,111,407 bytes on build and
+# build-npm and 6,115,564 on compare, up to 236 over 5972 KiB, and the outline on top of it at 6,118,046.
+# 8 KiB more covers both and the cross-references landing beside them; assembly roots, dependencies and
+# the AOT profile are unchanged.
+WIRE_BUDGET_BYTES=$((5980 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""
