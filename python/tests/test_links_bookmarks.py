@@ -307,3 +307,27 @@ def test_reference_bookmark_and_page_and_number_references(
     xml = session.raw.get_xml(paragraphs[1])
     assert f"PAGEREF {name}" in xml and ">3<" in xml
     assert f"REF {name}" in xml and "\\n" in xml
+
+
+def test_update_fields_refreshes_a_reference_in_one_undo(
+    session: DocxSession, paragraphs: list[str]
+) -> None:
+    """Word's Update Field: a REF takes its bookmark's current text; a range limits it; a
+    malformed range is refused before anything changes."""
+    assert session.add_bookmark("Gamma", DocumentRange(paragraphs[0], 0, paragraphs[0], 5)).success
+    assert session.insert_cross_reference(paragraphs[1], 0, "Gamma").success
+    cached = session.raw.get_xml(paragraphs[1])
+    assert session.replace_text(paragraphs[0], "Zebra and the rest").success
+
+    outside = session.update_fields(range=DocumentRange(paragraphs[0], 0, paragraphs[0], 1))
+    assert outside.success, outside.error
+    assert session.raw.get_xml(paragraphs[1]) == cached
+
+    updated = session.update_fields()
+    assert updated.success, updated.error
+    assert ">Zebra<" in session.raw.get_xml(paragraphs[1])
+    assert session.undo()
+    assert session.raw.get_xml(paragraphs[1]) == cached
+
+    with pytest.raises(Exception):
+        session._call("update_fields", {"range": {"startAnchorId": paragraphs[0]}})

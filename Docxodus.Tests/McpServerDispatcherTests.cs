@@ -3153,4 +3153,37 @@ public class McpServerDispatcherTests : IDisposable
             $$"""{"sessionId":{{sessionArg}},"format":"text"}"""))).GetRawText();
         Assert.Contains("work.7", text);
     }
+
+    [Fact]
+    public void MCP157_Edit_UpdateFields_RefreshesAReferenceAndRefusesABadRange()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Assert.True(ReplaceText(_store, sessionId, anchor, "Alpha clause.").GetProperty("success").GetBoolean());
+        var inserted = Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"insert_paragraph","anchorId":"{{anchor}}","position":"after","markdown":"See "}""")));
+        var second = inserted.GetProperty("created")[0].GetProperty("id").GetString();
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"add_bookmark","name":"Defs","startAnchorId":"{{anchor}}","startOffset":0,"endAnchorId":"{{anchor}}","endOffset":5}""")))
+            .GetProperty("success").GetBoolean());
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"insert_cross_reference","anchorId":"{{second}}","characterOffset":4,"bookmarkName":"Defs"}""")))
+            .GetProperty("success").GetBoolean());
+        Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text_range","anchorId":"{{anchor}}","find":"Alpha","replace":"Omega"}"""));
+        var before = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"text"}"""))).GetRawText();
+        Assert.True(before.Contains("Omega clause.") && before.Contains("See Alpha"), before);
+
+        var updated = Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"update_fields"}"""));
+        Assert.True(Parse(updated).GetProperty("success").GetBoolean(), updated);
+        var text = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"text"}"""))).GetRawText();
+        Assert.True(text.Contains("See Omega"), text);
+
+        Assert.ThrowsAny<ArgumentException>(() => Dispatcher.Call(_store, "docxodus_edit", J(
+            $$$"""{"sessionId":{{{sessionArg}}},"action":"update_fields","range":{"startAnchorId":"{{{anchor}}}"}}""")));
+    }
 }

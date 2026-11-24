@@ -182,6 +182,8 @@ internal static class StyleFactory
             new XElement(W + "unhideWhenUsed"),
             new XElement(W + "qFormat"),
             new XElement(W + "pPr",
+                // (Heading 1's numbering off, as Word's own: the title is not "1 Contents")
+                new XElement(W + "numPr", new XElement(W + "numId", new XAttribute(W + "val", "0"))),
                 new XElement(W + "outlineLvl", new XAttribute(W + "val", "9"))));
 
     /// <summary>Word's comment-body paragraph style ("annotation text"): Normal at 10pt.</summary>

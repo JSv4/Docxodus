@@ -194,6 +194,31 @@ test.describe('DocxSession (WASM bridge)', () => {
     expect(result.refused).toBe('missing_bookmark_target');
   });
 
+  test('updateFields refreshes a reference, reports it, and refuses a malformed option', async ({ page }) => {
+    const result = await page.evaluate((bytes: number[]) => {
+      const session = (window as any).Docxodus.openTypedSession(new Uint8Array(bytes)) as DocxSession;
+      try {
+        const [target, from] = Object.entries(session.project().anchorIndex).filter(([, a]) => a.scope === 'body' && a.kind === 'p').map(([id]) => id);
+        session.replaceText(target, 'Old name');
+        const bookmark = session.addReferenceBookmark(target).bookmarkName!;
+        session.insertCrossReference(from, 0, bookmark);
+        session.insertCrossReference(from, 0, bookmark, { pageNumber: true });
+        session.replaceTextRange(target, 'Old', 'New');
+        const updated = session.updateFields({ pages: { [target]: '9' } });
+        const xml = session.raw.getXml(from);
+        let malformed = '';
+        try { session.updateFields({ tablesOfContentsOnly: 'yes' as unknown as boolean }); } catch (e) { malformed = String(e); }
+        return { updated: updated.success, modified: updated.modified.map(a => a.id), from, xml, again: session.updateFields({ pages: { [target]: '9' } }).modified.length, malformed };
+      } finally { session.close(); }
+    }, Array.from(readTestFile('HC001-5DayTourPlanTemplate.docx')));
+    expect(result.updated).toBe(true);
+    expect(result.modified).toEqual([result.from]);
+    expect(result.xml).toContain('>New name<');
+    expect(result.xml).toContain('>9<');
+    expect(result.again).toBe(0);
+    expect(result.malformed).not.toBe('');
+  });
+
   test('block insertion refuses cell anchors before recording history', async ({ page }) => {
     const results = await page.evaluate((bytes: number[]) => {
       const open = (input: Uint8Array) => (window as any).Docxodus.openTypedSession(input) as DocxSession;

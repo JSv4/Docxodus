@@ -549,6 +549,7 @@ internal static partial class Dispatcher
         "delete_range" => DocxSessionOps.DeleteRange(
             session.Handle, Str(args, "fromAnchorId"), Str(args, "toAnchorIdExclusive")),
         "delete_section" => DocxSessionOps.DeleteSection(session.Handle, Str(args, "headingAnchorId")),
+        "update_fields" => DocxSessionOps.UpdateFields(session.Handle, args.GetRawText()),
         "split_paragraph" => DocxSessionOps.SplitParagraph(
             session.Handle, Str(args, "anchorId"), Int(args, "characterOffset")),
         "merge_paragraphs" => DocxSessionOps.MergeParagraphs(
@@ -1486,6 +1487,7 @@ internal static partial class Dispatcher
             "docxodus_edit" => action is "insert_paragraph" or "replace_text" or "replace_text_range"
                 or "replace_text_at_span_with_format"
                 or "delete_block" or "move_block" or "move_block_range" or "delete_range" or "delete_section"
+                or "update_fields"
                 or "split_paragraph" or "merge_paragraphs",
             "docxodus_format" => action is "apply_format" or "apply_format_by_substring"
                 or "set_paragraph_style" or "set_paragraph_format" or "set_list_level"
@@ -1595,6 +1597,9 @@ internal static partial class Dispatcher
                 break;
             case ("docxodus_edit", "delete_section"):
                 RequireStrings(args, "headingAnchorId");
+                break;
+            case ("docxodus_edit", "update_fields"):
+                _ = DocxSessionJson.ParseUpdateFieldsOptions(args.GetRawText());
                 break;
             case ("docxodus_edit", "split_paragraph"):
                 RequireStrings(args, "anchorId");

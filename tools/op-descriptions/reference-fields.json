@@ -70,6 +70,23 @@
         "stdio": { "op": "insert_cross_reference" },
         "mcp": { "tool": "docxodus_links", "action": "insert_cross_reference", "flatAliases": { "options": { "referenceNumber": "referenceNumber", "hyperlink": "hyperlink", "includePosition": "includePosition" } } }
       }
+    },
+    {
+      "op": "updateFields",
+      "facade": "UpdateFields",
+      "result": "EditResult",
+      "args": [
+        { "name": "range", "type": "object", "required": false },
+        { "name": "pages", "type": "object", "required": false },
+        { "name": "tablesOfContentsOnly", "type": "boolean", "required": false, "default": false }
+      ],
+      "transports": {
+        "wasm": { "method": "UpdateFields" },
+        "npm": { "method": "updateFields" },
+        "python": { "method": "update_fields" },
+        "stdio": { "op": "update_fields" },
+        "mcp": { "tool": "docxodus_edit", "action": "update_fields" }
+      }
     }
   ]
 }

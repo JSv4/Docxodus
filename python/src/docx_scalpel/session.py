@@ -1470,6 +1470,29 @@ class DocxSession:
     def remove_bookmark(self, name: str) -> EditResult:
         return EditResult._from_wire(self._call("remove_bookmark", {"name": name}))
 
+    def update_fields(
+        self,
+        range: DocumentRange | None = None,
+        pages: Mapping[str, str | int] | None = None,
+        tables_of_contents_only: bool = False,
+    ) -> EditResult:
+        """Word's Update Field (F9). Tables of contents are built again from the headings (``TOC
+        n`` entries, hyperlinks per ``\\h``, a ``PAGEREF`` to a hidden ``_Toc`` bookmark on each
+        heading); ``REF`` fields take their bookmark's current text or number; ``PAGEREF`` fields
+        take the page from ``pages`` (keyed by anchor id or unid); ``SEQ`` fields are numbered
+        again. ``range`` limits it to the fields that start in those paragraphs; without it every
+        field in the body is updated. A field it cannot work out exactly keeps its result, and the
+        document stops asking Word to update fields on open only when none is left that needs it. ``tables_of_contents_only`` is Word's Update Table. One undo step (none when there is
+        nothing to update); refused while changes are tracked."""
+        args: dict[str, Any] = {}
+        if range is not None:
+            args["range"] = range.to_wire()
+        if pages is not None:
+            args["pages"] = {key: str(value) for key, value in pages.items()}
+        if tables_of_contents_only:
+            args["tablesOfContentsOnly"] = True
+        return EditResult._from_wire(self._call("update_fields", args))
+
     def add_reference_bookmark(self, anchor_id: str) -> EditResult:
         """The hidden ``_Ref`` bookmark over the whole paragraph ``anchor_id`` (its text, not its
         list number), what Word makes for a cross-reference to a heading or numbered item. One

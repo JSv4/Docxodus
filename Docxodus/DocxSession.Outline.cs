@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
 using Docxodus.Internal;
 
 namespace Docxodus;
@@ -35,27 +36,7 @@ public sealed partial class DocxSession
         var anchors = BodyAnchors();
         var body = _doc!.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
         if (body is null) return Array.Empty<OutlineEntry>();
-        var styles = _doc.MainDocumentPart!.StyleDefinitionsPart?.GetXDocument().Root;
-        var byId = styles?.Elements(W.style)
-            .Where(s => (string?)s.Attribute(W.type) == "paragraph" && s.Attribute(W.styleId) is not null)
-            .GroupBy(s => (string)s.Attribute(W.styleId)!)
-            .ToDictionary(g => g.Key, g => g.First()) ?? new Dictionary<string, XElement>();
-        var defaultStyle = styles?.Elements(W.style).FirstOrDefault(s =>
-            (string?)s.Attribute(W.type) == "paragraph" && WordprocessingMLUtil.OnOffValue((string?)s.Attribute(W._default)) == true);
-        var levelOfStyle = new Dictionary<string, int?>();
-
-        int? StyleLevel(string styleId)
-        {
-            if (levelOfStyle.TryGetValue(styleId, out var known)) return known;
-            int? level = null;
-            var seen = new HashSet<string>();
-            for (var id = styleId; id is not null && seen.Add(id) && byId.TryGetValue(id, out var style);
-                 id = (string?)style.Element(W.basedOn)?.Attribute(W.val))
-            {
-                if ((OutlineLevelOf(style.Element(W.pPr)) ?? BuiltInHeadingLevelOf(style)) is { } own) { level = own; break; }
-            }
-            return levelOfStyle[styleId] = level;
-        }
+        var levels = new OutlineLevels(_doc.MainDocumentPart!);
 
         // The top-level blocks in order (a block content control's are among them), each heading's
         // position in them, then each heading's part: up to the next heading at its level or above.
@@ -65,13 +46,9 @@ public sealed partial class DocxSession
         {
             var p = blocks[i];
             if (p.Name != W.p) continue;
-            var pPr = p.Element(W.pPr);
-            var styleId = (string?)pPr?.Element(W.pStyle)?.Attribute(W.val)
-                ?? (string?)defaultStyle?.Attribute(W.styleId);
-            var level = OutlineLevelOf(pPr) ?? (styleId is null ? null : StyleLevel(styleId));
-            if (level is not (>= 0 and <= 8)) continue;
+            if (levels.Of(p) is not { } level) continue;
             if (AnchorIn(anchors, p) is not { } anchor) continue;
-            headings.Add((i, anchor, level.Value + 1, p));
+            headings.Add((i, anchor, level + 1, p));
         }
         var result = new List<OutlineEntry>(headings.Count);
         for (int h = 0; h < headings.Count; h++)
@@ -90,16 +67,59 @@ public sealed partial class DocxSession
         return result;
     }
 
-    /// <summary>A <c>w:pPr</c>'s own <c>w:outlineLvl</c> (0-9), or null when it sets none.</summary>
-    private static int? OutlineLevelOf(XElement? pPr) =>
-        int.TryParse((string?)pPr?.Element(W.outlineLvl)?.Attribute(W.val), out var level) ? level : null;
+    /// <summary>The outline levels of a document's paragraphs, by its style definitions.</summary>
+    private sealed class OutlineLevels
+    {
+        private readonly Dictionary<string, XElement> _styles;
+        private readonly string? _defaultStyle;
+        private readonly Dictionary<string, int?> _levelOfStyle = new();
 
-    /// <summary>The outline level (0-8) of a built-in heading style, which its name fixes
-    /// (<c>heading 1</c> to <c>heading 9</c> in every language), or null for any other style.</summary>
-    private static int? BuiltInHeadingLevelOf(XElement style) =>
-        (string?)style.Element(W.name)?.Attribute(W.val) is { Length: 9 } name
-        && name.StartsWith("heading ", StringComparison.OrdinalIgnoreCase) && name[8] is >= '1' and <= '9'
-            ? name[8] - '1' : null;
+        public OutlineLevels(MainDocumentPart main)
+        {
+            var styles = main.StyleDefinitionsPart?.GetXDocument().Root?.Elements(W.style)
+                .Where(s => (string?)s.Attribute(W.type) == "paragraph" && s.Attribute(W.styleId) is not null).ToList()
+                ?? new List<XElement>();
+            _styles = styles.GroupBy(s => (string)s.Attribute(W.styleId)!).ToDictionary(g => g.Key, g => g.First());
+            _defaultStyle = (string?)styles.FirstOrDefault(s =>
+                WordprocessingMLUtil.OnOffValue((string?)s.Attribute(W._default)) == true)?.Attribute(W.styleId);
+        }
+
+        /// <summary>The paragraph's outline level (0-8), its own or else its style's; null for body text.</summary>
+        public int? Of(XElement paragraph) =>
+            (OwnLevel(paragraph.Element(W.pPr)) ?? (StyleIdOf(paragraph) is { } id ? StyleLevel(id) : null)) is { } level
+            && level is >= 0 and <= 8 ? level : null;
+
+        /// <summary>The level (0-8) of a paragraph in a built-in heading style; null in any other.</summary>
+        public int? BuiltInHeading(XElement paragraph) =>
+            StyleIdOf(paragraph) is { } id && _styles.TryGetValue(id, out var style) ? BuiltInLevel(style) : null;
+
+        private string? StyleIdOf(XElement paragraph) =>
+            (string?)paragraph.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val) ?? _defaultStyle;
+
+        private int? StyleLevel(string styleId)
+        {
+            if (_levelOfStyle.TryGetValue(styleId, out var known)) return known;
+            int? level = null;
+            var seen = new HashSet<string>();
+            for (var id = styleId; id is not null && seen.Add(id) && _styles.TryGetValue(id, out var style);
+                 id = (string?)style.Element(W.basedOn)?.Attribute(W.val))
+            {
+                if ((OwnLevel(style.Element(W.pPr)) ?? BuiltInLevel(style)) is { } own) { level = own; break; }
+            }
+            return _levelOfStyle[styleId] = level;
+        }
+
+        /// <summary>A <c>w:pPr</c>'s own <c>w:outlineLvl</c> (0-9), or null when it sets none.</summary>
+        private static int? OwnLevel(XElement? pPr) =>
+            int.TryParse((string?)pPr?.Element(W.outlineLvl)?.Attribute(W.val), out var level) ? level : null;
+
+        /// <summary>The level of a built-in heading style, which its name fixes (<c>heading 1</c> to
+        /// <c>heading 9</c> in every language).</summary>
+        private static int? BuiltInLevel(XElement style) =>
+            (string?)style.Element(W.name)?.Attribute(W.val) is { Length: 9 } name
+            && name.StartsWith("heading ", StringComparison.OrdinalIgnoreCase) && name[8] is >= '1' and <= '9'
+                ? name[8] - '1' : null;
+    }
 
     /// <summary>The paragraphs and tables in <paramref name="root"/> (itself included) that are in no
     /// table cell or text box, in document order.</summary>
@@ -275,7 +295,7 @@ public sealed partial class DocxSession
     /// <see cref="AnchorForElement"/> is a scan of the whole index.</summary>
     private Dictionary<string, Anchor> BodyAnchors()
     {
-        var part = _doc!.MainDocumentPart!.Uri.ToString();
+        var part = _doc!.MainDocumentPart?.Uri.ToString();
         var anchors = new Dictionary<string, Anchor>(StringComparer.Ordinal);
         foreach (var target in AnchorIndex().Values)
             if (target.PartUri == part) anchors.TryAdd(target.Unid, target.Anchor);
@@ -288,7 +308,8 @@ public sealed partial class DocxSession
     /// <summary>The story's own paragraphs in <paramref name="root"/>, table cells included: a text box's
     /// are another story, whose section properties break no section of this one.</summary>
     private static IEnumerable<XElement> StoryParagraphs(XElement root) =>
-        root.DescendantsAndSelf(W.p).Where(p => !p.Ancestors().Any(a => a.Name == W.txbxContent));
+        root.DescendantsAndSelf(W.p).Where(p => !p.Ancestors().Any(a => a.Name == W.txbxContent)
+            && WmlToMarkdownConverter.IsSelectedMarkup(p));
 
     /// <summary>A range marker (or a proofing mark) that is itself a child of the body or of a block
     /// content control, so not a block.</summary>

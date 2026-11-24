@@ -340,7 +340,7 @@ All search modes accept the exact citation token and attach a citation envelope 
 ### `docxodus_edit` — text/block CRUD + undo/redo
 
 `insert_paragraph`, `replace_text`, `replace_text_range`, `delete_block`, `move_block`,
-`move_block_range`, `delete_range`, `replace_text_at_span_with_format`, `delete_section`, `split_paragraph`, `merge_paragraphs`,
+`move_block_range`, `delete_range`, `replace_text_at_span_with_format`, `update_fields`, `delete_section`, `split_paragraph`, `merge_paragraphs`,
 `undo`, `redo` → the identically-named
 (camelCase) `DocxSession` methods via `DocxSessionOps`. `replace_text_at_span_with_format` takes an
 optional `deletedTextSide` (`before`/`after`) that puts a zero-length insertion on that side of tracked

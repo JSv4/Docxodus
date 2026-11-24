@@ -1038,6 +1038,13 @@ internal static class DocxSessionOps
     public static string ListBookmarks(int handle, ProjectionScopes scopes = ProjectionScopes.All) =>
         DocxSessionJson.SerializeBookmarks(SessionRegistry.Get(handle).ListBookmarks(scopes));
 
+    /// <summary>Word's Update Field; see <see cref="DocxSession.UpdateFields"/>.
+    /// <paramref name="optionsJson"/>: <c>""</c> (every field, no pages) or an object
+    /// <c>{ range?: DocumentRange, pages?: { anchorOrUnid: page }, tablesOfContentsOnly? }</c>
+    /// (see <see cref="DocxSessionJson.ParseUpdateFieldsOptions"/>).</summary>
+    public static string UpdateFields(int handle, string? optionsJson) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).UpdateFields(DocxSessionJson.ParseUpdateFieldsOptions(optionsJson)));
+
     /// <summary>The hidden <c>_Ref</c> bookmark over a whole paragraph that a cross-reference to
     /// it targets; see <see cref="DocxSession.AddReferenceBookmark"/>.</summary>
     public static string AddReferenceBookmark(int handle, string anchorId) =>
