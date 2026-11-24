@@ -4,6 +4,7 @@
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Xml.Linq;
 using Docxodus;
 using DocumentFormat.OpenXml.Packaging;
 using Xunit;
@@ -269,6 +270,64 @@ public class DocxSessionOutlineTests
         Assert.Contains("a1", res.Patch!.Markdown);
         using var quiet = new DocxSession(Build(P("A", "Ttulo1") + P("B", "Ttulo1")), new DocxSessionSettings { EmitMarkdownPatch = false });
         Assert.Null(quiet.MoveBlockRange(AnchorOf(quiet, "A"), AnchorOf(quiet, "A"), AnchorOf(quiet, "B"), Position.After).Patch);
+    }
+
+    private static string Tbl(string text) =>
+        "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"900\"/></w:tblGrid><w:tr><w:tc>" + P(text) + "</w:tc></w:tr></w:tbl>";
+
+    private static string Blocks(DocxSession session)
+    {
+        using var ms = new MemoryStream(session.Save());
+        using var document = WordprocessingDocument.Open(ms, false);
+        return string.Join(" ", document.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!.Elements()
+            .Select(e => e.Name == W.tbl ? $"[{e.Value}]" : e.Name == W.p ? (e.Value.Length > 0 ? e.Value : "-") : e.Name.LocalName));
+    }
+
+    [Fact]
+    public void OL015_MoveBlockRange_KeepsAParagraphBetweenTables_AndAfterTheLast()
+    {
+        using var between = new DocxSession(Build(Tbl("T1") + P("sep") + Tbl("T2") + P("tail")));
+        var res = between.MoveBlockRange(AnchorOf(between, "sep"), AnchorOf(between, "sep"), AnchorOf(between, "tail"), Position.After);
+        Assert.True(res.Success, res.Error?.Message);
+        Assert.Equal("[T1] - [T2] tail sep sectPr", Blocks(between));
+        Assert.Single(res.Created);
+        Assert.True(between.Undo());
+        Assert.Equal("[T1] sep [T2] tail sectPr", Blocks(between));
+
+        // a part that ends in a table, to the end of the body
+        using var toEnd = new DocxSession(Build(P("A", "Ttulo1") + Tbl("T") + P("B", "Ttulo1") + P("b1")));
+        var outline = toEnd.ListOutline();
+        Assert.True(toEnd.MoveBlockRange(outline[0].AnchorId, outline[0].LastAnchorId, outline[1].LastAnchorId, Position.After).Success);
+        Assert.Equal("B b1 A [T] - sectPr", Blocks(toEnd));
+
+        // the part after a table, away from the end
+        using var fromEnd = new DocxSession(Build(P("A", "Ttulo1") + Tbl("T") + P("B", "Ttulo1") + P("b1")));
+        outline = fromEnd.ListOutline();
+        Assert.True(fromEnd.MoveBlockRange(outline[1].AnchorId, outline[1].LastAnchorId, outline[0].AnchorId, Position.Before).Success);
+        Assert.Equal("B b1 A [T] - sectPr", Blocks(fromEnd));
+    }
+
+    [Fact]
+    public void OL016_ADefaultStyleSpelledOn_AndAFallbackThatIsShown_Count()
+    {
+        using var session = new DocxSession(Build(
+            "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" xmlns:zz=\"urn:unknown\">"
+            + "<mc:Choice Requires=\"zz\">" + P("hidden", "Ttulo1") + "</mc:Choice><mc:Fallback>" + P("shown", "Ttulo1") + "</mc:Fallback></mc:AlternateContent>" + P("b1")));
+        Assert.Equal("1:shown", Outline(session));
+
+        using var ms = new MemoryStream();
+        ms.Write(Build(P("plain")));
+        ms.Position = 0;
+        using (var document = WordprocessingDocument.Open(ms, true))
+        {
+            var part = document.MainDocumentPart!.StyleDefinitionsPart!;
+            var normal = part.GetXDocument().Root!.Elements(W.style).First();
+            normal.SetAttributeValue(W._default, "on");
+            normal.Add(new XElement(W.pPr, new XElement(W.outlineLvl, new XAttribute(W.val, "2"))));
+            part.PutXDocument();
+        }
+        using var byDefault = new DocxSession(ms.ToArray());
+        Assert.Equal("3:plain", Outline(byDefault));
     }
 
     [Fact]

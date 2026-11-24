@@ -144,6 +144,33 @@ test.describe('DocxSession (WASM bridge)', () => {
     expect(result.notAParagraph).toBeNull();
   });
 
+  test('the outline lists headings, and a heading moves with its text as one undo', async ({ page }) => {
+    const result = await page.evaluate((bytes: number[]) => {
+      const session = (window as any).Docxodus.openTypedSession(new Uint8Array(bytes)) as DocxSession;
+      try {
+        const anchor = Object.entries(session.project().anchorIndex).find(([, a]) => a.scope === 'body' && a.kind === 'p')![0];
+        const inserted = session.insertParagraph(anchor, 'before', 'Alpha\n\nalpha text\n\nBeta\n\nbeta text');
+        for (const i of [0, 2]) session.setParagraphStyle(inserted.created[i].id, 'Heading1');
+        const order = () => session.listOutline().map(e => e.text).filter(t => t === 'Alpha' || t === 'Beta');
+        const before = order();
+        const [alpha, beta] = ['Alpha', 'Beta'].map(t => session.listOutline().find(e => e.text === t)!);
+        const moved = session.moveBlockRange(beta.anchorId, inserted.created[3].id, alpha.anchorId, 'before');
+        const after = order();
+        return { level: alpha.level, last: alpha.lastAnchorId === inserted.created[1].id, before, moved: moved.success, after,
+          undone: session.undo(), restored: order(),
+          refused: session.moveBlockRange(alpha.anchorId, alpha.lastAnchorId, alpha.lastAnchorId, 'after').error?.code };
+      } finally { session.close(); }
+    }, Array.from(readTestFile('HC001-5DayTourPlanTemplate.docx')));
+    expect(result.level).toBe(1);
+    expect(result.last).toBe(true);
+    expect(result.before).toEqual(['Alpha', 'Beta']);
+    expect(result.moved).toBe(true);
+    expect(result.after).toEqual(['Beta', 'Alpha']);
+    expect(result.undone).toBe(true);
+    expect(result.restored).toEqual(['Alpha', 'Beta']);
+    expect(result.refused).toBe('invalid_position');
+  });
+
   test('block insertion refuses cell anchors before recording history', async ({ page }) => {
     const results = await page.evaluate((bytes: number[]) => {
       const open = (input: Uint8Array) => (window as any).Docxodus.openTypedSession(input) as DocxSession;
