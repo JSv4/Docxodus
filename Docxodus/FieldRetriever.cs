@@ -322,7 +322,7 @@ namespace Docxodus
             OnBackslash,
         }
 
-        private static string[] GetTokens(string field)
+        internal static string[] GetTokens(string field)
         {
             State state = State.InWhiteSpace;
             int tokenStart = 0;
