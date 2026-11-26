@@ -2133,4 +2133,183 @@ public class DocxSessionMoveBlockTests
         Assert.True(Move(session, "B", "C", Position.After).Success);
         Assert.Equal("[T1] < < > M > < M > [T2] C B", Shape(session.Save()));
     }
+
+    // ─── Permission ranges in a tracked move (issue #1864) ──────────────────────────────
+
+    private static XElement PermStart(int id) => new(W.permStart, new XAttribute(W.id, id), new XAttribute(W.edGrp, "everyone"));
+
+    private static XElement PermEnd(int id) => new(W.permEnd, new XAttribute(W.id, id));
+
+    private static XElement Run(string text) => new(W.r, new XElement(W.t, text));
+
+    /// <summary><see cref="Coverage"/> without the ids, which a copy's range does not keep.</summary>
+    private static string[] CoverageWithoutIds(byte[] bytes) => Coverage(BodyOf(bytes))
+        .Select(c => System.Text.RegularExpressions.Regex.Replace(c, "^([A-Za-z]+)[0-9]+", "$1"))
+        .OrderBy(c => c, System.StringComparer.Ordinal).ToArray();
+
+    // A tracked move leaves the block twice, and both copies are live until it is resolved: the ranges in them
+    // must not share ids, and each copy's range has to go with that copy, or it stays behind, empty, beside the
+    // next paragraph. Accepting gives what the untracked move gives, rejecting the original, ids and all.
+    [Theory]
+    [InlineData("its text", "B")]
+    [InlineData("part of its text", "B1B2B3")]
+    [InlineData("an empty paragraph", "")]
+    [InlineData("a table cell", "B")]
+    public void MoveBlock_Tracked_KeepsOnePermissionRangeOverTheMovedBlock(string covering, string moved)
+    {
+        var block = covering switch
+        {
+            "its text" => new XElement(W.p, PermStart(4), Run("B"), PermEnd(4)),
+            "part of its text" => new XElement(W.p, Run("B1"), PermStart(4), Run("B2"), PermEnd(4), Run("B3")),
+            "an empty paragraph" => new XElement(W.p, PermStart(4), PermEnd(4)),
+            _ => Table("B"),
+        };
+        if (covering == "a table cell")
+        {
+            block.Descendants(W.r).Single().AddBeforeSelf(PermStart(4));
+            block.Descendants(W.r).Single().AddAfterSelf(PermEnd(4));
+        }
+        // Another range, whose id the copy's must not take either.
+        var bytes = Document(new XElement(W.p, PermStart(5), Run("A"), PermEnd(5)), block, P("C"));
+        using var untracked = new DocxSession(bytes);
+        Assert.True(Move(untracked, moved, "C", Position.After).Success);
+        using var session = Tracked(bytes);
+
+        Assert.True(Move(session, moved, "C", Position.After).Success);
+
+        var saved = session.Save();
+        AssertValid(saved);
+        Assert.Equal(covering == "a table cell" ? new[] { "delete", "insert" } : new[] { "move" },
+            session.ListRevisions().Select(r => r.Type).OrderBy(t => t, System.StringComparer.Ordinal));
+        foreach (var accepted in new[] { Accept(saved), ResolveEach(saved, accept: true) })
+        {
+            AssertValid(accepted);
+            Assert.Equal(CoverageWithoutIds(untracked.Save()), CoverageWithoutIds(accepted));
+        }
+        foreach (var rejected in new[] { Reject(saved), ResolveEach(saved, accept: false) })
+            Assert.Equal(Coverage(BodyOf(bytes)), Coverage(BodyOf(rejected)));
+    }
+
+    // The markers go into the revision marks of the text beside them, so the move shows the same marks it
+    // shows without them, not extra empty ones.
+    [Fact]
+    public void MoveBlock_Tracked_PutsPermissionMarkersInTheMovedTextsMarks()
+    {
+        using var session = Tracked(Document(P("A"), new XElement(W.p, PermStart(4), Run("B"), PermEnd(4)), P("C")));
+
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+
+        var marks = BodyOf(session.Save()).Descendants().Where(e => e.Name == W.moveFrom || e.Name == W.moveTo)
+            .Where(e => e.Parent!.Name == W.p).ToList();
+        Assert.Equal(2, marks.Count);
+        Assert.All(marks, mark => Assert.Equal(new[] { "permStart", "r", "permEnd" }, mark.Elements().Select(e => e.Name.LocalName)));
+    }
+
+    // A marker in a moved text box is inside the move's mark on the box's run already, so it takes no mark of its
+    // own in the box, where no move range would name it.
+    [Fact]
+    public void MoveBlock_Tracked_PutsNoMarkInsideAMovedTextBox()
+    {
+        XNamespace v = "urn:schemas-microsoft-com:vml";
+        var box = new XElement(W.r, new XElement(W.pict, new XElement(v + "shape", new XElement(v + "textbox",
+            new XElement(W.txbxContent, new XElement(W.p, PermStart(4), Run("BOX"), PermEnd(4)))))));
+        using var session = Tracked(Document(P("A"), new XElement(W.p, Run("B"), box), P("C")));
+
+        Assert.True(Move(session, "BBOX", "C", Position.After).Success);
+
+        var saved = session.Save();
+        AssertValid(saved);
+        Assert.DoesNotContain(BodyOf(saved).Descendants(W.txbxContent).Descendants(), e => e.Name == W.moveFrom || e.Name == W.moveTo);
+    }
+
+    // Control: a range that reaches out of the block could go with only one copy, so that move is still refused,
+    // and not offered.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MoveBlock_Tracked_StillRefusesToTakeABlockOutOfAPermissionRange(bool bodyLevel)
+    {
+        var bytes = Document(bodyLevel
+            ? new object[] { P("A"), PermStart(4), P("B"), PermEnd(4), P("D") }
+            : new object[] { P("A"), P("B", PermStart(4)), P("C", PermEnd(4)), P("D") });
+        using var session = Tracked(bytes);
+
+        Assert.False(Move(session, "B", "D", Position.After).Success);
+
+        Assert.Equal(Coverage(BodyOf(bytes)), Coverage(BodyOf(session.Save())));
+        Assert.Empty(session.ListRevisions());
+    }
+
+    // Resolving a tracked move in the session leaves no comment range of the copy that goes behind, empty.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void MoveBlock_Tracked_LeavesNoEmptyCommentRangeOnceResolvedInTheSession(bool accept)
+    {
+        using var session = new DocxSession(Document(P("A"), P("B"), P("C")), new DocxSessionSettings { RevisionAuthor = "Alice" });
+        Assert.True(session.AddComment(Block(session, "B"), null, "Alice", "look here").Success);
+        session.SetTrackedChanges(TrackedChangeMode.RenderInline);
+        Assert.True(session.MoveBlock(Block(session, "B"), Block(session, "C"), Position.After).Success);
+
+        var move = Assert.Single(session.ListRevisions(), r => r.Type == "move");
+        Assert.True((accept ? session.AcceptRevision(move.Id) : session.RejectRevision(move.Id)).Success);
+
+        var saved = session.Save();
+        AssertValid(saved);
+        var comments = Coverage(BodyOf(saved)).Where(c => c.StartsWith("commentRangeEnd", StringComparison.Ordinal)).ToList();
+        Assert.Equal("B", Assert.Single(comments).Split(": ")[1]);
+    }
+
+    // Permission markers side by side in a tracked move share their copy's mark: no mark holds markers alone.
+    [Fact]
+    public void MoveBlock_Tracked_PutsMarkersSideBySideInOneMark()
+    {
+        var paragraph = new XElement(W.p, PermStart(4), PermStart(5), new XElement(W.r, new XElement(W.t, "B")), PermEnd(4), PermEnd(5));
+        using var session = Tracked(Document(P("A"), paragraph, P("C")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+
+        var body = BodyOf(session.Save());
+        foreach (var mark in body.Descendants().Where(e => e.Name == W.moveFrom || e.Name == W.moveTo).Where(e => e.Parent!.Name == W.p))
+            Assert.Contains(mark.Elements(), e => e.Name == W.r);
+        AssertValid(session.Save());
+    }
+
+    // Markers after the paragraph's last run keep their order inside its mark, so an empty range there stays one
+    // and rejecting the move gives the original back; a proofing mark between a marker and the mark is passed.
+    [Theory]
+    [InlineData("an empty range after the text")]
+    [InlineData("two ends side by side")]
+    [InlineData("a proofing mark between")]
+    public void MoveBlock_Tracked_KeepsTheOrderOfMarkersAfterTheText(string scenario)
+    {
+        var run = new XElement(W.r, new XElement(W.t, "B"));
+        var paragraph = scenario switch
+        {
+            "an empty range after the text" => new XElement(W.p, run, PermStart(6), PermEnd(6)),
+            "two ends side by side" => new XElement(W.p, PermStart(4), PermStart(5), run, PermEnd(4), PermEnd(5)),
+            _ => new XElement(W.p, PermStart(4), new XElement(W.proofErr, new XAttribute(W.type, "spellStart")), run, PermEnd(4)),
+        };
+        var bytes = Document(P("A"), paragraph, P("C"));
+        using var session = Tracked(bytes);
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        var saved = session.Save();
+
+        string Order(XElement p) => string.Join(" ", p.Descendants().Where(e => e.Name == W.permStart || e.Name == W.permEnd)
+            .Select(e => e.Name.LocalName + (string?)e.Attribute(W.id)));
+        var original = Order(paragraph);
+        Assert.Equal(original, Order(BodyOf(Reject(saved)).Elements(W.p).Single(e => Text(e) == "B")));
+        foreach (var mark in BodyOf(saved).Descendants().Where(e => (e.Name == W.moveFrom || e.Name == W.moveTo) && e.Parent!.Name == W.p))
+            Assert.Contains(mark.Elements(), e => e.Name == W.r);
+        Assert.DoesNotContain(Coverage(BodyOf(Accept(saved))), c => c.EndsWith("broken"));
+    }
+
+    // The copy's ids stay within w:id's 32 bits: past the highest there is no room, so the lowest free ones are used.
+    [Fact]
+    public void MoveBlock_Tracked_GivesTheCopyFreeIdsWhenNoneIsLeftAboveTheHighest()
+    {
+        var paragraph = new XElement(W.p, PermStart(4), new XElement(W.r, new XElement(W.t, "B")), PermEnd(4));
+        using var session = Tracked(Document(P("A", PermStart(int.MaxValue), PermEnd(int.MaxValue)), P("Z", PermStart(0), PermEnd(0)), paragraph, P("C")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        AssertValid(session.Save());
+    }
 }

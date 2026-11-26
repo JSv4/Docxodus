@@ -4,6 +4,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -104,6 +105,7 @@ public sealed partial class DocxSession
             foreach (var el in destination.DescendantsAndSelf())
                 el.Attributes(PtOpenXml.Unid).Remove();
             Internal.RevisionOps.RenumberCopiedRevisions(destination, NextRevisionId);
+            RenumberCopiedPermissions(destination, source.Document!.Root!);
 
             // Both copies are live while the revision is pending, so the shared comment ids have to
             // be split. The move SOURCE takes the clones (see CloneCommentsForMoveSource), leaving
@@ -949,8 +951,46 @@ public sealed partial class DocxSession
         XElement paragraph, bool from, string moveName, string author, string date)
     {
         EnsureTrackRevisionsEnabled();
-        var pPr = MarkParagraphContentAndMark(
-            paragraph, from ? W.moveFrom : W.moveTo, author, date)!;
+        var wrapper = from ? W.moveFrom : W.moveTo;
+        var pPr = MarkParagraphContentAndMark(paragraph, wrapper, author, date)!;
+        // Each copy's permission and comment ranges go inside its revision marks, so accepting the move drops the
+        // source's and rejecting it the destination's: left bare, the range of the copy that goes would stay behind,
+        // empty, in a neighbouring paragraph. A marker joins the nearest mark beside it, looking past the markers and
+        // proofing marks between, working back from the last so that markers side by side join the same one, and gets
+        // a mark of its own only where there is none. One in a moved text box is inside its run's mark already.
+        static bool IsMarker(XElement e) => e.Name == W.permStart || e.Name == W.permEnd
+            || e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd;
+        XElement? MarkBeside(XElement marker, bool forward) =>
+            (forward ? marker.ElementsAfterSelf() : marker.ElementsBeforeSelf().Reverse())
+                .SkipWhile(e => IsMarker(e) || e.Name == W.proofErr).FirstOrDefault() is { } e && e.Name == wrapper ? e : null;
+        // Each marker's mark is chosen before any moves, then markers go in so their order is kept: those joining
+        // the mark after them last first (each at its start), those joining the mark before them first first
+        // (each at its end), and a run of markers with neither shares one mark of its own.
+        var plan = paragraph.Descendants().Where(e => IsMarker(e) && !e.Ancestors().Any(a => a.Name == wrapper))
+            .Select(marker => (Marker: marker, Next: MarkBeside(marker, forward: true), Previous: MarkBeside(marker, forward: false)))
+            .ToList();
+        foreach (var (marker, next, _) in plan.Where(x => x.Next is not null).Reverse())
+        {
+            marker.Remove();
+            next!.AddFirst(marker);
+        }
+        foreach (var (marker, _, previous) in plan.Where(x => x.Next is null && x.Previous is not null))
+        {
+            marker.Remove();
+            previous!.Add(marker);
+        }
+        XElement? own = null;
+        foreach (var (marker, _, _) in plan.Where(x => x.Next is null && x.Previous is null))
+        {
+            if (own is not null && ReferenceEquals(marker.PreviousNode, own))
+            {
+                marker.Remove();
+                own.Add(marker);
+                continue;
+            }
+            own = CreateRevisionEnvelope(wrapper, author, date, new XElement(marker));
+            marker.ReplaceWith(own);
+        }
 
         int rangeId = NextRevisionId();
         var start = new XElement(from ? W.moveFromRangeStart : W.moveToRangeStart,
@@ -962,6 +1002,34 @@ public sealed partial class DocxSession
             new XAttribute(W.id, rangeId));
         pPr.AddAfterSelf(start);
         paragraph.Add(end);
+    }
+
+    /// <summary>Give the permission ranges in a tracked move's <paramref name="copy"/> ids no range in
+    /// <paramref name="story"/> uses: both copies are live while the move is pending, and an id pairs a
+    /// range's start with its end. Each range keeps its two ends paired; one that reaches out of the
+    /// block has refused the move already.</summary>
+    private static void RenumberCopiedPermissions(XElement copy, XElement story)
+    {
+        static bool IsPermission(XElement e) => e.Name == W.permStart || e.Name == W.permEnd;
+        var markers = copy.Descendants().Where(IsPermission).ToList();
+        if (markers.Count == 0) return;
+        // Above every id in use, or the lowest free one where that would not fit w:id's 32 bits.
+        var used = story.Descendants().Where(IsPermission)
+            .Select(e => long.TryParse((string?)e.Attribute(W.id), NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) ? id : 0)
+            .ToHashSet();
+        long next = used.DefaultIfEmpty(0).Max() + 1;
+        if (next > int.MaxValue) next = 0;
+        var fresh = new Dictionary<string, string>();
+        foreach (var marker in markers)
+        {
+            var id = (string?)marker.Attribute(W.id) ?? "";
+            if (!fresh.TryGetValue(id, out var renumbered))
+            {
+                while (used.Contains(next)) next++;
+                fresh[id] = renumbered = (next++).ToString(CultureInfo.InvariantCulture);
+            }
+            marker.SetAttributeValue(W.id, renumbered);
+        }
     }
 
     /// <summary>
