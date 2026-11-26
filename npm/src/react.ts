@@ -52,7 +52,7 @@ import {
   getTableColumns,
 } from "./types.js";
 import {
-  PaginationEngine,
+  paginateHtml,
   clearPageCitationHighlight,
   navigateToPageCitation,
   type PaginationOptions,
@@ -721,27 +721,8 @@ export function usePagination(
     setError(null);
 
     try {
-      const container = containerRef.current;
-
-      // Insert HTML into container
-      container.innerHTML = html;
-
-      // Find staging and page container
-      const staging =
-        container.querySelector<HTMLElement>("#pagination-staging") ||
-        container.querySelector<HTMLElement>(`.${cssPrefix}staging`);
-      const pageContainer =
-        container.querySelector<HTMLElement>("#pagination-container") ||
-        container.querySelector<HTMLElement>(`.${cssPrefix}container`);
-
-      if (!staging || !pageContainer) {
-        throw new Error(
-          "Pagination elements not found. Ensure HTML was generated with PaginationMode.Paginated"
-        );
-      }
-
-      // Reconstruct options object for the engine
-      const engineOptions: PaginationOptions = {
+      // paginateHtml keeps the reader's scroll position while it replaces the pages (issue #1863).
+      const paginationResult = paginateHtml(html, containerRef.current, {
         scale,
         showPageNumbers,
         pageGap,
@@ -752,11 +733,7 @@ export function usePagination(
         commentColumnWidthPt,
         commentColumnGapPt,
         layoutToken,
-        // A read-only viewer, like paginateHtml.
-        alignBaselinesToWord: true,
-      };
-      const engine = new PaginationEngine(staging, pageContainer, engineOptions);
-      const paginationResult = engine.paginate();
+      });
       setResult(paginationResult);
     } catch (err) {
       setError(err instanceof Error ? err : new Error(String(err)));

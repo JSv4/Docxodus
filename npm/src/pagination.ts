@@ -8683,6 +8683,26 @@ export class PaginationEngine {
 }
 
 /**
+ * Records the scroll offsets of `element` and of every box around it, across shadow roots and slots,
+ * for the returned function to put back once its pages are replaced (issue #1863). Emptying the element
+ * for the new HTML collapses it for the layout the engine forces, and the browser clamps each of those
+ * offsets to the collapsed size. Put back at once (not smoothly) in the same task, before anything
+ * paints, they fire no scroll event in the common case; an offset that was not clamped is left alone,
+ * so a smooth scroll under way goes on. If the new pages are shorter or narrower, an offset stops at
+ * their end.
+ */
+function keepScrollOffsets(element: HTMLElement): () => void {
+  const scrolled: Array<[Element, number, number]> = [];
+  for (let box: Element | null = element; box;
+    box = box.assignedSlot ?? box.parentElement ?? ((box.parentNode as ShadowRoot | null)?.host ?? null))
+    if (box.scrollTop || box.scrollLeft) scrolled.push([box, box.scrollTop, box.scrollLeft]);
+  return () => {
+    for (const [box, top, left] of scrolled)
+      if (box.scrollTop !== top || box.scrollLeft !== left) box.scrollTo({ top, left, behavior: "instant" });
+  };
+}
+
+/**
  * Convenience function to paginate HTML content.
  *
  * @param html - HTML string with pagination metadata
@@ -8724,34 +8744,38 @@ export function paginateHtml(
     throw new Error("Container element not found");
   }
 
-  // Insert HTML into container
-  containerEl.innerHTML = html;
+  const restoreScroll = keepScrollOffsets(containerEl);
+  try {
+    containerEl.innerHTML = html;
 
-  // Find staging and page container
-  const cssPrefix = options.cssPrefix ?? "page-";
-  const staging = containerEl.querySelector<HTMLElement>("#pagination-staging") ||
-    containerEl.querySelector<HTMLElement>(`.${cssPrefix}staging`);
-  const pageContainer = containerEl.querySelector<HTMLElement>("#pagination-container") ||
-    containerEl.querySelector<HTMLElement>(`.${cssPrefix}container`);
+    // Find staging and page container
+    const cssPrefix = options.cssPrefix ?? "page-";
+    const staging = containerEl.querySelector<HTMLElement>("#pagination-staging") ||
+      containerEl.querySelector<HTMLElement>(`.${cssPrefix}staging`);
+    const pageContainer = containerEl.querySelector<HTMLElement>("#pagination-container") ||
+      containerEl.querySelector<HTMLElement>(`.${cssPrefix}container`);
 
-  if (!staging) {
-    throw new Error(
-      "Pagination staging element not found. Make sure the HTML was generated with PaginationMode.Paginated"
-    );
+    if (!staging) {
+      throw new Error(
+        "Pagination staging element not found. Make sure the HTML was generated with PaginationMode.Paginated"
+      );
+    }
+
+    if (!pageContainer) {
+      throw new Error("Pagination container element not found");
+    }
+
+    // This convenience function is the read-only HTML viewer path. Keep the
+    // lower-level engine conservative by default, while enabling paragraph
+    // fragmentation here unless a caller deliberately opts out.
+    const engine = new PaginationEngine(staging, pageContainer, {
+      ...options,
+      fragmentParagraphs: options.fragmentParagraphs ?? true,
+      alignBaselinesToWord: options.alignBaselinesToWord ?? true,
+      commentColumnPlacement: options.commentColumnPlacement ?? "outside",
+    });
+    return engine.paginate();
+  } finally {
+    restoreScroll();
   }
-
-  if (!pageContainer) {
-    throw new Error("Pagination container element not found");
-  }
-
-  // This convenience function is the read-only HTML viewer path. Keep the
-  // lower-level engine conservative by default, while enabling paragraph
-  // fragmentation here unless a caller deliberately opts out.
-  const engine = new PaginationEngine(staging, pageContainer, {
-    ...options,
-    fragmentParagraphs: options.fragmentParagraphs ?? true,
-    alignBaselinesToWord: options.alignBaselinesToWord ?? true,
-    commentColumnPlacement: options.commentColumnPlacement ?? "outside",
-  });
-  return engine.paginate();
 }
