@@ -2184,10 +2184,7 @@ namespace Docxodus
                     {
                         if ((string?)span.Attribute(XNamespace.Xml + "space") == "preserve")
                             previous.SetAttributeValue(XNamespace.Xml + "space", "preserve");
-                        // Move nodes rather than copying their Value: XEntity must keep its serializer.
-                        var nodes = span.Nodes().ToList();
-                        span.RemoveNodes();
-                        previous.Add(nodes);
+                        previous.Add(TakeNodes(span));
                     }
                     else { parent.Add(span); previous = span; }
                 }
@@ -6351,6 +6348,16 @@ namespace Docxodus
 
         }
 
+        /// <summary>Removes and returns <paramref name="container"/>'s nodes, to be added elsewhere. Adding a
+        /// node that still has a parent adds a copy, and a copy of an <see cref="XEntity"/> direction mark is
+        /// plain text that shows "#x200e" (issue #1862).</summary>
+        private static List<XNode> TakeNodes(XElement container)
+        {
+            var nodes = container.Nodes().ToList();
+            container.RemoveNodes();
+            return nodes;
+        }
+
         private static IEnumerable<XElement> SplitBreakParagraph(XElement paragraph, string kind, bool splitMark = false)
         {
             var markerName = "data-" + kind + "-break";
@@ -6378,22 +6385,15 @@ namespace Docxodus
             List<XElement> Split(XElement source)
             {
                 var pieces = new List<XElement> { CopyShell(source) };
-                foreach (var node in source.Nodes().ToList())
+                foreach (var node in TakeNodes(source))
                 {
-                    if (node is XElement child)
+                    if (node is XElement marker && IsMarker(marker))
                     {
-                        if (IsMarker(child))
-                        {
-                            markers.Add(child);
-                            pieces.Add(CopyShell(source));
-                            continue;
-                        }
-                        if (!InlineContainer(child))
-                        {
-                            child.Remove();
-                            pieces[^1].Add(child);
-                            continue;
-                        }
+                        markers.Add(marker);
+                        pieces.Add(CopyShell(source));
+                    }
+                    else if (node is XElement child && InlineContainer(child))
+                    {
                         var children = Split(child);
                         pieces[^1].Add(children[0]);
                         foreach (var tail in children.Skip(1))
@@ -6448,12 +6448,7 @@ namespace Docxodus
                     // Bookmarks and empty hyperlink/revision shells have identity, but no line.
                     // The paragraph mark stays before the break, whose marker flow consumes.
                     // Keep these targets on the preceding paragraph so they survive pagination.
-                    var owner = result.Last(e => !IsMarker(e));
-                    foreach (var node in fragment.Nodes().ToList())
-                    {
-                        node.Remove();
-                        owner.Add(node);
-                    }
+                    result.Last(e => !IsMarker(e)).Add(TakeNodes(fragment));
                 }
                 // A leading empty carrier keeps an intentional first blank page. Its zero-height
                 // canonical anchor is already excluded by the paginator's explicit-break contract.
@@ -12728,7 +12723,7 @@ namespace Docxodus
                         if (inner.Attributes().All(attribute => attribute.Name == "id"))
                             inner.Name = Xhtml.span;
                         else if (inner.Annotation<WordHyperlinkAnchor>() != null)
-                            inner.ReplaceWith(inner.Nodes());
+                            inner.ReplaceWith(TakeNodes(inner));
                     }
                     var a2 = a as XElement;
                     if (!a2.Nodes().Any())
