@@ -1360,20 +1360,14 @@ internal static class RevisionOps
     }
 
     /// <summary>
-    /// Whether <paramref name="paragraph"/> is the paragraph a table needs after it: it directly
-    /// follows a table, and only the end of its container, the section properties or another
-    /// table follows it. Without it the table would end a cell or the body, or touch the next
-    /// table and be read as one table with it, so resolving a revision never removes it while
-    /// the table stands.
+    /// Whether <paramref name="paragraph"/> is the paragraph a table needs after it: a table comes
+    /// before it, and only the end of the cell or body, the section properties or another table
+    /// after it, looking past range markers and the edges of content controls and custom XML
+    /// elements as a move does (<see cref="DocxSession.TablesMeet"/>). Without it the table would end
+    /// a cell or the body, or touch the next table and be read as one table with it, so resolving a
+    /// revision never removes it while the table stands.
     /// </summary>
-    internal static bool ClosesTable(XElement paragraph)
-    {
-        if (SiblingBlock(paragraph, forward: false)?.Name != W.tbl) return false;
-        // The end of a content control is not the end of what holds it.
-        XElement? next = null;
-        for (XElement? e = paragraph; e is not null && next is null; e = BlockWrapperOf(e)) next = SiblingBlock(e, forward: true);
-        return next is null || next.Name == W.sectPr || next.Name == W.tbl;
-    }
+    internal static bool ClosesTable(XElement paragraph) => DocxSession.TablesMeet(paragraph, accepted: null);
 
     /// <summary>The block content control or custom XML element <paramref name="block"/> is directly in, or null.</summary>
     internal static XElement? BlockWrapperOf(XElement block) =>

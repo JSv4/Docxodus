@@ -8326,8 +8326,9 @@ Why the closing paragraph matters: a table cannot end a table cell or the body, 
 with nothing between them read as one table. So the paragraph after an inserted table often
 exists only because of the table, and resolving the table's rows without it can leave a cell
 ending in a table, a body ending in a table, or two tables fused. Docxodus now recognises that
-paragraph (`RevisionOps.ClosesTable`: directly after a table, with only the end of its
-container, the section properties or another table after it) and uses it twice. The revision
+paragraph (`RevisionOps.ClosesTable`: a table before it, and only the end of its cell or the
+body, the section properties or another table after it, looking past range markers and the edges
+of content controls and custom XML elements) and uses it twice. The revision
 registry attaches an empty closing paragraph whose mark the same edit revised to the row
 revision of the wholly revised table before it (`ClosingTableGroup`; never a section-break
 paragraph, another author's, or a blank line the table does not need). And resolving any
@@ -8362,8 +8363,9 @@ Nor do a permission marker or the edge of a content control (#1861):
 | Docxodus with #1861 | paragraph added | paragraph added |
 
 `InsertTable`, `MoveBlock` and `MoveBlockRange` see past both when they decide whether a table needs the
-paragraph (`DocxSession.KeepTablesApart`). Resolving a revision (`RevisionOps.ClosesTable`) takes the end
-of a content control for the end of the body only where nothing follows the control.
+paragraph (`DocxSession.KeepTablesApart`), and resolving a revision (`RevisionOps.ClosesTable`) asks the
+same question (`DocxSession.TablesMeet`), so it keeps the paragraph between two tables that only a
+content control's edge, a custom XML element's edge or a permission marker would otherwise separate.
 
 One placement has no reversible encoding: right after a paragraph whose mark is a pending
 insertion and which keeps something once it is rejected, such as the first half of a pending

@@ -1774,8 +1774,10 @@ paragraph after the table — the table would otherwise end the body or a cell, 
 against another table — that paragraph's mark is inserted too, so a reject leaves nothing
 behind.
 
-That closing paragraph is what `RevisionOps.ClosesTable` recognises: a paragraph directly after
-a table with only the end of its container, the section properties or another table after it.
+That closing paragraph is what `RevisionOps.ClosesTable` recognises: a paragraph with a table
+before it and only the end of its cell or the body, the section properties or another table after
+it, looking past range markers and the edges of content controls and custom XML elements, by the
+rule moves use (`DocxSession.TablesMeet`).
 Two rules hang off it:
 
 - **Grouping.** The registry already groups consecutive inserted rows with one stamp into a

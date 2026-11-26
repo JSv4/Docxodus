@@ -531,21 +531,27 @@ public sealed partial class DocxSession
         return kept;
     }
 
-    private static bool TablesMeet(XElement separator, bool accepted) =>
+    /// <summary>Whether two tables would touch, or a table end the body, without <paramref name="separator"/>:
+    /// a table before it and a table, the section properties or nothing after it. Resolving a revision
+    /// asks this of the document as it stands (<paramref name="accepted"/> null) before it removes an
+    /// empty paragraph (<see cref="Internal.RevisionOps.ClosesTable"/>).</summary>
+    internal static bool TablesMeet(XElement separator, bool? accepted) =>
         NeighbourBlock(separator, forward: false, accepted)?.Name == W.tbl
         && NeighbourBlock(separator, forward: true, accepted)?.Name is var next
         && (next is null || next == W.sectPr || next == W.tbl);
 
     /// <summary>The block before or after <paramref name="block"/> once the pending changes are accepted
-    /// or rejected: past markers, the edges of block content controls (neither keeps two tables
-    /// apart) and blocks that go. Null at the body's start or end.</summary>
-    private static XElement? NeighbourBlock(XElement block, bool forward, bool accepted)
+    /// or rejected (or as they stand, when <paramref name="accepted"/> is null): past markers, the edges
+    /// of block content controls (neither keeps two tables apart) and blocks that go. Null at the
+    /// body's start or end.</summary>
+    private static XElement? NeighbourBlock(XElement block, bool forward, bool? accepted)
     {
         for (XElement? e = block; e is not null; e = Internal.RevisionOps.BlockWrapperOf(e))
         {
             var beside = WmlToMarkdownConverter.ExpandBlockWrappers(forward ? e.ElementsAfterSelf() : e.ElementsBeforeSelf());
             if ((forward ? beside : beside.Reverse())
-                .FirstOrDefault(b => !IsBlockLevelMarker(b) && b.Name != W.customXmlPr && !Goes(b, accepted)) is { } found) return found;
+                .FirstOrDefault(b => !IsBlockLevelMarker(b) && b.Name != W.customXmlPr && !(accepted is { } view && Goes(b, view))) is { } found)
+                return found;
         }
         return null;
     }

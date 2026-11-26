@@ -908,11 +908,11 @@ public class DocxSessionMoveBlockTests
     }
 
     /// <summary>Whether a table touches another one or ends the body, past markers and the edges of
-    /// content controls, neither of which keeps two tables apart.</summary>
+    /// content controls and custom XML elements, none of which keeps two tables apart.</summary>
     private static bool TableTouches(XElement body)
     {
         static System.Collections.Generic.IEnumerable<XElement> Flat(XElement container) => container.Elements()
-            .SelectMany(e => e.Name == W.sdt ? Flat(e.Element(W.sdtContent)!) : new[] { e })
+            .SelectMany(e => e.Name == W.sdt ? Flat(e.Element(W.sdtContent)!) : e.Name == W.customXml ? Flat(e) : new[] { e })
             .Where(e => e.Name == W.p || e.Name == W.tbl);
         var blocks = Flat(body).ToList();
         return blocks[^1].Name == W.tbl || blocks.Zip(blocks.Skip(1)).Any(p => p.First.Name == W.tbl && p.Second.Name == W.tbl);
@@ -1306,6 +1306,38 @@ public class DocxSessionMoveBlockTests
 
         Assert.Empty(session.ListRevisions());
         Assert.Equal(accept ? "[T1] - [T2] C B" : Shape(bytes), Shape(session.Save()));
+    }
+
+    // Resolving a revision keeps the paragraph that holds two tables apart by the rule a move uses:
+    // the edges of content controls and custom XML elements and permission markers do not.
+    [Theory]
+    [InlineData("control", true, "(A [T1] -) ([T2] B) C")]
+    [InlineData("control", false, "(A [T1] -) ([T2] B) C")]
+    [InlineData("custom XML", true, "(A [T1] -) {[T2] B} C")]
+    [InlineData("custom XML", false, "(A [T1] -) {[T2] B} C")]
+    [InlineData("permission", true, "A [T1] < - > [T2] B")]
+    [InlineData("permission", false, "A [T1] < - > [T2] B")]
+    [InlineData("nothing", true, "A [T1] B C")] // control: no table after it, so the paragraph goes
+    public void ResolvingARevision_KeepsTheParagraphBetweenTwoTables(string between, bool accept, string expected)
+    {
+        // Accepting removes a paragraph whose mark is deleted; rejecting, one whose mark is inserted.
+        var mark = new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, Revised(accept ? W.del : W.ins))));
+        var bytes = Document(between switch
+        {
+            "control" => new object[] { Control(P("A"), Table("T1"), mark), Control(Table("T2"), P("B")), P("C") },
+            "custom XML" => new object[] { Control(P("A"), Table("T1"), mark),
+                new XElement(W.customXml, new XAttribute(W.element, "e"), Table("T2"), P("B")), P("C") },
+            "permission" => new object[] { P("A"), Table("T1"), new XElement(W.permStart, new XAttribute(W.id, 8)), mark,
+                new XElement(W.permEnd, new XAttribute(W.id, 8)), Table("T2"), P("B") },
+            _ => new object[] { P("A"), Table("T1"), mark, P("B"), P("C") },
+        });
+        using var session = new DocxSession(bytes);
+        var revision = Assert.Single(session.ListRevisions());
+
+        Assert.True((accept ? session.AcceptRevision(revision.Id) : session.RejectRevision(revision.Id)).Success);
+
+        Assert.Empty(session.ListRevisions());
+        Assert.Equal(expected, Shape(session.Save()));
     }
 
     // A blank paragraph someone adds after a moved one is their own insertion.
