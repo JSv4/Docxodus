@@ -945,14 +945,15 @@ EditResult MoveBlockRange(string firstAnchorId, string lastAnchorId, string targ
 `MoveBlockRange` moves a run of top-level blocks beside another block as one undo step, which is how
 a heading is dragged with its text. It does not track its moves: with tracked changes on
 (`RenderInline`) it is refused, even for a run of one paragraph that `MoveBlock` would move tracked.
-Otherwise it decides and moves as a direct `MoveBlock` does: the same markers travel, the same moves are
-refused and the same paragraphs are added between tables. It moves the children of the closest body or
-block content control that holds the run and the target, so blocks that share a control move inside
-it. A control that holds only some of them moves whole: a run that reaches into one must cover it, and
-a target inside one must be its first block for `Before` or its last for `After`, where it stands for
-the place just outside the control, so membership never changes; any other target in it, and a move
-that would split a control, is refused (`InvalidPosition`). A move to where the run already is succeeds and
-takes no undo step.
+Otherwise it shares a direct `MoveBlock`'s rules for what may move: the same markers travel, the same
+ranges, fields and section breaks refuse a move, and the same paragraphs are added between tables. Where
+it may land differs. `MoveBlock` moves a block among its own siblings. `MoveBlockRange` moves the children
+of the closest body or block content control that holds the run and the target, so blocks that share a
+control move inside it. A content control or block-level custom XML element that holds only some of them
+moves whole: a run that reaches into one must cover it, and a target inside one must be its first block
+for `Before` or its last for `After`, where it stands for the place just outside it, so membership never
+changes; any other target in it, and a move that would split one, is refused (`InvalidPosition`). A move
+to where the run already is succeeds and takes no undo step.
 
 ## Bulk block removal — `DeleteRange` and `DeleteSection`
 

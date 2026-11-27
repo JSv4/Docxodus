@@ -1348,10 +1348,12 @@ internal static class RevisionOps
         RevisionUnit mark, Dictionary<XElement, RevisionGroup> rowGroupByTr, bool tableAfter = false)
     {
         var paragraph = mark.Paragraph;
-        // Word's paragraph after a table is the table's while the table needs it; Docxodus's is the table's
-        // edit by its stamp, also where only accepting another change would leave the tables touching.
+        // Word's paragraph after a table is the table's while the table needs it; Docxodus's is the table's edit
+        // by its stamp also where only resolving another change would leave the tables touching, but never
+        // where no resolution would.
         if (paragraph is null || paragraph.Elements().Any(e => !IsIgnorableBetween(e))
-            || paragraph.Element(W.pPr)?.Element(W.sectPr) is not null || !(ClosesTable(paragraph) || IsEditStamp(mark.Date))
+            || paragraph.Element(W.pPr)?.Element(W.sectPr) is not null
+            || !(ClosesTable(paragraph) || (IsEditStamp(mark.Date) && DocxSession.TablesCanMeet(paragraph, mark.Date)))
             || SiblingBlock(paragraph, forward: tableAfter) is not { } table || table.Name != W.tbl)
             return null;
         var rows = WordprocessingMLUtil.TableRows(table).ToList();

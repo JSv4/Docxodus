@@ -891,18 +891,27 @@ public class DocxSessionMoveBlockTests
     private static string[] Coverage(XElement body)
     {
         var elements = body.Descendants().ToList();
-        var fields = new System.Collections.Generic.Stack<int>();
+        // A field's instructions and its result are covered separately: its separate is the boundary.
+        var fields = new System.Collections.Generic.Stack<(int Begin, int Separate)>();
         var found = new System.Collections.Generic.List<string>();
+        string Words(int from, int to) => string.Join(" ", elements.Take(to).Skip(from).Where(e => e.Name == W.t)
+            .Select(t => t.Value).OrderBy(v => v, System.StringComparer.Ordinal));
         for (int i = 0; i < elements.Count; i++)
         {
             var (name, id) = (elements[i].Name.LocalName, (string?)elements[i].Attribute(W.id));
             var fieldCharacter = (string?)elements[i].Attribute(W.fldCharType);
-            if (fieldCharacter == "begin") fields.Push(i);
-            if (fieldCharacter != "end" && !name.EndsWith("End")) continue;
-            int start = fieldCharacter is not null ? (fields.Count > 0 ? fields.Pop() : -1)
-                : elements.FindIndex(e => e.Name.LocalName == name[..^3] + "Start" && (string?)e.Attribute(W.id) == id);
-            var words = elements.Take(i).Skip(start).Where(e => e.Name == W.t).Select(t => t.Value).OrderBy(v => v, System.StringComparer.Ordinal);
-            found.Add(start < 0 || start > i ? $"{name}{id} broken" : $"{name}{id}: {string.Join(" ", words)}");
+            if (fieldCharacter == "begin") fields.Push((i, -1));
+            if (fieldCharacter == "separate" && fields.Count > 0) fields.Push((fields.Pop().Begin, i));
+            if (fieldCharacter == "end")
+            {
+                var (begin, separate) = fields.Count > 0 ? fields.Pop() : (-1, -1);
+                if (begin < 0) { found.Add("field broken"); continue; }
+                found.Add(separate < 0 ? $"field: {Words(begin, i)}" : $"field instructions: {Words(begin, separate)} | result: {Words(separate, i)}");
+                continue;
+            }
+            if (fieldCharacter is not null || !name.EndsWith("End")) continue;
+            int start = elements.FindIndex(e => e.Name.LocalName == name[..^3] + "Start" && (string?)e.Attribute(W.id) == id);
+            found.Add(start < 0 || start > i ? $"{name}{id} broken" : $"{name}{id}: {Words(start, i)}");
         }
         return found.OrderBy(v => v, System.StringComparer.Ordinal).ToArray();
     }
@@ -1472,6 +1481,14 @@ public class DocxSessionMoveBlockTests
     public static TheoryData<string, object[]> CrowdedBodies() => new()
     {
         {
+            "a field whose begin, separate and end are in different paragraphs",
+            new object[]
+            {
+                P("A", FieldChar("begin"), new XElement(W.r, new XElement(W.instrText, " TOC "))), P("S", FieldChar("separate")),
+                P("R1"), P("R2"), P("E", FieldChar("end")), P("F"),
+            }
+        },
+        {
             "a bookmark whose end comes before its start",
             new object[] { P("X"), BookmarkEnd(3), P("B"), P("A", BookmarkStart(3)), P("D") }
         },
@@ -1852,12 +1869,13 @@ public class DocxSessionMoveBlockTests
         Assert.Equal(Shape(bytes), Shape(session.Save()));
     }
 
-    // Only a session's own edit stamp links marks: a producer that writes one fractional date for many changes,
-    // as a comparison does with wall-clock dates, keeps an empty paragraph after a table its own change.
-    [Fact]
-    public void ListRevisions_AFractionalDateFromAnotherProducerLinksNothing()
+    // A shared fractional date is no proof one edit made both: an empty paragraph after a table that does not
+    // need it stays its own change, whether the date is written with an offset or in the session's own UTC form.
+    [Theory]
+    [InlineData("2026-11-26T23:55:30.9795274-06:00")]
+    [InlineData("2026-11-27T05:55:30.9795274Z")]
+    public void ListRevisions_AFractionalDateFromAnotherProducerLinksNothing(string date)
     {
-        const string date = "2026-11-26T23:55:30.9795274-06:00";
         XElement Ins(int id) => new(W.ins, new XAttribute(W.id, id), new XAttribute(W.author, "Cmp"), new XAttribute(W.date, date));
         var table = Table("New");
         foreach (var row in table.Elements(W.tr)) row.AddFirst(new XElement(W.trPr, Ins(80)));
@@ -1877,5 +1895,65 @@ public class DocxSessionMoveBlockTests
             Range(W.customXmlInsRangeEnd, 95), BookmarkStart(7), P("B"), Table("T2"), P("C"), BookmarkEnd(7), BookmarkEnd(5), P("D")));
         Assert.True(Move(session, "B", "C", Position.After).Success);
         Assert.Equal("[T1] - < < > < [T2] C B > > D", Shape(session.Save()));
+    }
+
+    // Markup in a branch of alternate content that is not shown pairs with nothing.
+    [Theory]
+    [InlineData("wps", false)] // the choice is shown, so the fallback's end is not the field's
+    [InlineData("zz", true)]   // the fallback is shown: its end is the field's, and C is outside it
+    public void MoveBlock_IgnoresTheFieldCharactersOfAnAlternateBranchNotShown(string requires, bool allowed)
+    {
+        XNamespace mc = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+        var alternate = new XElement(W.r, new XElement(mc + "AlternateContent",
+            new XAttribute(XNamespace.Xmlns + "wps", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"),
+            new XAttribute(XNamespace.Xmlns + "zz", "urn:example:unsupported"),
+            new XElement(mc + "Choice", new XAttribute("Requires", requires), new XElement(W.t, "x")),
+            new XElement(mc + "Fallback", new XElement(W.fldChar, new XAttribute(W.fldCharType, "end")))));
+        using var session = new DocxSession(Document(
+            P("A", FieldChar("begin"), new XElement(W.r, new XElement(W.instrText, " TOC "))),
+            new XElement(W.p, alternate, new XElement(W.r, new XElement(W.t, "B"))), P("C", FieldChar("end")), P("D")));
+        Assert.Equal(allowed, Move(session, "C", "D", Position.After).Success);
+    }
+
+    // A field's instructions keep their order: a fragment in one paragraph does not move before another.
+    [Fact]
+    public void MoveBlock_KeepsTheOrderOfAFieldsInstructions()
+    {
+        XElement Instruction(string text) => new(W.r, new XElement(W.instrText, new XAttribute(Xml + "space", "preserve"), text));
+        using var session = new DocxSession(Document(P("A", FieldChar("begin"), Instruction(" TOC ")),
+            P("S1", Instruction("\\o ")), P("S2", Instruction("\"1-2\" ")), P("R", FieldChar("separate")), P("E", FieldChar("end")), P("F")));
+        Assert.False(Move(session, "S2", "S1", Position.Before).Success);
+    }
+
+    // Untracked, the tables stay apart however each pending change between them is resolved: rejecting the
+    // insertion and accepting the deletion would leave nothing between them.
+    [Fact]
+    public void MoveBlock_KeepsTablesApartWhicheverWayEachChangeBetweenThemIsResolved()
+    {
+        using var session = new DocxSession(Document(Table("T1"), RevisedP("new", W.ins), RevisedP("gone", W.del), P("B"), Table("T2"), P("C")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] new - - [T2] C B", Shape(session.Save()));
+    }
+
+    // A bookmark whose end comes before its start covers nothing, so it counts for nothing in placing the paragraph.
+    [Fact]
+    public void MoveBlock_PlacesTheParagraphIgnoringABookmarkWhoseEndComesFirst()
+    {
+        using var session = new DocxSession(Document(Table("T1"), BookmarkStart(1), BookmarkEnd(2), P("B"), BookmarkStart(2),
+            Table("T2"), P("C"), BookmarkEnd(1), P("D")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] - < > < [T2] C B > D", Shape(session.Save()));
+    }
+
+    // A move's two halves resolve together: with both between the tables, one always stays, so no paragraph is added.
+    [Fact]
+    public void MoveBlock_AddsNoParagraphWhereOnlyBothHalvesOfOneMoveWouldGo()
+    {
+        using var mover = Tracked(Document(Table("T1"), P("M"), P("B"), Table("T2"), P("C")));
+        Assert.True(Move(mover, "M", "B", Position.After).Success);
+        using var session = new DocxSession(mover.Save());
+
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] M M [T2] C B", Shape(session.Save()));
     }
 }

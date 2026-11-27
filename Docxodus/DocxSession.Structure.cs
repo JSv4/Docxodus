@@ -358,32 +358,43 @@ public sealed partial class DocxSession
         var past = container.AncestorsAndSelf().TakeWhile(e => e != body)
             .Select(e => e.ElementsAfterSelf().FirstOrDefault()).FirstOrDefault(e => e is not null);
         var starts = new Dictionary<(XName End, string Id), int>();
-        // Each open field: the child its begin is in, and the child of its separate once seen.
-        var fields = new Stack<(int Begin, int? Separate)>();
+        // Each open field: the child its begin is in, the children its instructions go on into, and the child of
+        // its separate once seen.
+        var fields = new Stack<(int Begin, List<int> Instructions, int? Separate)>();
         int at = -1;
         foreach (var e in body.Descendants())
         {
             if (ReferenceEquals(e.Parent, container)) at = index[e];
             else if (ReferenceEquals(e, past)) at = children.Count;
-            if ((e.Name == W.fldChar || CrossBlockRangeNames.ContainsKey(e.Name))
-                && e.Ancestors(W.txbxContent).FirstOrDefault() != story)
+            if ((e.Name == W.fldChar || e.Name == W.instrText || CrossBlockRangeNames.ContainsKey(e.Name))
+                && (e.Ancestors(W.txbxContent).FirstOrDefault() != story || !WmlToMarkdownConverter.IsSelectedMarkup(e)))
                 continue;
+            if (e.Name == W.instrText)
+            {
+                if (fields.Count > 0 && fields.Peek().Separate is null && fields.Peek().Instructions is var instructions
+                    && (instructions.Count == 0 ? fields.Peek().Begin : instructions[^1]) != at)
+                    instructions.Add(at);
+                continue;
+            }
             if (e.Name == W.fldChar)
             {
                 var type = (string?)e.Attribute(W.fldCharType);
-                if (type == "begin") fields.Push((at, null));
+                if (type == "begin") fields.Push((at, new List<int>(), null));
                 else if (type == "separate" && fields.Count > 0 && fields.Peek().Separate is null)
-                    fields.Push((fields.Pop().Begin, at));
+                {
+                    var (begin, instructions, _) = fields.Pop();
+                    fields.Push((begin, instructions, at));
+                }
                 else if (type == "end" && fields.Count > 0)
                 {
-                    // The separate is where the result begins: instructions and result are each a range.
-                    var (begin, separate) = fields.Pop();
-                    if (separate is { } middle && middle != begin && middle != at)
-                    {
-                        Add(begin, middle, "field");
-                        Add(middle, at, "field");
-                    }
-                    else Add(begin, at, "field");
+                    // The instructions keep their order, each fragment a range to the next up to the separate, where
+                    // the result begins; the result is one range, so its paragraphs can still be reordered.
+                    var (begin, instructions, separate) = fields.Pop();
+                    var points = new List<int> { begin };
+                    foreach (var child in instructions.Append(separate ?? at))
+                        if (child != points[^1]) points.Add(child);
+                    for (int k = 0; k + 1 < points.Count; k++) Add(points[k], points[k + 1], "field");
+                    if (separate is { } middle && middle != at) Add(middle, at, "field");
                 }
             }
             else if (e.Name == W.sectPr)
@@ -544,10 +555,13 @@ public sealed partial class DocxSession
             var separator = place is null ? leftBehind! : new XElement(W.p);
             place?.Invoke(separator);
             PlaceOutsideRanges(separator);
-            // The tables stay apart in the markup as it stands and once the edit is accepted; an edit that is
-            // not tracked has to hold once the other pending changes are rejected too.
-            if (TablesMeet(separator, accepted: true) || TablesMeet(separator, accepted: null)
-                || (_trackedChanges != TrackedChangeMode.RenderInline && TablesMeet(separator, accepted: false)))
+            // An edit that is not tracked keeps the tables apart however the pending changes beside it are
+            // resolved, each on its own. A tracked one keeps them apart as the markup stands and once it is
+            // accepted, adding nothing that only another change's resolution would need; rejecting it gives the
+            // original, and where the paragraph is needed later, resolving the other change keeps it (ClosesTable).
+            if (_trackedChanges == TrackedChangeMode.RenderInline
+                    ? TablesMeet(separator, accepted: true) || TablesMeet(separator, accepted: null)
+                    : TablesCanMeet(separator, editDate: null))
             {
                 UnidHelper.AssignToSelfAndDescendants(separator);
                 kept.Add(separator);
@@ -586,12 +600,21 @@ public sealed partial class DocxSession
         var open = new Dictionary<(XName End, string Id), int>();
         (XName End, string Id)? Key(XElement m) =>
             CrossBlockRangeNames.TryGetValue(m.Name, out var r) ? (r.End, (string?)m.Attribute(W.id) ?? "") : null;
-        // A pair with both ends here encloses no block, so it holds no control to stay against.
+        // A pair with both ends here encloses no block, so it holds no control to stay against; one whose end comes
+        // before its start covers nothing, so it counts for nothing.
         var keys = markers.Select(Key).ToList();
         var tally = keys.OfType<(XName End, string Id)>().GroupBy(k => k).ToDictionary(g => g.Key, g => g.Count());
+        var inverted = new HashSet<(XName End, string Id)>();
+        var startsSeen = new HashSet<(XName End, string Id)>();
+        for (int i = 0; i < count; i++)
+            if (keys[i] is { } k)
+            {
+                if (markers[i].Name != k.End) startsSeen.Add(k);
+                else if (!startsSeen.Contains(k) && Enumerable.Range(i + 1, count - i - 1).Any(j => keys[j] == k)) inverted.Add(k);
+            }
         for (int i = 0; i < count; i++)
         {
-            if (keys[i] is not { } key) continue;
+            if (keys[i] is not { } key || inverted.Contains(key)) continue;
             bool isEnd = markers[i].Name == key.End;
             if (markers[i].Name.LocalName.StartsWith("customXml", StringComparison.Ordinal) && tally[key] == 1)
             {
@@ -628,16 +651,70 @@ public sealed partial class DocxSession
     /// or rejected (or as they stand, when <paramref name="accepted"/> is null): past markers, the edges
     /// of block content controls (neither keeps two tables apart) and blocks that go. Null at the
     /// body's start or end.</summary>
-    private static XElement? NeighbourBlock(XElement block, bool forward, bool? accepted)
+    private static XElement? NeighbourBlock(XElement block, bool forward, bool? accepted) =>
+        Beside(block, forward).FirstOrDefault(b => !IsBlockLevelMarker(b) && b.Name != W.customXmlPr && !(accepted is { } view && Goes(b, view)));
+
+    /// <summary>The blocks and markers beside <paramref name="block"/>, nearest first: its siblings, then its
+    /// wrapper's, out to the body or cell; the block content controls and custom XML elements on the way are
+    /// entered, not stepped over. Lazy, so a caller that stops at the first block reads no further.</summary>
+    private static IEnumerable<XElement> Beside(XElement block, bool forward)
     {
         for (XElement? e = block; e is not null; e = Internal.RevisionOps.BlockWrapperOf(e))
+            for (var node = forward ? e.NextNode : e.PreviousNode; node is not null; node = forward ? node.NextNode : node.PreviousNode)
+                if (node is XElement sibling)
+                    foreach (var inner in Entered(sibling, forward, 0)) yield return inner;
+
+        static IEnumerable<XElement> Entered(XElement element, bool forward, int depth)
         {
-            var beside = WmlToMarkdownConverter.ExpandBlockWrappers(forward ? e.ElementsAfterSelf() : e.ElementsBeforeSelf());
-            if ((forward ? beside : beside.Reverse())
-                .FirstOrDefault(b => !IsBlockLevelMarker(b) && b.Name != W.customXmlPr && !(accepted is { } view && Goes(b, view))) is { } found)
-                return found;
+            if ((element.Name != W.sdt && element.Name != W.customXml) || depth >= Ir.IrReader.MaxSdtDepth)
+            {
+                yield return element;
+                yield break;
+            }
+            var content = element.Name == W.sdt
+                ? element.Element(W.sdtContent)?.Elements() ?? Enumerable.Empty<XElement>()
+                : element.Elements().Where(c => c.Name != W.customXmlPr);
+            foreach (var child in forward ? content : content.Reverse())
+                foreach (var inner in Entered(child, forward, depth + 1)) yield return inner;
         }
-        return null;
+    }
+
+    /// <summary>Whether two tables could touch without <paramref name="separator"/>, or a table end the body, once the
+    /// pending changes beside it are resolved, each accepted or rejected on its own: a table that can stay before it,
+    /// with only blocks that can go between, and the same after it, or the section properties or the end. The marks
+    /// of the edit dated <paramref name="editDate"/> go together: as if that edit were accepted, since rejecting it
+    /// takes the separator away with it.</summary>
+    internal static bool TablesCanMeet(XElement separator, string? editDate)
+    {
+        bool OfEdit(XElement b) => editDate is not null && b.Descendants().Any(e =>
+            (e.Name == W.ins || e.Name == W.del || e.Name == W.moveFrom || e.Name == W.moveTo) && (string?)e.Attribute(W.date) == editDate);
+        bool CanGo(XElement b) => Goes(b, accepted: true) || (!OfEdit(b) && Goes(b, accepted: false));
+        bool CanStay(XElement b) => !Goes(b, accepted: true) || (!OfEdit(b) && !Goes(b, accepted: false));
+        // A move's two halves are one decision: its source goes only when it is accepted, its destination only
+        // when it is rejected, so the paragraphs between the tables can all go only if no move needs both.
+        var decided = new Dictionary<(string? Author, string? Date), bool>();
+        bool Agrees(XElement b)
+        {
+            if (b.Element(W.pPr)?.Element(W.rPr)?.Elements().FirstOrDefault(e => e.Name == W.moveFrom || e.Name == W.moveTo) is not { } mark)
+                return true;
+            var key = ((string?)mark.Attribute(W.author), (string?)mark.Attribute(W.date));
+            bool accepted = mark.Name == W.moveFrom;
+            if (decided.TryGetValue(key, out bool earlier)) return earlier == accepted;
+            decided[key] = accepted;
+            return true;
+        }
+        bool Reaches(bool forward)
+        {
+            foreach (var b in Beside(separator, forward))
+            {
+                if (IsBlockLevelMarker(b) || b.Name == W.customXmlPr) continue;
+                if (b.Name == W.tbl && CanStay(b)) return true;
+                if (b.Name == W.sectPr) return forward;
+                if (!CanGo(b) || !Agrees(b)) return false;
+            }
+            return forward;
+        }
+        return Reaches(forward: false) && Reaches(forward: true);
     }
 
     /// <summary>Whether a paragraph with its mark, or a table, goes when every pending change is accepted
