@@ -63,6 +63,11 @@ without a note retain the same alignment. Use
 fragments. The lower-level `PaginationEngine`, editor and standalone export retain that physical
 placement; outside viewer panels have no physical page citation.
 
+Paginating the same element again, with new HTML or a new scale, keeps the scroll offsets of the
+element and of every scroll container around it. If the new pages are shorter or narrower, an
+offset stops at their end. To open a different document at its start, scroll to the top after it
+renders.
+
 Supply an exact layout token to materialize portable page citations from that layout:
 
 ```ts

@@ -165,13 +165,17 @@ const budgetsKiB = {
   // Paragraph joins in cells (above).
   // Tab stops (above).
   // The outline (above).
-  'embed.iife.js': 163.9,
+  // Scroll offsets after re-pagination (#1863): see the editor budget.
+  'embed.iife.js': 164,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
   // #1776 (above): 0.1 KiB.
   // #1789 (above).
   // Tab types a tab (above).
   // Paragraph joins in cells (above).
-  'editor.bundle.js': 142.7,
+  // Putting scroll offsets back after re-pagination (#1863), on top of #1861 and #1862, measures
+  // 163.880/163.908/142.757/57.249 KiB for embed/IIFE/editor/pagination. Embed still fits by 20 bytes;
+  // raise only the three exhausted gates, to the next 0.1 KiB with at least 0.05 KiB to spare.
+  'editor.bundle.js': 142.9,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
   // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
   // Whole inline-layout continuation adds 0.24 KiB (35.801 -> 36.038 on main).
@@ -185,7 +189,8 @@ const budgetsKiB = {
   // Grid lines split by w:br and mixed multiples below one on a grid (#1551) add 20–29 gzip bytes
   // over 0dfb5eae: embed/IIFE/editor/pagination 163921/163970/142600/57960. Only this gate is
   // exhausted (by 2 bytes); round it to the next 0.1 KiB.
-  'pagination.bundle.js': 57.2,
+  // Scroll offsets after re-pagination (#1863): see the editor budget.
+  'pagination.bundle.js': 57.3,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,
