@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit review settings. Nitpicks are welcome; what this dials back is severity inflation on
+# speculative or invalid-input findings, and review rounds that restart on every fix-up push.
+
+tone_instructions: >-
+  Be concise and proportionate. Nitpicks are welcome; label them as nitpicks. Reserve Major for
+  defects a real, valid document can reach.
+
+reviews:
+  # CodeRabbit's default, stated so it is not raised to "assertive" by accident.
+  profile: chill
+  auto_review:
+    enabled: true
+    # Fix-up pushes are still reviewed, but automatic reviews pause after three reviewed commits;
+    # comment `@coderabbitai review` on the pull request for another pass.
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 3
+  path_instructions:
+    - path: "**"
+      instructions: |
+        Docxodus is a .NET library for WordprocessingML (.docx), with WASM, npm, Python and MCP
+        layers over it. When you choose a finding's severity:
+
+        - Major means a defect that a valid document, as Word, LibreOffice or Docxodus itself writes
+          it, can reach, and that corrupts the output, loses content or throws. Say how a real
+          document reaches it.
+        - Behaviour on invalid OOXML (duplicate bookmark, comment or permission ids, unmatched range
+          markers, other schema violations) is not a defect unless Docxodus then writes invalid output
+          or loses content. Mention it as a nitpick at most.
+        - A markup shape you have not seen a real producer write is speculative. Raise it once, as
+          Minor, and say that it is speculative.
+        - Do not repeat a finding you already raised on this pull request in an earlier review,
+          whether it was fixed or declined in its thread.
+        - Nitpicks about naming, comments, documentation and test coverage are welcome. Keep them short.
