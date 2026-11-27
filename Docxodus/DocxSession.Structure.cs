@@ -4,6 +4,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -104,6 +105,7 @@ public sealed partial class DocxSession
             foreach (var el in destination.DescendantsAndSelf())
                 el.Attributes(PtOpenXml.Unid).Remove();
             Internal.RevisionOps.RenumberCopiedRevisions(destination, NextRevisionId);
+            RenumberCopiedPermissions(destination, source.Document!.Root!);
 
             // Both copies are live while the revision is pending, so the shared comment ids have to
             // be split. The move SOURCE takes the clones (see CloneCommentsForMoveSource), leaving
@@ -412,7 +414,7 @@ public sealed partial class DocxSession
             }
             else if (CrossBlockRangeNames.TryGetValue(e.Name, out var range))
             {
-                var key = (range.End, (string?)e.Attribute(W.id) ?? "");
+                var key = (range.End, RangeId(e));
                 if (e.Name != range.End)
                 {
                     if (starts.TryAdd(key, at) && endsFirst.TryGetValue(key, out int end) && end >= 0 && end < at && at < children.Count)
@@ -579,6 +581,13 @@ public sealed partial class DocxSession
         return kept;
     }
 
+    /// <summary>The <c>w:id</c> a range marker's two ends pair on: a number by its value, so <c>4</c> and <c>04</c>
+    /// are one id, and anything else as written.</summary>
+    private static string RangeId(XElement marker) =>
+        (string?)marker.Attribute(W.id) is not { } id ? ""
+        : long.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value.ToString(CultureInfo.InvariantCulture)
+        : id;
+
     /// <summary>Move <paramref name="separator"/> within the markers around it (between the blocks on either side) to
     /// a place inside the fewest of the ranges that start or end there, staying where it is on a tie: past the ends
     /// of those that cover the table, short of those that start after it. A range with no marker there contains every
@@ -607,18 +616,51 @@ public sealed partial class DocxSession
         var inside = new int[count + 2];
         var open = new Dictionary<(XName End, string Id), int>();
         (XName End, string Id)? Key(XElement m) =>
-            CrossBlockRangeNames.TryGetValue(m.Name, out var r) ? (r.End, (string?)m.Attribute(W.id) ?? "") : null;
+            CrossBlockRangeNames.TryGetValue(m.Name, out var r) ? (r.End, RangeId(m)) : null;
         // A pair with both ends here encloses no block, so it holds no control to stay against; one whose end comes
         // before its start covers nothing, so it counts for nothing.
         var keys = markers.Select(Key).ToList();
         var tally = keys.OfType<(XName End, string Id)>().GroupBy(k => k).ToDictionary(g => g.Key, g => g.Count());
         var inverted = new HashSet<(XName End, string Id)>();
         var startsSeen = new HashSet<(XName End, string Id)>();
+        // Where a pair's other end lies beyond the gap, the document around it says whether the pair is inverted. One
+        // pass over the body, past any control the gap is in, collects the ends before the markers and the starts after
+        // them, of the same story and shown markup, as the move's scan pairs them; only a lone end here needs it.
+        HashSet<(XName End, string Id)>? endsBefore = null, startsAfter = null;
+        void Survey()
+        {
+            endsBefore = new();
+            startsAfter = new();
+            var story = separator.Ancestors(W.txbxContent).FirstOrDefault();
+            var root = separator.AncestorsAndSelf(W.body).FirstOrDefault() ?? separator.Ancestors().Last();
+            bool before = true, after = false;
+            foreach (var e in root.Descendants())
+            {
+                if (ReferenceEquals(e, markers[0])) before = false;
+                if (!before && !after)
+                {
+                    after = ReferenceEquals(e, markers[^1]);
+                    continue;
+                }
+                if (Key(e) is not { } k || e.Ancestors(W.txbxContent).FirstOrDefault() != story || !WmlToMarkdownConverter.IsSelectedMarkup(e))
+                    continue;
+                if (before && e.Name == k.End) endsBefore.Add(k);
+                else if (after && e.Name != k.End) startsAfter.Add(k);
+            }
+        }
         for (int i = 0; i < count; i++)
             if (keys[i] is { } k)
             {
-                if (markers[i].Name != k.End) startsSeen.Add(k);
-                else if (!startsSeen.Contains(k) && Enumerable.Range(i + 1, count - i - 1).Any(j => keys[j] == k)) inverted.Add(k);
+                bool isEnd = markers[i].Name == k.End;
+                if (!isEnd) startsSeen.Add(k);
+                bool loneEnd = isEnd && !startsSeen.Contains(k);
+                if (loneEnd && Enumerable.Range(i + 1, count - i - 1).Any(j => keys[j] == k))
+                    inverted.Add(k);
+                else if (loneEnd || !isEnd && tally[k] == 1)
+                {
+                    if (startsAfter is null) Survey();
+                    if (loneEnd ? startsAfter!.Contains(k) : endsBefore!.Contains(k)) inverted.Add(k);
+                }
             }
         for (int i = 0; i < count; i++)
         {
@@ -949,8 +991,46 @@ public sealed partial class DocxSession
         XElement paragraph, bool from, string moveName, string author, string date)
     {
         EnsureTrackRevisionsEnabled();
-        var pPr = MarkParagraphContentAndMark(
-            paragraph, from ? W.moveFrom : W.moveTo, author, date)!;
+        var wrapper = from ? W.moveFrom : W.moveTo;
+        var pPr = MarkParagraphContentAndMark(paragraph, wrapper, author, date)!;
+        // Each copy's permission and comment ranges go inside its revision marks, so accepting the move drops the
+        // source's and rejecting it the destination's: left bare, the range of the copy that goes would stay behind,
+        // empty, in a neighbouring paragraph. A marker joins the nearest mark beside it, looking past the markers and
+        // proofing marks between, working back from the last so that markers side by side join the same one, and gets
+        // a mark of its own only where there is none. One in a moved text box is inside its run's mark already.
+        static bool IsMarker(XElement e) => e.Name == W.permStart || e.Name == W.permEnd
+            || e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd;
+        XElement? MarkBeside(XElement marker, bool forward) =>
+            (forward ? marker.ElementsAfterSelf() : marker.ElementsBeforeSelf().Reverse())
+                .SkipWhile(e => IsMarker(e) || e.Name == W.proofErr).FirstOrDefault() is { } e && e.Name == wrapper ? e : null;
+        // Each marker's mark is chosen before any moves, then markers go in so their order is kept: those joining
+        // the mark after them last first (each at its start), those joining the mark before them first first
+        // (each at its end), and a run of markers with neither shares one mark of its own.
+        var plan = paragraph.Descendants().Where(e => IsMarker(e) && !e.Ancestors().Any(a => a.Name == wrapper))
+            .Select(marker => (Marker: marker, Next: MarkBeside(marker, forward: true), Previous: MarkBeside(marker, forward: false)))
+            .ToList();
+        foreach (var (marker, next, _) in plan.Where(x => x.Next is not null).Reverse())
+        {
+            marker.Remove();
+            next!.AddFirst(marker);
+        }
+        foreach (var (marker, _, previous) in plan.Where(x => x.Next is null && x.Previous is not null))
+        {
+            marker.Remove();
+            previous!.Add(marker);
+        }
+        XElement? own = null;
+        foreach (var (marker, _, _) in plan.Where(x => x.Next is null && x.Previous is null))
+        {
+            if (own is not null && ReferenceEquals(marker.PreviousNode, own))
+            {
+                marker.Remove();
+                own.Add(marker);
+                continue;
+            }
+            own = CreateRevisionEnvelope(wrapper, author, date, new XElement(marker));
+            marker.ReplaceWith(own);
+        }
 
         int rangeId = NextRevisionId();
         var start = new XElement(from ? W.moveFromRangeStart : W.moveToRangeStart,
@@ -962,6 +1042,36 @@ public sealed partial class DocxSession
             new XAttribute(W.id, rangeId));
         pPr.AddAfterSelf(start);
         paragraph.Add(end);
+    }
+
+    /// <summary>Give the permission ranges in a tracked move's <paramref name="copy"/> ids no range in
+    /// <paramref name="story"/> uses: both copies are live while the move is pending, and an id pairs a
+    /// range's start with its end. Each range keeps its two ends paired; one that reaches out of the
+    /// block has refused the move already.</summary>
+    private static void RenumberCopiedPermissions(XElement copy, XElement story)
+    {
+        static bool IsPermission(XElement e) => e.Name == W.permStart || e.Name == W.permEnd;
+        var markers = copy.Descendants().Where(IsPermission).ToList();
+        if (markers.Count == 0) return;
+        // An id is a number ("4" and "04" are one range). Above every id in use and never below 0, or the lowest free
+        // one once that would not fit w:id's 32 bits.
+        static long? IdOf(XElement e) =>
+            long.TryParse((string?)e.Attribute(W.id), NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) ? id : null;
+        var used = story.Descendants().Where(IsPermission).Select(IdOf).OfType<long>().ToHashSet();
+        long highest = used.DefaultIfEmpty(0).Max();
+        long next = highest is >= 0 and < int.MaxValue ? highest + 1 : 0;
+        var fresh = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var marker in markers)
+        {
+            var id = RangeId(marker);
+            if (!fresh.TryGetValue(id, out var renumbered))
+            {
+                while (next > int.MaxValue || used.Contains(next)) next = next > int.MaxValue ? 0 : next + 1;
+                used.Add(next);
+                fresh[id] = renumbered = (next++).ToString(CultureInfo.InvariantCulture);
+            }
+            marker.SetAttributeValue(W.id, renumbered);
+        }
     }
 
     /// <summary>
