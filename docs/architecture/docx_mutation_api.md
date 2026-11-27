@@ -943,11 +943,15 @@ EditResult MoveBlockRange(string firstAnchorId, string lastAnchorId, string targ
 `LastAnchorId` is the last block of the heading's part, up to the next heading at its level or above.
 
 `MoveBlockRange` moves a run of top-level blocks beside another block as one undo step, which is how
-a heading is dragged with its text. It decides and moves as `MoveBlock` does: the same markers travel,
-the same moves are refused and the same paragraphs are added between tables. A block content control moves whole: a run that reaches into one
-must cover it, and a target inside one stands for the place just outside it, so membership never
-changes; a move that would split a control is refused (`InvalidPosition`). A move to where the run
-already is succeeds and takes no undo step.
+a heading is dragged with its text. It does not track its moves: with tracked changes on
+(`RenderInline`) it is refused, even for a run of one paragraph that `MoveBlock` would move tracked.
+Otherwise it decides and moves as a direct `MoveBlock` does: the same markers travel, the same moves are
+refused and the same paragraphs are added between tables. It moves the children of the closest body or
+block content control that holds the run and the target, so blocks that share a control move inside
+it. A control that holds only some of them moves whole: a run that reaches into one must cover it, and
+a target inside one stands for the place just outside it, so membership never changes; a move that
+would split a control is refused (`InvalidPosition`). A move to where the run already is succeeds and
+takes no undo step.
 
 ## Bulk block removal — `DeleteRange` and `DeleteSection`
 

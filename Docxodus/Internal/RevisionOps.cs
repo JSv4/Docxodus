@@ -1321,12 +1321,14 @@ internal static class RevisionOps
 
     /// <summary>The move that left <paramref name="mark"/>'s empty inserted paragraph in place of the
     /// paragraph it moves away, to keep two tables apart (issue #1861): the same edit's, right after
-    /// its source, and with no paragraph after it.</summary>
+    /// its source, and keeping two tables apart once the move is accepted. A paragraph with a section
+    /// break is a change of its own.</summary>
     private static RevisionGroup? MoveLeavingParagraph(RevisionUnit mark, IEnumerable<RevisionGroup> moves)
     {
         var paragraph = mark.Paragraph;
         if (paragraph is null || mark.Type != TypeInsert || paragraph.Elements().Any(e => !IsIgnorableBetween(e))
-            || SiblingBlock(paragraph, forward: true)?.Name == W.p || SiblingBlock(paragraph, forward: false) is not { } source)
+            || paragraph.Element(W.pPr)?.Element(W.sectPr) is not null
+            || !DocxSession.TablesMeet(paragraph, accepted: true) || SiblingBlock(paragraph, forward: false) is not { } source)
             return null;
         return moves.FirstOrDefault(move => move.Author == mark.Author && move.Date == mark.Date
             && move.DateUtc == DateUtcOf(mark.Element)
@@ -1375,11 +1377,12 @@ internal static class RevisionOps
         : block.Parent?.Name == W.customXml ? block.Parent : null;
 
     /// <summary>The nearest sibling element before or after <paramref name="element"/> that is not
-    /// a range marker (<see cref="IsIgnorableBetween"/>), walking only as far as it has to.</summary>
+    /// a range marker (<see cref="IsIgnorableBetween"/>, and permission and custom XML revision ranges
+    /// too), walking only as far as it has to.</summary>
     internal static XElement? SiblingBlock(XElement element, bool forward)
     {
         var node = forward ? element.NextNode : element.PreviousNode;
-        while (node is not null && (node is not XElement sibling || IsIgnorableBetween(sibling)))
+        while (node is not null && (node is not XElement sibling || IsIgnorableBetween(sibling) || DocxSession.IsBlockLevelMarker(sibling)))
             node = forward ? node.NextNode : node.PreviousNode;
         return node as XElement;
     }

@@ -319,6 +319,9 @@ public sealed partial class DocxSession
         /// last child. A null label is a pair to keep when possible (see
         /// <see cref="BuildBlockMoveContext"/>).</summary>
         public required IReadOnlyList<(int Start, int End, string? Label)> CrossBlockRanges { get; init; }
+        /// <summary>Range markers whose end comes before their start (no range, as ListBookmarks says):
+        /// a move may not put the start before the end, which would make one.</summary>
+        public required IReadOnlyList<(int End, int Start, string Label)> InvertedPairs { get; init; }
 
         public IEnumerable<XElement> Run((int First, int Last) run) => Children.Take(run.Last + 1).Skip(run.First);
 
@@ -346,8 +349,12 @@ public sealed partial class DocxSession
         }
 
         // One traversal finds every marker, with the child it is in: -1 before the container, and past its
-        // last child after it. The first start wins for a duplicated id. An end before its start is no range.
+        // last child after it. The first start wins for a duplicated id. An end before its start is no range,
+        // and a text box is a story of its own, whose fields and ranges pair with nothing outside it.
         var body = container.AncestorsAndSelf(W.body).First();
+        var story = container.AncestorsAndSelf(W.txbxContent).FirstOrDefault();
+        var inverted = new List<(int, int, string)>();
+        var endsFirst = new Dictionary<(XName End, string Id), int>();
         var past = container.AncestorsAndSelf().TakeWhile(e => e != body)
             .Select(e => e.ElementsAfterSelf().FirstOrDefault()).FirstOrDefault(e => e is not null);
         var starts = new Dictionary<(XName End, string Id), int>();
@@ -357,6 +364,9 @@ public sealed partial class DocxSession
         {
             if (ReferenceEquals(e.Parent, container)) at = index[e];
             else if (ReferenceEquals(e, past)) at = children.Count;
+            if ((e.Name == W.fldChar || CrossBlockRangeNames.ContainsKey(e.Name))
+                && e.Ancestors(W.txbxContent).FirstOrDefault() != story)
+                continue;
             if (e.Name == W.fldChar)
             {
                 var type = (string?)e.Attribute(W.fldCharType);
@@ -371,8 +381,13 @@ public sealed partial class DocxSession
             else if (CrossBlockRangeNames.TryGetValue(e.Name, out var range))
             {
                 var key = (range.End, (string?)e.Attribute(W.id) ?? "");
-                if (e.Name != range.End) starts.TryAdd(key, at);
+                if (e.Name != range.End)
+                {
+                    if (starts.TryAdd(key, at) && endsFirst.TryGetValue(key, out int end) && end >= 0 && end < at && at < children.Count)
+                        inverted.Add((end, at, range.Label));
+                }
                 else if (starts.TryGetValue(key, out int start)) Add(start, at, range.Label);
+                else endsFirst.TryAdd(key, at);
             }
         }
         for (int i = 0; i < children.Count; i++) sectionBreaksBefore[i + 1] += sectionBreaksBefore[i];
@@ -383,6 +398,7 @@ public sealed partial class DocxSession
             Index = index,
             SectionBreaksBefore = sectionBreaksBefore,
             CrossBlockRanges = ranges,
+            InvertedPairs = inverted,
         };
     }
 
@@ -474,6 +490,8 @@ public sealed partial class DocxSession
                 if (label is not null) return (label, false);
                 all = false;
             }
+            foreach (var (end, start, label) in context.InvertedPairs)
+                if (Reordered(start) <= Reordered(end)) return (label, false);
             return (null, all);
         }
     }
@@ -512,15 +530,10 @@ public sealed partial class DocxSession
             if (place is null && leftBehind is null) continue;
             var separator = place is null ? leftBehind! : new XElement(W.p);
             place?.Invoke(separator);
-            // After the ends of the ranges that cover the table, so that none of them covers it.
-            while (separator.ElementsAfterSelf().FirstOrDefault() is { } next
-                && CrossBlockRangeNames.TryGetValue(next.Name, out var range) && next.Name == range.End)
-            {
-                separator.Remove();
-                next.AddAfterSelf(separator);
-            }
-            // A tracked move is accepted or rejected; any other has to hold however the pending changes are.
-            if (TablesMeet(separator, accepted: true)
+            PlaceOutsideRanges(separator);
+            // The tables stay apart in the markup as it stands and once the edit is accepted; an edit that is
+            // not tracked has to hold once the other pending changes are rejected too.
+            if (TablesMeet(separator, accepted: true) || TablesMeet(separator, accepted: null)
                 || (_trackedChanges != TrackedChangeMode.RenderInline && TablesMeet(separator, accepted: false)))
             {
                 UnidHelper.AssignToSelfAndDescendants(separator);
@@ -529,6 +542,46 @@ public sealed partial class DocxSession
             else separator.Remove();
         }
         return kept;
+    }
+
+    /// <summary>Move <paramref name="separator"/> within the markers around it (between the blocks on either side) to
+    /// a place inside the fewest of the ranges that start or end there, staying where it is on a tie: past the ends of those that cover the
+    /// table, short of those that start after it. A range with no marker there contains every such place or none. An
+    /// empty range keeps covering nothing, so where no place outside the others is left before it, it can come to mark
+    /// the added paragraph rather than the table after it.</summary>
+    private static void PlaceOutsideRanges(XElement separator)
+    {
+        var markers = new List<XElement>();
+        for (var e = separator.ElementsBeforeSelf().LastOrDefault(); e is not null && IsBlockLevelMarker(e);
+            e = e.ElementsBeforeSelf().LastOrDefault())
+            markers.Insert(0, e);
+        int here = markers.Count;
+        for (var e = separator.ElementsAfterSelf().FirstOrDefault(); e is not null && IsBlockLevelMarker(e);
+            e = e.ElementsAfterSelf().FirstOrDefault())
+            markers.Add(e);
+        (XName End, string Id)? Key(XElement m) =>
+            CrossBlockRangeNames.TryGetValue(m.Name, out var r) ? (r.End, (string?)m.Attribute(W.id) ?? "") : null;
+        int Inside(int slot)
+        {
+            int count = 0;
+            for (int i = 0; i < markers.Count; i++)
+            {
+                if (Key(markers[i]) is not { } key) continue;
+                int other = markers.FindIndex(m => !ReferenceEquals(m, markers[i]) && Key(m) is { } k && k == key);
+                // An end: inside from its start (or from before the markers) up to it. A start: after it, when
+                // its end is further on.
+                if (markers[i].Name == key.End) count += slot <= i && other < slot ? 1 : 0;
+                else count += other < 0 && slot > i ? 1 : 0;
+            }
+            return count;
+        }
+        // Where it was put wins a tie: another place only when it is inside fewer ranges.
+        int fewest = Enumerable.Range(0, markers.Count + 1).Min(Inside);
+        int best = Inside(here) == fewest ? here : Enumerable.Range(0, markers.Count + 1).First(slot => Inside(slot) == fewest);
+        if (best == here) return;
+        separator.Remove();
+        if (best == 0) markers[0].AddBeforeSelf(separator);
+        else markers[best - 1].AddAfterSelf(separator);
     }
 
     /// <summary>Whether two tables would touch, or a table end the body, without <paramref name="separator"/>:
@@ -570,7 +623,7 @@ public sealed partial class DocxSession
 
     /// <summary>A range marker (or a proofing mark) that is itself a child of the body or of a block
     /// content control, so not a block.</summary>
-    private static bool IsBlockLevelMarker(XElement child) =>
+    internal static bool IsBlockLevelMarker(XElement child) =>
         child.Name == W.proofErr || CrossBlockRangeNames.ContainsKey(child.Name);
 
     /// <summary>
