@@ -414,6 +414,17 @@ public class DocxSessionUpdateFieldsTests
         Assert.Equal(before, Body(session).ToString());
     }
 
+    // A content-control revision is a range marker like a bookmark (the range list moves share, #1861).
+    [Fact]
+    public void UF041_AResultThatHoldsACustomXmlRevisionMarker_IsLeftAlone()
+    {
+        const string marker = "<w:customXmlInsRangeStart w:id=\"8\" w:author=\"Bob\"/>";
+        using var session = Open(P(Marked("b", 1, R("New"))) + P(Start(" REF b ") + R("Old") + marker + Char("end")));
+        var before = Body(session).ToString();
+        Assert.True(session.UpdateFields().Success);
+        Assert.Equal(before, Body(session).ToString());
+    }
+
     [Fact]
     public void UF019_LockedFields_KeepTheirResult()
     {

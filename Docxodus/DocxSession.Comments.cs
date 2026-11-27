@@ -744,22 +744,7 @@ public sealed partial class DocxSession
             if (pos == Position.Before) element.AddBeforeSelf(tbl);
             else element.AddAfterSelf(tbl);
 
-            // A paragraph must stand between two tables and after a table that would otherwise end
-            // its cell or the body: tables that touch are read as one table, and an end-of-body
-            // table leaves no editable block below it (S-1 smoke-test finding 2). Range markers
-            // between the blocks are not that paragraph, so both neighbours are found past them.
-            var separators = new List<XElement>();
-            foreach (bool after in new[] { false, true })
-            {
-                var neighbour = Internal.RevisionOps.SiblingBlock(tbl, forward: after);
-                if (neighbour?.Name != W.tbl && !(after && (neighbour is null || neighbour.Name == W.sectPr)))
-                    continue;
-                var separator = new XElement(W.p);
-                UnidHelper.AssignToSelfAndDescendants(separator);
-                if (after) tbl.AddAfterSelf(separator);
-                else tbl.AddBeforeSelf(separator);
-                separators.Add(separator);
-            }
+            var separators = KeepTablesApart(null, tbl, tbl);
 
             // Tracked, the table is the rows Word writes for a table inserted with Track Changes
             // on: every row and its content inserted (the row encoding InsertTableRow and a

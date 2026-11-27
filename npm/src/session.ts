@@ -829,7 +829,11 @@ export class DocxSession {
       : apply();
   }
 
-  /** Reorder one top-level paragraph/heading/list/table block relative to another. */
+  /**
+   * Reorder one top-level paragraph/heading/list/table block relative to another. Refused where it
+   * would change what a bookmark, comment, permission or field covers. `created` holds the
+   * destination of a tracked move, then any empty paragraph added between two tables or after the last.
+   */
   moveBlock(sourceAnchorId: string, targetAnchorId: string, position: "before" | "after"): EditResult {
     return JSON.parse(
       this.wasm.MoveBlock(this.handle, sourceAnchorId, targetAnchorId, position),
@@ -839,8 +843,9 @@ export class DocxSession {
   /**
    * Move the top-level blocks from `firstAnchorId` to `lastAnchorId` (inclusive) before or after
    * `targetAnchorId` as one edit — a heading and everything under it, as Word's Navigation Pane
-   * drags it. One undo step. Refused across a section break, when it would cut a cross-block
-   * range, onto a target inside the run, and under tracked changes.
+   * drags it. One undo step. Refused across a section break, when it would change what a bookmark,
+   * comment, permission or field covers, onto a target inside the run, and under tracked changes.
+   * `created` holds any empty paragraph added between two tables or after the last.
    */
   moveBlockRange(firstAnchorId: string, lastAnchorId: string, targetAnchorId: string, position: "before" | "after"): EditResult {
     return JSON.parse(

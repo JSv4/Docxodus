@@ -114,7 +114,7 @@ public class DocxSessionMoveBlockTests
         var result = session.MoveBlock(table, target, Position.After);
 
         Assert.True(result.Success, result.Error?.Message);
-        Assert.Equal(new[] { "A", "B", "TABLE" }, BodyLabels(session.Save()));
+        Assert.Equal(new[] { "A", "B", "TABLE", "" }, BodyLabels(session.Save()));
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public class DocxSessionMoveBlockTests
             Assert.Contains(rows, r => r.Element(W.trPr)?.Element(W.del) is not null);
             Assert.Contains(rows, r => r.Element(W.trPr)?.Element(W.ins) is not null);
         }
-        Assert.Equal(new[] { "A", "B", "TABLE" }, BodyLabels(Accept(saved)));
+        Assert.Equal(new[] { "A", "B", "TABLE", "" }, BodyLabels(Accept(saved)));
         Assert.Equal(new[] { "A", "TABLE", "B" }, BodyLabels(Reject(saved)));
     }
 
@@ -479,7 +479,7 @@ public class DocxSessionMoveBlockTests
         // …and the inserted table's cell text is inside w:ins.
         Assert.NotEmpty(inserted.Descendants(W.ins).SelectMany(i => i.Descendants(W.t)));
 
-        Assert.Equal(new[] { "A", "B", "CELL" }, BodyLabels(Accept(saved)));
+        Assert.Equal(new[] { "A", "B", "CELL", "" }, BodyLabels(Accept(saved)));
         Assert.Equal(new[] { "A", "CELL", "B" }, BodyLabels(Reject(saved)));
     }
 
@@ -818,5 +818,1319 @@ public class DocxSessionMoveBlockTests
                 }
             }
         }
+    }
+
+    // ─── Ranges, fields and tables beside the moved block (issue #1861) ───────────────────
+
+    private static XElement Control(params object[] blocks) =>
+        new(W.sdt, new XElement(W.sdtPr, new XElement(W.id, new XAttribute(W.val, 11))), new XElement(W.sdtContent, blocks));
+
+    private static XElement FieldChar(string type) =>
+        new(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, type)));
+
+    /// <summary>A table of contents: its field starts in "E1", ends in "end" and shows "E2" and "E3".</summary>
+    private static object[] Contents() => new object[]
+    {
+        P("E1", FieldChar("begin"), new XElement(W.r, new XElement(W.instrText, " TOC \\o \"1-1\" ")), FieldChar("separate")),
+        P("E2", FieldChar("begin"), new XElement(W.r, new XElement(W.instrText, " PAGEREF _Toc1 ")), FieldChar("end")),
+        P("E3"), P("end", FieldChar("end")),
+    };
+
+    private static XElement BodyOf(byte[] bytes)
+    {
+        using var document = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        return document.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+    }
+
+    /// <summary>The body's children: a paragraph's text ("-" for an empty one), a table's in brackets, a
+    /// content control's blocks in parentheses, a custom XML element's in braces, and "&lt;" or "&gt;" for a
+    /// range marker between blocks.</summary>
+    private static string Shape(byte[] bytes)
+    {
+        static string Of(XElement e) =>
+            e.Name == W.tbl ? $"[{Text(e)}]"
+            : e.Name == W.sdt ? "(" + string.Join(" ", e.Element(W.sdtContent)!.Elements().Select(Of)) + ")"
+            : e.Name == W.customXml ? "{" + string.Join(" ", e.Elements().Where(c => c.Name != W.customXmlPr).Select(Of)) + "}"
+            : e.Name == W.p ? (Text(e) is { Length: > 0 } text ? text : "-")
+            : e.Name.LocalName.EndsWith("Start") ? "<" : e.Name.LocalName.EndsWith("End") ? ">" : e.Name.LocalName;
+        return string.Join(" ", BodyOf(bytes).Elements().Select(Of));
+    }
+
+    private static string Text(XElement e) => string.Concat(e.Descendants(W.t).Select(t => t.Value));
+
+    private static string Block(DocxSession session, string text) =>
+        session.ListBlocks().Body.Select(u => u.Id).Single(id => Text(XElement.Parse(session.Raw.GetXml(id))) == text);
+
+    private static bool IsOffered(DocxSession session, string source, string target, Position pos) =>
+        session.ValidMoveTargets(source).SingleOrDefault(t => t.AnchorId == target) is { } side
+        && (pos == Position.Before ? side.Before : side.After);
+
+    /// <summary>Move a block named by its text, and check that <c>ValidMoveTargets</c> said the same.</summary>
+    private static EditResult Move(DocxSession session, string source, string target, Position pos)
+    {
+        var (from, to) = (Block(session, source), Block(session, target));
+        bool offered = IsOffered(session, from, to, pos);
+        var result = session.MoveBlock(from, to, pos);
+        Assert.Equal(offered, result.Success);
+        return result;
+    }
+
+    private static DocxSession Tracked(byte[] bytes) => new(bytes,
+        new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline, RevisionAuthor = "Alice" });
+
+    /// <summary>The same, resolving one revision after another in the session.</summary>
+    private static byte[] ResolveEach(byte[] bytes, bool accept)
+    {
+        using var session = new DocxSession(bytes);
+        while (session.ListRevisions().FirstOrDefault() is { } revision)
+            Assert.True((accept ? session.AcceptRevision(revision.Id) : session.RejectRevision(revision.Id)).Success);
+        return session.Save();
+    }
+
+    /// <summary>What each range and field in the body covers: the words between its two ends.</summary>
+    private static string[] Coverage(XElement body)
+    {
+        var elements = body.Descendants().ToList();
+        // A field's instructions and its result are covered separately: its separate is the boundary.
+        var fields = new System.Collections.Generic.Stack<(int Begin, int Separate)>();
+        var found = new System.Collections.Generic.List<string>();
+        string Words(int from, int to) => string.Join(" ", elements.Take(to).Skip(from).Where(e => e.Name == W.t)
+            .Select(t => t.Value).OrderBy(v => v, System.StringComparer.Ordinal));
+        for (int i = 0; i < elements.Count; i++)
+        {
+            var (name, id) = (elements[i].Name.LocalName, (string?)elements[i].Attribute(W.id));
+            var fieldCharacter = (string?)elements[i].Attribute(W.fldCharType);
+            if (fieldCharacter == "begin") fields.Push((i, -1));
+            if (fieldCharacter == "separate" && fields.Count > 0) fields.Push((fields.Pop().Begin, i));
+            if (fieldCharacter == "end")
+            {
+                var (begin, separate) = fields.Count > 0 ? fields.Pop() : (-1, -1);
+                if (begin < 0) { found.Add("field broken"); continue; }
+                string Instructions(int from, int to) => string.Concat(elements.Take(to).Skip(from)
+                    .Where(e => e.Name == W.instrText || e.Name == W.delInstrText).Select(e => e.Value));
+                found.Add(separate < 0 ? $"field: {Instructions(begin, i)} {Words(begin, i)}"
+                    : $"field instructions: {Instructions(begin, separate)} {Words(begin, separate)} | result: {Words(separate, i)}");
+                continue;
+            }
+            if (fieldCharacter is not null || !name.EndsWith("End")) continue;
+            int start = elements.FindIndex(e => e.Name.LocalName == name[..^3] + "Start" && (string?)e.Attribute(W.id) == id);
+            found.Add(start < 0 || start > i ? $"{name}{id} broken" : $"{name}{id}: {Words(start, i)}");
+        }
+        return found.OrderBy(v => v, System.StringComparer.Ordinal).ToArray();
+    }
+
+    /// <summary>Whether a table touches another one or ends the body, past markers and the edges of
+    /// content controls and custom XML elements, none of which keeps two tables apart.</summary>
+    private static bool TableTouches(XElement body)
+    {
+        static System.Collections.Generic.IEnumerable<XElement> Flat(XElement container) => container.Elements()
+            .SelectMany(e => e.Name == W.sdt ? Flat(e.Element(W.sdtContent)!) : e.Name == W.customXml ? Flat(e) : new[] { e })
+            .Where(e => e.Name == W.p || e.Name == W.tbl);
+        var blocks = Flat(body).ToList();
+        return blocks[^1].Name == W.tbl || blocks.Zip(blocks.Skip(1)).Any(p => p.First.Name == W.tbl && p.Second.Name == W.tbl);
+    }
+
+    public static TheoryData<string, string, string, Position, string> BodyLevelRangeMoves() => new()
+    {
+        // Word ends a bookmark over a whole paragraph after the paragraph, directly in the body.
+        { "end", "A", "C", Position.After, "X B C A >" },
+        { "end", "A", "X", Position.Before, "A > X B C" },
+        { "start", "A", "C", Position.After, "X B C < A" },
+        { "start", "A", "X", Position.Before, "< A X B C" },
+        { "both", "A", "C", Position.After, "X B C < A >" },
+        { "both", "A", "X", Position.Before, "< A > X B C" },
+        // Beside the covered block is outside its range.
+        { "end", "C", "A", Position.After, "X A > C B" },
+        { "start", "C", "A", Position.Before, "X C < A B" },
+        { "both", "X", "A", Position.After, "< A > X B C" },
+        { "both", "C", "A", Position.Before, "X C < A > B" },
+    };
+
+    [Theory]
+    [MemberData(nameof(BodyLevelRangeMoves))]
+    public void MoveBlock_KeepsARangeWithBodyLevelMarkersWhole(string markers, string source, string target, Position pos, string expected)
+    {
+        foreach (var (start, end) in new[]
+            { (W.bookmarkStart, W.bookmarkEnd), (W.commentRangeStart, W.commentRangeEnd), (W.permStart, W.permEnd) })
+        {
+            var first = new XElement(start, new XAttribute(W.id, 3), start == W.bookmarkStart ? new XAttribute(W.name, "Span") : null);
+            var last = new XElement(end, new XAttribute(W.id, 3));
+            var covered = P("A", markers == "end" ? first : null!);
+            if (markers == "start") covered.Add(last);
+            var body = new object?[] { P("X"), markers == "end" ? null : first, covered, markers == "start" ? null : last, P("B"), P("C") };
+            using var session = new DocxSession(Document(body.OfType<XElement>().ToArray()));
+            var before = session.Save();
+
+            var result = Move(session, source, target, pos);
+
+            Assert.True(result.Success, result.Error?.Message);
+            Assert.Equal(expected, Shape(session.Save()));
+            Assert.Equal(Coverage(BodyOf(before)), Coverage(BodyOf(session.Save())));
+            Assert.True(session.Undo());
+            Assert.Equal(Shape(before), Shape(session.Save()));
+        }
+    }
+
+    [Theory]
+    [InlineData("A", "D", Position.After)]   // a covered block leaves
+    [InlineData("B", "X", Position.Before)]
+    [InlineData("D", "A", Position.After)]   // another block lands among the covered ones
+    [InlineData("X", "B", Position.Before)]
+    public void MoveBlock_RefusesToChangeWhatABodyLevelRangeCovers(string source, string target, Position pos)
+    {
+        using var session = new DocxSession(Document(P("X"), BookmarkStart(3), P("A"), P("B"), BookmarkEnd(3), P("D")));
+
+        var result = Move(session, source, target, pos);
+
+        Assert.Equal(EditErrorCode.InvalidPosition, result.Error?.Code);
+        Assert.Contains("cross-block bookmark range", result.Error!.Message);
+        Assert.Equal("X < A B > D", Shape(session.Save()));
+        Assert.False(session.Undo());
+    }
+
+    [Fact]
+    public void MoveBlock_RefusesToCutARangeThatEndsInAContentControl()
+    {
+        using var session = new DocxSession(Document(P("X"), P("A", BookmarkStart(3)), Control(P("S", BookmarkEnd(3)), P("T")), P("B")));
+
+        Assert.False(Move(session, "A", "B", Position.After).Success);
+        Assert.False(Move(session, "T", "S", Position.Before).Success);
+        Assert.True(Move(session, "B", "X", Position.Before).Success);
+        Assert.Equal("B X A (S T)", Shape(session.Save()));
+    }
+
+    [Fact]
+    public void MoveBlock_BetweenMarkersOnly_IsInPlaceAndTakesNoUndoStep()
+    {
+        using var session = new DocxSession(Document(P("X", BookmarkStart(3)), P("A"), BookmarkEnd(3), P("B")));
+
+        Assert.True(Move(session, "A", "B", Position.Before).Success);
+
+        Assert.Equal("X A > B", Shape(session.Save()));
+        Assert.False(session.Undo());
+    }
+
+    // An empty bookmark between blocks (Word's own _GoBack) marks the start of the block after it.
+    [Fact]
+    public void MoveBlock_KeepsAnEmptyBodyLevelBookmarkWithTheBlockAfterIt()
+    {
+        var bytes = Document(P("X"), BookmarkStart(3), BookmarkEnd(3), P("A"), P("B"));
+        using (var away = new DocxSession(bytes))
+        {
+            Assert.True(Move(away, "A", "B", Position.After).Success);
+            Assert.Equal("X B < > A", Shape(away.Save()));
+        }
+        using (var beside = new DocxSession(bytes))
+        {
+            Assert.True(Move(beside, "B", "A", Position.Before).Success);
+            Assert.Equal("X B < > A", Shape(beside.Save()));
+            Assert.True(Move(beside, "X", "B", Position.After).Success);
+            Assert.Equal("B X < > A", Shape(beside.Save()));
+        }
+        // It covers nothing, so it never stops a move, not even a tracked one, which carries no markers.
+        using var tracked = Tracked(bytes);
+        Assert.True(Move(tracked, "A", "B", Position.After).Success);
+    }
+
+    private static XElement ProofErr() => new(W.proofErr, new XAttribute(W.type, "spellEnd"));
+
+    private static XElement Moved(XName name) => new(name, new XAttribute(W.id, 2), name.LocalName.EndsWith("End") ? null
+        : new object[] { new XAttribute(W.name, "move1"), new XAttribute(W.author, "Bob"), new XAttribute(W.date, "2031-01-01T00:00:00Z") });
+
+    public static TheoryData<object[], string, string, Position, string> CrowdedMarkerMoves() => new()
+    {
+        // Word starts a new range before it ends another at the same place. An empty one straddling that
+        // end stays whole, and goes with the block only when the other range's end has to.
+        { new object[] { P("X", BookmarkStart(5)), BookmarkStart(7), BookmarkEnd(5), BookmarkEnd(7), P("A"), P("B"), P("C") }, "A", "C", Position.After, "X < > > B C A" },
+        { new object[] { P("X", BookmarkStart(5)), BookmarkStart(7), BookmarkEnd(5), BookmarkEnd(7), P("A"), P("B"), P("C") }, "A", "X", Position.Before, "A X < > > B C" },
+        { new object[] { P("X", BookmarkStart(5)), BookmarkStart(7), BookmarkEnd(5), BookmarkEnd(7), P("A"), P("B"), P("C") }, "C", "X", Position.After, "X < > > C A B" },
+        { new object[] { P("A", BookmarkStart(5)), BookmarkStart(7), BookmarkEnd(5), BookmarkEnd(7), P("B"), P("C") }, "A", "C", Position.After, "B C A < > >" },
+        // A marker without its other end, or a proofing mark, goes only with one beyond it that does.
+        { new object[] { P("A", BookmarkStart(5)), ProofErr(), BookmarkEnd(5), P("B"), P("C") }, "A", "C", Position.After, "B C A proofErr >" },
+        { new object[] { P("X"), BookmarkEnd(9), P("A"), BookmarkEnd(8), P("B") }, "A", "B", Position.After, "X > > B A" },
+        // Nothing beside the target decides: right beside it.
+        { new object[] { P("A"), BookmarkEnd(9), P("B"), P("C") }, "C", "A", Position.After, "A C > B" },
+        // A native move range never moves.
+        { new object[] { P("X"), Moved(W.moveToRangeStart), Moved(W.moveToRangeEnd), P("A"), P("B") }, "A", "B", Position.After, "X < > B A" },
+        // An end before its start is no range, as ListBookmarks says: it stops nothing.
+        { new object[] { P("X"), BookmarkEnd(3), P("B"), P("C"), P("A", BookmarkStart(3)), P("D"), P("E") }, "E", "D", Position.Before, "X > B C A E D" },
+        // Nor does it become one: the start stays after its end.
+        { new object[] { P("X"), BookmarkEnd(3), P("B"), P("C"), P("A", BookmarkStart(3)), P("D"), P("E") }, "A", "X", Position.After, "X > A B C D E" },
+    };
+
+    [Theory]
+    [MemberData(nameof(CrowdedMarkerMoves))]
+    public void MoveBlock_AmongMarkersBetweenBlocks(object[] body, string source, string target, Position pos, string expected)
+    {
+        foreach (var mode in new[] { TrackedChangeMode.Accept, TrackedChangeMode.StripDeletions })
+        {
+            using var session = new DocxSession(Document(body), new DocxSessionSettings { TrackedChanges = mode });
+            var before = Coverage(BodyOf(session.Save())).Where(c => !c.EndsWith("broken"));
+
+            var result = Move(session, source, target, pos);
+
+            Assert.True(result.Success, result.Error?.Message);
+            Assert.Equal(expected, Shape(session.Save()));
+            Assert.Equal(before, Coverage(BodyOf(session.Save())).Where(c => !c.EndsWith("broken")));
+        }
+    }
+
+    [Fact]
+    public void MoveBlock_RefusesToMoveABlockOutOfANativeMoveRange()
+    {
+        using var session = new DocxSession(Document(
+            P("X"), Moved(W.moveFromRangeStart), P("A"), Moved(W.moveFromRangeEnd), P("B")));
+        Assert.False(Move(session, "A", "B", Position.After).Success);
+        Assert.True(Move(session, "B", "X", Position.Before).Success);
+    }
+
+    [Fact]
+    public void MoveBlock_RefusesToChangeARangeThatEndsAfterItsContentControl()
+    {
+        using var session = new DocxSession(Document(P("X"), Control(P("A"), P("B", BookmarkStart(3)), P("E")), P("D", BookmarkEnd(3))));
+        Assert.False(Move(session, "A", "E", Position.After).Success);
+        Assert.False(Move(session, "E", "A", Position.Before).Success);
+    }
+
+    [Theory]
+    [InlineData("B", "E2", Position.Before)]   // lands in the field's result
+    [InlineData("A", "E1", Position.After)]
+    [InlineData("B", "end", Position.Before)]
+    [InlineData("E2", "B", Position.After)]    // leaves it
+    [InlineData("E1", "B", Position.After)]    // takes the field's start, or its end, with it
+    [InlineData("end", "B", Position.After)]
+    [InlineData("end", "E2", Position.Before)]
+    public void MoveBlock_RefusesToChangeWhatAFieldCovers(string source, string target, Position pos)
+    {
+        var bytes = Document(Contents().Concat(new object[] { P("A"), P("B") }).ToArray());
+        foreach (bool trackChanges in new[] { false, true })
+        {
+            using var session = trackChanges ? Tracked(bytes) : new DocxSession(bytes);
+
+            var result = Move(session, source, target, pos);
+
+            Assert.Equal(EditErrorCode.InvalidPosition, result.Error?.Code);
+            Assert.Contains("cross-block field range", result.Error!.Message);
+            Assert.Equal("E1 E2 E3 end A B", Shape(session.Save()));
+        }
+    }
+
+    [Theory]
+    [InlineData("B", "E1", Position.Before, "B E1 E2 E3 end A")]
+    [InlineData("B", "end", Position.After, "E1 E2 E3 end B A")]
+    [InlineData("E3", "E2", Position.Before, "E1 E3 E2 end A B")]
+    public void MoveBlock_AroundOrWithinAField_StillMoves(string source, string target, Position pos, string expected)
+    {
+        using var session = new DocxSession(Document(Contents().Concat(new object[] { P("A"), P("B") }).ToArray()));
+
+        Assert.True(Move(session, source, target, pos).Success);
+
+        Assert.Equal(expected, Shape(session.Save()));
+        Assert.True(session.UpdateFields().Success);
+        Assert.Contains("B", Shape(session.Save()).Split(' '));
+    }
+
+    public static TheoryData<string, object[], string, string, Position, string> TableMoves()
+    {
+        var permission = new object[] { new XElement(W.permStart, new XAttribute(W.id, 8)), new XElement(W.permEnd, new XAttribute(W.id, 8)) };
+        return new()
+        {
+            { "a paragraph leaves from between two tables", new object[] { Table("T1"), P("B"), Table("T2"), P("C") }, "B", "C", Position.After, "[T1] - [T2] C B" },
+            { "the paragraph after the last table leaves", new object[] { P("A"), Table("T1"), P("B") }, "B", "A", Position.Before, "B A [T1] -" },
+            { "the same, with section properties", new object[] { P("A"), Table("T1"), P("B"), new XElement(W.sectPr) }, "B", "A", Position.Before, "B A [T1] - sectPr" },
+            { "a table lands at the end", new object[] { P("A"), Table("T1"), P("B"), new XElement(W.sectPr) }, "T1", "B", Position.After, "A B [T1] - sectPr" },
+            { "a table lands after a table", new object[] { P("A"), Table("T1"), P("B"), Table("T2"), P("C") }, "T1", "T2", Position.After, "A B [T2] - [T1] C" },
+            { "a table lands before a table", new object[] { P("A"), Table("T1"), P("B"), Table("T2"), P("C") }, "T2", "T1", Position.Before, "A [T2] - [T1] B C" },
+            { "permission markers between tables", new object[] { Table("T1"), P("B"), permission[0], permission[1], Table("T2"), P("C") }, "B", "C", Position.After, "[T1] - < > [T2] C B" },
+            { "a table that ends a content control", new object[] { Control(P("S"), Table("T1")), P("B"), Table("T2"), P("C") }, "B", "C", Position.After, "(S [T1]) - [T2] C B" },
+            { "a table that starts one", new object[] { Table("T1"), P("B"), Control(Table("T2"), P("S")), P("C") }, "B", "C", Position.After, "[T1] - ([T2] S) C B" },
+            { "to the end of a control that ends the body", new object[] { P("A"), Control(Table("T1"), P("B"), P("C")) }, "T1", "C", Position.After, "A (B C [T1] -)" },
+            { "to the end of a control before a table", new object[] { Control(Table("T1"), P("B")), Table("T2"), P("C") }, "T1", "B", Position.After, "(B [T1] -) [T2] C" },
+            { "inside a control that something follows", new object[] { P("A"), Control(Table("T1"), P("B"), Table("T2")), P("C") }, "T1", "T2", Position.After, "A (B [T2] - [T1]) C" },
+            { "to the start of a control after a table", new object[] { Table("T1"), Control(P("B"), Table("T2"), P("S")), P("C") }, "T2", "B", Position.Before, "[T1] (- [T2] B S) C" },
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(TableMoves))]
+    public void MoveBlock_LeavesAParagraphBetweenTables_AndAfterTheLast(
+        string scenario, object[] body, string source, string target, Position pos, string expected)
+    {
+        Assert.NotEmpty(scenario);
+        var bytes = Document(body);
+        using var session = new DocxSession(bytes);
+
+        var result = Move(session, source, target, pos);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var saved = session.Save();
+        Assert.Equal(expected, Shape(saved));
+        Assert.Equal("p", Assert.Single(result.Created).Kind);
+        Assert.Equal(source, Text(XElement.Parse(session.Raw.GetXml(Assert.Single(result.Modified).Id))));
+        AssertValid(saved);
+        Assert.True(session.Undo());
+        Assert.Equal(Shape(bytes), Shape(session.Save()));
+        Assert.False(session.Undo());
+    }
+
+    // Accepting a tracked move must leave the same paragraphs, whichever way it is accepted, and rejecting
+    // it none of them.
+    [Theory]
+    [MemberData(nameof(TableMoves))]
+    public void MoveBlock_Tracked_LeavesAParagraphBetweenTables_WhenAccepted(
+        string scenario, object[] body, string source, string target, Position pos, string expected)
+    {
+        Assert.NotEmpty(scenario);
+        var bytes = Document(body);
+        using var session = Tracked(bytes);
+
+        var result = Move(session, source, target, pos);
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Equal(source, Text(XElement.Parse(session.Raw.GetXml(result.Created[0].Id))));
+        Assert.Equal("p", result.Created[1].Kind);
+        Assert.Equal(2, result.Created.Count);
+        var saved = session.Save();
+        AssertValid(saved);
+        Assert.Equal(expected, Shape(Accept(saved)));
+        Assert.Equal(expected, Shape(ResolveEach(saved, accept: true)));
+        Assert.Equal(Shape(bytes), Shape(Reject(saved)));
+        Assert.Equal(Shape(bytes), Shape(ResolveEach(saved, accept: false)));
+    }
+
+    [Fact]
+    public void MoveBlock_Tracked_OneParagraphAfterAnotherLeavesTwoTablesApart_WhenAccepted()
+    {
+        var bytes = Document(Table("T1"), P("A"), P("B"), Table("T2"), P("C"));
+        using var session = Tracked(bytes);
+
+        Assert.True(Move(session, "A", "C", Position.After).Success);
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+
+        var saved = session.Save();
+        Assert.Equal("[T1] - [T2] C B A", Shape(Accept(saved)));
+        Assert.Equal("[T1] - [T2] C B A", Shape(ResolveEach(saved, accept: true)));
+        Assert.Equal(Shape(bytes), Shape(Reject(saved)));
+    }
+
+    private static XElement Revised(XName name, params object[] content) => new(name, new XAttribute(W.id, 90),
+        new XAttribute(W.author, "Bob"), new XAttribute(W.date, "2031-01-01T00:00:00Z"), content);
+
+    /// <summary>A paragraph whose mark is revised by Bob, and its text too unless it is live.</summary>
+    private static XElement RevisedP(string text, XName name, bool liveText = false)
+    {
+        var run = new XElement(W.r, new XElement(name == W.del && !liveText ? W.delText : W.t, text));
+        return new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, Revised(name))), liveText ? run : Revised(name, run));
+    }
+
+    public static TheoryData<string, object[], string, string> PendingNeighbours()
+    {
+        var gone = RevisedP("gone", W.del);
+        var emptied = new XElement(W.p, Revised(W.del, new XElement(W.r, new XElement(W.delText, "text"))));
+        XElement Range(XName name, int id) => new(name, new XAttribute(W.id, id), name.LocalName.EndsWith("End") ? null
+            : new object[] { new XAttribute(W.author, "Bob"), new XAttribute(W.date, "2031-01-01T00:00:00Z") });
+        var inserted = new object[]
+        {
+            Range(W.customXmlInsRangeStart, 91),
+            Control(Range(W.customXmlInsRangeEnd, 91), Table("T2"), P("S"), Range(W.customXmlInsRangeStart, 92)), Range(W.customXmlInsRangeEnd, 92),
+        };
+        return new()
+        {
+            // what is left once every change is accepted, and once every one is rejected
+            { "a deleted paragraph", new object[] { Table("T1"), gone, P("B"), Table("T2"), P("C") }, "[T1] - [T2] C B", "[T1] gone - [T2] C B" },
+            { "one at a control's end", new object[] { Control(Table("T1"), gone), P("B"), Table("T2"), P("C") }, "([T1]) - [T2] C B", "([T1] gone) - [T2] C B" },
+            { "one at a control's start", new object[] { Table("T1"), P("B"), Control(gone, Table("T2"), P("S")), P("C") }, "[T1] - ([T2] S) C B", "[T1] - (gone [T2] S) C B" },
+            { "an inserted paragraph", new object[] { Table("T1"), RevisedP("new", W.ins), P("B"), Table("T2"), P("C") }, "[T1] new - [T2] C B", "[T1] - [T2] C B" },
+            { "an inserted content control", new object[] { Table("T1"), P("B") }.Concat(inserted).Append(P("C")).ToArray(), "[T1] - ([T2] S) C B", "[T1] - [T2] S C B" },
+            // these stay whichever way, so they keep the tables apart
+            { "an empty paragraph", new object[] { Table("T1"), new XElement(W.p), P("B"), Table("T2"), P("C") }, "[T1] - [T2] C B", "[T1] - [T2] C B" },
+            { "a paragraph with its text deleted", new object[] { Table("T1"), emptied, P("B"), Table("T2"), P("C") }, "[T1] - [T2] C B", "[T1] text [T2] C B" },
+            { "live text whose mark is deleted", new object[] { Table("T1"), RevisedP("live", W.del, liveText: true), P("B"), Table("T2"), P("C") }, "[T1] live [T2] C B", "[T1] live [T2] C B" },
+        };
+    }
+
+    // Untracked, the move has to leave the tables apart whichever way the pending changes are resolved.
+    [Theory]
+    [MemberData(nameof(PendingNeighbours))]
+    public void MoveBlock_LeavesTablesApart_HoweverPendingChangesBesideThemAreResolved(
+        string scenario, object[] body, string accepted, string rejected)
+    {
+        Assert.NotEmpty(scenario);
+        using var session = new DocxSession(Document(body));
+
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+
+        var saved = session.Save();
+        Assert.Equal(accepted, Shape(Accept(saved)));
+        Assert.Equal(rejected, Shape(Reject(saved)));
+    }
+
+    [Theory]
+    [InlineData("a last paragraph of a control that something follows", "B", "T1", Position.Before, "(B [T1]) C")]
+    [InlineData("the same, with a blank paragraph after it", "C", "T1", Position.Before, "(C [T1] B)")]
+    public void MoveBlock_AddsNoParagraphWhereNoneIsNeeded(string scenario, string source, string target, Position pos, string expected)
+    {
+        var bytes = scenario.StartsWith("a last") ? Document(Control(Table("T1"), P("B")), P("C")) : Document(Control(Table("T1"), P("B"), P("C")));
+        using var untracked = new DocxSession(bytes);
+        Assert.Empty(Move(untracked, source, target, pos).Created);
+        Assert.Equal(expected, Shape(untracked.Save()));
+
+        using var tracked = Tracked(bytes);
+        Assert.Single(Move(tracked, source, target, pos).Created);
+        Assert.Equal(expected, Shape(Accept(tracked.Save())));
+        Assert.Equal(expected, Shape(ResolveEach(tracked.Save(), accept: true)));
+        Assert.Equal(Shape(bytes), Shape(ResolveEach(tracked.Save(), accept: false)));
+    }
+
+    [Fact]
+    public void MoveBlock_AddsAParagraphOnEachSideOfTheTableThatNeedsOne()
+    {
+        using var session = new DocxSession(Document(P("A"), Control(Table("T1"), P("B"), Table("T2"))));
+        Assert.Equal(2, Move(session, "T1", "T2", Position.After).Created.Count);
+        Assert.Equal("A (B [T2] - [T1] -)", Shape(session.Save()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MoveBlock_PutsTheParagraphAfterTheRangesThatCoverTheTable(bool trackChanges)
+    {
+        var bytes = Document(P("X"), BookmarkStart(5), P("A"), Table("T1"), P("B"), BookmarkEnd(5), Table("T2"), P("C"));
+        using var session = trackChanges ? Tracked(bytes) : new DocxSession(bytes);
+
+        Assert.True(Move(session, "B", "A", Position.Before).Success);
+
+        Assert.Equal("X < B A [T1] > - [T2] C", Shape(trackChanges ? Accept(session.Save()) : session.Save()));
+    }
+
+    // The paragraph that keeps the tables apart is part of the move that left it.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void MoveBlock_Tracked_OneRevisionResolvesTheMoveAndTheParagraphItLeft(bool accept)
+    {
+        var bytes = Document(Table("T1"), P("B"), Table("T2"), P("C"));
+        using var session = Tracked(bytes);
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.Equal(("move", "B¶"), (revision.Type, revision.Text));
+        Assert.True((accept ? session.AcceptRevision(revision.Id) : session.RejectRevision(revision.Id)).Success);
+
+        Assert.Empty(session.ListRevisions());
+        Assert.Equal(accept ? "[T1] - [T2] C B" : Shape(bytes), Shape(session.Save()));
+    }
+
+    // Resolving a revision keeps the paragraph that holds two tables apart by the rule a move uses:
+    // the edges of content controls and custom XML elements and permission markers do not.
+    [Theory]
+    [InlineData("control", true, "(A [T1] -) ([T2] B) C")]
+    [InlineData("control", false, "(A [T1] -) ([T2] B) C")]
+    [InlineData("custom XML", true, "(A [T1] -) {[T2] B} C")]
+    [InlineData("custom XML", false, "(A [T1] -) {[T2] B} C")]
+    [InlineData("permission", true, "A [T1] < - > [T2] B")]
+    [InlineData("permission", false, "A [T1] < - > [T2] B")]
+    [InlineData("nothing", true, "A [T1] B C")] // control: no table after it, so the paragraph goes
+    public void ResolvingARevision_KeepsTheParagraphBetweenTwoTables(string between, bool accept, string expected)
+    {
+        // Accepting removes a paragraph whose mark is deleted; rejecting, one whose mark is inserted.
+        var mark = new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, Revised(accept ? W.del : W.ins))));
+        var bytes = Document(between switch
+        {
+            "control" => new object[] { Control(P("A"), Table("T1"), mark), Control(Table("T2"), P("B")), P("C") },
+            "custom XML" => new object[] { Control(P("A"), Table("T1"), mark),
+                new XElement(W.customXml, new XAttribute(W.element, "e"), Table("T2"), P("B")), P("C") },
+            "permission" => new object[] { P("A"), Table("T1"), new XElement(W.permStart, new XAttribute(W.id, 8)), mark,
+                new XElement(W.permEnd, new XAttribute(W.id, 8)), Table("T2"), P("B") },
+            _ => new object[] { P("A"), Table("T1"), mark, P("B"), P("C") },
+        });
+        using var session = new DocxSession(bytes);
+        var revision = Assert.Single(session.ListRevisions());
+
+        Assert.True((accept ? session.AcceptRevision(revision.Id) : session.RejectRevision(revision.Id)).Success);
+
+        Assert.Empty(session.ListRevisions());
+        Assert.Equal(expected, Shape(session.Save()));
+    }
+
+    // A blank paragraph someone adds after a moved one is their own insertion.
+    [Theory]
+    [InlineData("Bob", "2031-01-01T00:00:00Z", true)]
+    [InlineData("Alice", "2031-01-01T00:00:01Z", true)]
+    [InlineData("Alice", "2031-01-01T00:00:00Z", false)]
+    public void ABlankParagraphInsertedAfterAMovedOne_IsItsOwnRevision(string author, string date, bool beforeATable)
+    {
+        XElement Mark(XName name, int id, string by, string on) =>
+            new(name, new XAttribute(W.id, id), new XAttribute(W.author, by), new XAttribute(W.date, on));
+        XElement WithRun(XElement mark) { mark.Add(new XElement(W.r, new XElement(W.t, "B"))); return mark; }
+        XElement Side(XName content, XName start, XName end, int id) => new(W.p,
+            new XElement(W.pPr, new XElement(W.rPr, Mark(content, id, "Alice", "2031-01-01T00:00:00Z"))),
+            new XElement(start, new XAttribute(W.id, id + 1), new XAttribute(W.name, "m"), new XAttribute(W.author, "Alice"), new XAttribute(W.date, "2031-01-01T00:00:00Z")),
+            WithRun(Mark(content, id + 2, "Alice", "2031-01-01T00:00:00Z")),
+            new XElement(end, new XAttribute(W.id, id + 1)));
+        var blank = new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, Mark(W.ins, 80, author, date))));
+        using var session = new DocxSession(Document(Table("T1"), Side(W.moveFrom, W.moveFromRangeStart, W.moveFromRangeEnd, 60), blank,
+            beforeATable ? Table("T2") : P("D"), Side(W.moveTo, W.moveToRangeStart, W.moveToRangeEnd, 70), P("C")));
+
+        Assert.Equal(new[] { "insert", "move" }, session.ListRevisions().Select(r => r.Type).OrderBy(t => t));
+    }
+
+    [Theory]
+    [InlineData("T2", "B", Position.Before, "T1", "B", Position.Before)]
+    [InlineData("T1", "A", Position.Before, "B", "A", Position.Before)]
+    [InlineData("T1", "B", Position.After, "B", "A", Position.Before)]
+    [InlineData("B", "A", Position.Before, "T2", "A", Position.After)]
+    public void MoveBlock_Tracked_TwoMovesAroundTables_AcceptToTheUntrackedResultAndRejectToTheOriginal(
+        string first, string firstTarget, Position firstPos, string second, string secondTarget, Position secondPos)
+    {
+        var bytes = Document(P("A"), Table("T1"), P("B"), Table("T2"), P("C"));
+        using var untracked = new DocxSession(bytes);
+        using var tracked = Tracked(bytes);
+        foreach (var session in new[] { untracked, tracked })
+        {
+            var ids = new[] { "A", "T1", "B", "T2", "C" }.ToDictionary(t => t, t => Block(session, t));
+            foreach (var (source, target, pos) in new[] { (first, firstTarget, firstPos), (second, secondTarget, secondPos) })
+            {
+                var result = session.MoveBlock(ids[source], ids[target], pos);
+                Assert.True(result.Success, result.Error?.Message);
+                if (session == tracked) ids[source] = result.Created[0].Id;
+            }
+        }
+        Assert.Equal(Shape(untracked.Save()), Shape(Accept(tracked.Save())));
+        Assert.Equal(Shape(bytes), Shape(Reject(tracked.Save())));
+        Assert.Equal(Shape(bytes), Shape(ResolveEach(tracked.Save(), accept: false)));
+    }
+
+    [Fact]
+    public void MoveBlock_InAControlInCustomXml_SeesTheTableBeforeBoth()
+    {
+        using var session = new DocxSession(Document(Table("T1"), new XElement(W.customXml, new XAttribute(W.element, "e"),
+            new XElement(W.customXmlPr), Control(P("B"), Table("T2"), P("S"))), P("C")));
+        var result = session.MoveBlock(session.FindByKind("tbl", "body").Last().Anchor.Id, session.FindByText("B")!.Anchor.Id, Position.Before);
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Equal("[T1] {(- [T2] B S)} C", Shape(session.Save()));
+    }
+
+    // InsertTable keeps its table apart by the same rule.
+    [Fact]
+    public void InsertTable_SeesPastPermissionMarkersAndControlEdges()
+    {
+        using var session = new DocxSession(Document(P("A"), new XElement(W.permStart, new XAttribute(W.id, 8)),
+            new XElement(W.permEnd, new XAttribute(W.id, 8)), Table("T1"), P("B"), Control(Table("T2"), P("S")), P("C")));
+        foreach (var text in new[] { "A", "B" })
+            Assert.True(session.InsertTable(Block(session, text), Position.After, 1, 1).Success);
+        Assert.Equal("A [] - < > [T1] B [] - ([T2] S) C", Shape(session.Save()));
+    }
+
+    // The paragraph left between the tables is a plain one, not an empty item of the moved one's list.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MoveBlock_LeavesAPlainParagraphBetweenTables(bool trackChanges)
+    {
+        var heading = P("A", new XElement(W.pPr, new XElement(W.outlineLvl, new XAttribute(W.val, 0))));
+        var bytes = Document(Table("T1"), heading, Table("T2"), P("C"));
+        using var session = trackChanges ? Tracked(bytes) : new DocxSession(bytes);
+
+        Assert.True(Move(session, "A", "C", Position.After).Success);
+
+        var saved = trackChanges ? Accept(session.Save()) : session.Save();
+        Assert.Equal("[T1] - [T2] C A", Shape(saved));
+        Assert.Empty(BodyOf(saved).Elements(W.p).First().Descendants(W.outlineLvl));
+        Assert.Single(BodyOf(saved).Descendants(W.outlineLvl));
+    }
+
+    // A tracked move leaves a copy on each side, and a marker between blocks could go with only one.
+    [Theory]
+    [InlineData("end")]
+    [InlineData("both")]
+    public void MoveBlock_Tracked_RefusesToMoveABlockOutOfItsBodyLevelRange(string markers)
+    {
+        var start = new XElement(W.commentRangeStart, new XAttribute(W.id, 3));
+        var end = new XElement(W.commentRangeEnd, new XAttribute(W.id, 3));
+        using var session = Tracked(Document(markers == "both"
+            ? new object[] { P("X"), start, P("A"), end, P("B") }
+            : new object[] { P("X"), P("A", start), end, P("B") }));
+
+        Assert.False(Move(session, "A", "B", Position.After).Success);
+        Assert.True(Move(session, "B", "X", Position.Before).Success);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void MoveBlock_RefusesToCrossASectionBreakInsideATableOrAContentControl(bool inTable)
+    {
+        var holder = inTable ? Table("T") : Control(P("T"));
+        holder.Descendants(W.p).Single().AddFirst(new XElement(W.pPr, new XElement(W.sectPr)));
+        using var session = new DocxSession(Document(P("A"), P("B"), holder, P("C")));
+
+        Assert.False(Move(session, "A", "C", Position.After).Success);
+        Assert.True(Move(session, "A", "B", Position.After).Success);
+        Assert.False(session.MoveBlockRange(Block(session, "B"), Block(session, "T"), Block(session, "C"), Position.After).Success);
+    }
+
+    [Fact]
+    public void MoveBlockRange_TakesBothMarkersOfTheBookmarkAroundTheRun()
+    {
+        using var session = new DocxSession(Document(BookmarkStart(3), P("A"), P("B"), BookmarkEnd(3), P("C")));
+
+        var result = session.MoveBlockRange(Block(session, "A"), Block(session, "B"), Block(session, "C"), Position.After);
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Equal("C < A B >", Shape(session.Save()));
+    }
+
+    public static TheoryData<string, object[]> CrowdedBodies() => new()
+    {
+        {
+            "a field whose begin, separate and end are in different paragraphs",
+            new object[]
+            {
+                P("A", FieldChar("begin"), new XElement(W.r, new XElement(W.instrText, " TOC "))), P("S", FieldChar("separate")),
+                P("R1"), P("R2"), P("E", FieldChar("end")), P("F"),
+            }
+        },
+        {
+            "a bookmark whose end comes before its start",
+            new object[] { P("X"), BookmarkEnd(3), P("B"), P("A", BookmarkStart(3)), P("D") }
+        },
+        {
+            "bookmarks and a permission that end between blocks",
+            new object[]
+            {
+                P("A", BookmarkStart(1)), BookmarkEnd(1), BookmarkStart(2), P("B"), P("C", BookmarkEnd(2)),
+                new XElement(W.permStart, new XAttribute(W.id, 7)), P("D"),
+                new XElement(W.permEnd, new XAttribute(W.id, 7)), BookmarkStart(4), BookmarkEnd(4), P("E"),
+            }
+        },
+        {
+            "nested and overlapping ranges between blocks",
+            new object[]
+            {
+                BookmarkStart(1), P("A"), BookmarkStart(2), P("B"), BookmarkEnd(1), P("C"), BookmarkEnd(2),
+                P("D", BookmarkStart(3)), P("E"), BookmarkEnd(3), P("F"),
+            }
+        },
+        {
+            "tables, a content control and a permission",
+            new object[]
+            {
+                Table("T1"), P("A"), Table("T2"), new XElement(W.permStart, new XAttribute(W.id, 9)), P("B"), Control(Table("T3"), P("C")),
+                new XElement(W.permEnd, new XAttribute(W.id, 9)), P("D"), Table("T4"), BookmarkStart(5), P("E"), BookmarkEnd(5),
+            }
+        },
+        {
+            "a field over tables and a bookmark",
+            Contents().Concat(new object[] { P("A", BookmarkStart(1)), Table("T1"), BookmarkEnd(1), P("B"), Table("T2"), P("C") }).ToArray()
+        },
+    };
+
+    /// <summary>Whether some placement beside the target keeps what every range covers: the block alone or
+    /// with markers right beside it, on either side of the markers between the target and the next block.</summary>
+    private static bool SomePlacementKeepsCoverage(XElement body, int source, int target, Position pos)
+    {
+        var children = body.Elements().ToList();
+        bool Marker(XElement e) => e.Name != W.p && e.Name != W.tbl && e.Name != W.sdt && e.Name != W.sectPr;
+        var coverage = Coverage(body);
+        for (int lo = source; lo == source || (lo >= 0 && Marker(children[lo])); lo--)
+        for (int hi = source; hi == source || (hi < children.Count && Marker(children[hi])); hi++)
+        {
+            var run = children.GetRange(lo, hi - lo + 1);
+            var others = children.Except(run).ToList();
+            int slot = others.IndexOf(children[target]) + (pos == Position.Before ? 0 : 1);
+            while (true)
+            {
+                var reordered = others.ToList();
+                reordered.InsertRange(slot, run);
+                if (Coverage(new XElement(W.body, reordered)).SequenceEqual(coverage)) return true;
+                int beside = pos == Position.Before ? slot - 1 : slot;
+                if (beside < 0 || beside >= others.Count || !Marker(others[beside])) break;
+                slot += pos == Position.Before ? -1 : 1;
+            }
+        }
+        return false;
+    }
+
+    // Every move of every block: offered exactly when it is accepted; an accepted one keeps what each
+    // range and field covers, leaves the tables apart and undoes to the document it started from; and
+    // one is refused only where no placement beside the target would keep what they cover.
+    [Theory]
+    [MemberData(nameof(CrowdedBodies))]
+    public void MoveBlock_EveryMove_KeepsWhatRangesCoverAndTablesApart(string scenario, object[] body)
+    {
+        Assert.NotEmpty(scenario);
+        using var session = new DocxSession(Document(body));
+        var ids = session.ListBlocks().Body.Select(u => u.Id).ToArray();
+        var original = session.Save();
+        var originalBody = BodyOf(original);
+        var coverage = Coverage(originalBody);
+        // (-1 for a block inside a content control, which the placement check leaves out)
+        var position = ids.ToDictionary(id => id, id =>
+        {
+            var text = Text(XElement.Parse(session.Raw.GetXml(id)));
+            return originalBody.Elements().ToList().FindIndex(e => (e.Name == W.p || e.Name == W.tbl) && Text(e) == text);
+        });
+
+        foreach (var source in ids)
+        foreach (var target in ids.Where(id => id != source))
+        foreach (var pos in new[] { Position.Before, Position.After })
+        {
+            bool offered = IsOffered(session, source, target, pos);
+            var result = session.MoveBlock(source, target, pos);
+            // A block already in place is a no-op that succeeds even where no move is offered.
+            bool inPlace = result.Success && result.Modified.Count == 0;
+            if (!inPlace) Assert.Equal(offered, result.Success);
+            var saved = session.Save();
+            if (result.Success && !inPlace)
+            {
+                Assert.Equal(coverage, Coverage(BodyOf(saved)));
+                Assert.False(TableTouches(BodyOf(saved)), Shape(saved));
+                AssertValid(saved);
+                Assert.True(session.Undo());
+            }
+            else if (!inPlace && position[source] >= 0 && position[target] >= 0)
+                Assert.False(SomePlacementKeepsCoverage(originalBody, position[source], position[target], pos),
+                    $"{source} {pos} {target}: {result.Error!.Message}");
+            Assert.Equal(Shape(original), Shape(session.Save()));
+        }
+    }
+
+    // ─── Review round: other stories, pending markup and the paragraph between tables (#1861) ───
+
+    private static XElement TextBoxParagraph(string text, params object[] boxContent)
+    {
+        XNamespace v = "urn:schemas-microsoft-com:vml";
+        return new XElement(W.p, new XElement(W.r, new XElement(W.t, text)), new XElement(W.r, new XElement(W.pict,
+            new XElement(v + "shape", new XElement(v + "textbox", new XElement(W.txbxContent, new XElement(W.p, boxContent)))))));
+    }
+
+    private static XElement RevisedTable(string text, XName revision)
+    {
+        var table = Table(text);
+        foreach (var row in table.Elements(W.tr)) row.AddFirst(new XElement(W.trPr, Revised(revision)));
+        return table;
+    }
+
+    private static byte[] WithBody(byte[] bytes, Action<XElement> edit)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(bytes);
+        using (var document = WordprocessingDocument.Open(stream, true))
+        {
+            var main = document.MainDocumentPart!;
+            edit(main.GetXDocument().Root!.Element(W.body)!);
+            main.PutXDocument();
+        }
+        return stream.ToArray();
+    }
+
+    // A text box is a story of its own: an unfinished field or a stray range marker in one pairs with
+    // nothing in the body.
+    [Theory]
+    [InlineData("begin", "A")]       // the box's begin would take the body field's end
+    [InlineData("end", "C")]         // the box's end would take the body field's begin
+    [InlineData("bookmarkStart", "B")] // the box's start would take the body bookmark's end
+    public void MoveBlock_IgnoresTheFieldsAndRangesOfATextBox(string inBox, string source)
+    {
+        var bookmark = inBox == "bookmarkStart";
+        // The body's bookmark covers only D; a stray start in A's text box would stretch it over B and C.
+        using var session = new DocxSession(Document(bookmark
+            ? new object[] { TextBoxParagraph("A", BookmarkStart(5)), P("B"), P("C"), P("D", BookmarkStart(5)), P("E", BookmarkEnd(5)), P("F") }
+            : new object[]
+            {
+                P("A", FieldChar("begin"), new XElement(W.r, new XElement(W.instrText, " TOC ")), FieldChar("separate")),
+                TextBoxParagraph("B", FieldChar(inBox)), P("C", FieldChar("end")), P("D"),
+            }));
+        Assert.False(Move(session, source, "D", Position.After).Success);
+    }
+
+    // Untracked, the tables stay apart in the markup as it stands, not only once it is accepted or rejected.
+    [Fact]
+    public void MoveBlock_KeepsTablesApartInThePendingMarkup()
+    {
+        using var session = new DocxSession(Document(RevisedTable("T1", W.ins), P("B"), RevisedTable("T2", W.del), P("C")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] - [T2] C B", Shape(session.Save()));
+    }
+
+    // The paragraph added between tables goes outside every range it can: here past the bookmark that
+    // starts and ends between the table and the next one, not inside the one that covers the table.
+    [Fact]
+    public void MoveBlock_PutsTheParagraphOutsideTheRangesBetweenTheTables()
+    {
+        using var session = new DocxSession(Document(BookmarkStart(1), Table("T1"), P("B"),
+            BookmarkStart(2), BookmarkEnd(1), BookmarkEnd(2), Table("T2"), P("C")));
+        Assert.True(Move(session, "B", "T1", Position.Before).Success);
+        Assert.Equal("< B [T1] < > > - [T2] C", Shape(session.Save()));
+    }
+
+    // Tracked, the paragraph a move leaves between two tables belongs to the move even with a pending
+    // deletion after it, so rejecting the move leaves nothing of it behind.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void MoveBlock_Tracked_TheParagraphItLeavesBesideAPendingDeletionIsPartOfTheMove(bool accept)
+    {
+        var bytes = Document(Table("T1"), P("B"), RevisedP("D", W.del), Table("T2"), P("C"));
+        using var session = Tracked(bytes);
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+
+        var move = Assert.Single(session.ListRevisions(), r => r.Type == "move");
+        Assert.True((accept ? session.AcceptRevision(move.Id) : session.RejectRevision(move.Id)).Success);
+
+        Assert.Equal("delete", Assert.Single(session.ListRevisions()).Type);
+        if (!accept) Assert.Equal(Shape(bytes), Shape(session.Save()));
+    }
+
+    // A tracked move owns the inserted paragraph after its source only when the same edit inserted it: its
+    // author and its edit stamp (Docxodus stamps every tracked edit with its own sub-second date), and never a
+    // paragraph with a section break. A paragraph with a whole-second stamp, as Word writes, is its own change.
+    [Theory]
+    [InlineData("section break")]
+    [InlineData("whole-second stamps")]
+    public void ListRevisions_AMoveOwnsOnlyTheParagraphItsOwnEditInserted(string scenario)
+    {
+        using var mover = Tracked(Document(Table("T1"), P("B"), Table("T2"), P("C")));
+        Assert.True(Move(mover, "B", "C", Position.After).Success);
+        var bytes = WithBody(mover.Save(), body =>
+        {
+            var source = body.Elements(W.p).First(e => e.Descendants(W.moveFrom).Any());
+            var separator = source.ElementsAfterSelf().First();
+            Assert.Equal(W.p, separator.Name);
+            if (scenario == "section break")
+                separator.Element(W.pPr)!.Element(W.rPr)!.AddAfterSelf(new XElement(W.sectPr));
+            else
+                foreach (var date in body.Descendants().Attributes(W.date)) date.Value = "2031-01-01T00:00:00Z";
+        });
+
+        using var session = Tracked(bytes);
+        var revisions = session.ListRevisions();
+        Assert.Equal(new[] { "insert", "move" }, revisions.Select(r => r.Type).OrderBy(t => t, StringComparer.Ordinal));
+        Assert.True(session.RejectRevision(revisions.Single(r => r.Type == "move").Id).Success);
+        var paragraphs = BodyOf(session.Save()).Elements(W.p).ToList();
+        Assert.Equal(scenario == "section break" ? 1 : 0, paragraphs.Count(e => e.Element(W.pPr)?.Element(W.sectPr) is not null));
+        Assert.Single(session.ListRevisions(), r => r.Type == "insert");
+    }
+
+    // The paragraph stays the move's after another move beside it is rejected first.
+    [Fact]
+    public void MoveBlock_Tracked_EachMoveTakesItsParagraphWhicheverIsRejectedFirst()
+    {
+        var bytes = Document(Table("T1"), P("A"), P("B"), Table("T2"), P("C"));
+        using var session = Tracked(bytes);
+        Assert.True(Move(session, "A", "C", Position.After).Success);
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+
+        foreach (var text in new[] { "A", "B" })
+        {
+            var move = session.ListRevisions().First(r => r.Type == "move" && r.Text.StartsWith(text, StringComparison.Ordinal));
+            Assert.True(session.RejectRevision(move.Id).Success);
+        }
+
+        Assert.Empty(session.ListRevisions());
+        Assert.Equal(Shape(bytes), Shape(session.Save()));
+    }
+
+    // A moved table keeps the paragraph it needs once a pending deletion beside it is accepted in its revision.
+    [Fact]
+    public void MoveBlock_Tracked_ATableKeepsTheParagraphItNeedsBesideAPendingDeletionInItsRevision()
+    {
+        var bytes = Document(P("A"), Table("Tm"), P("B"), Table("T1"), RevisedP("D", W.del), Table("T2"), P("C"));
+        using var session = Tracked(bytes);
+        Assert.True(Move(session, "Tm", "T1", Position.After).Success);
+
+        // The source's deleted rows and the destination's inserted rows, its paragraphs in that revision.
+        var alice = session.ListRevisions().Where(r => r.Author == "Alice").ToList();
+        Assert.Equal(2, alice.Count);
+        foreach (var revision in alice) Assert.True(session.RejectRevision(revision.Id).Success);
+
+        Assert.Equal("delete", Assert.Single(session.ListRevisions()).Type);
+        Assert.Equal(Shape(bytes), Shape(session.Save()));
+    }
+
+    // A tracked table keeps the paragraph it needs in its own revision when that paragraph goes past a
+    // permission range's end, so rejecting the table leaves nothing.
+    [Fact]
+    public void InsertTable_Tracked_KeepsItsParagraphPastAPermissionEndInItsRevision()
+    {
+        var bytes = Document(new XElement(W.permStart, new XAttribute(W.id, 8)), P("A"),
+            new XElement(W.permEnd, new XAttribute(W.id, 8)), Table("B"), P("C"));
+        using var session = Tracked(bytes);
+        Assert.True(session.InsertTable(Block(session, "A"), Position.After, 1, 1).Success);
+
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.True(session.RejectRevision(revision.Id).Success);
+        Assert.Equal(Shape(bytes), Shape(session.Save()));
+    }
+
+    // The paragraph also goes before a range that starts just before it, when that keeps the range as it was.
+    [Fact]
+    public void MoveBlock_PutsTheParagraphBeforeARangeThatStartsBetweenTheTables()
+    {
+        using var session = new DocxSession(Document(Table("T1"), BookmarkStart(5), P("B"), Table("T2"), P("C"), BookmarkEnd(5), P("D")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] - < [T2] C B > D", Shape(session.Save()));
+    }
+
+    // Tracked, a table inserted beside a deleted one keeps a paragraph between them as the markup stands,
+    // where a reader would otherwise see one table until the deletion is accepted.
+    [Fact]
+    public void InsertTable_Tracked_KeepsAParagraphBesideADeletedTable()
+    {
+        var bytes = Document(P("A"), RevisedTable("D", W.del), P("Q"));
+        using var session = Tracked(bytes);
+        Assert.True(session.InsertTable(Block(session, "A"), Position.After, 1, 1).Success);
+
+        var saved = session.Save();
+        Assert.False(TableTouches(BodyOf(saved)), Shape(saved));
+        Assert.False(TableTouches(BodyOf(Accept(saved))), Shape(Accept(saved)));
+        // The paragraph is part of the table's revision: rejecting that one revision takes both away.
+        var inserted = Assert.Single(session.ListRevisions(), r => r.Author == "Alice");
+        Assert.True(session.RejectRevision(inserted.Id).Success);
+        Assert.Equal(Shape(bytes), Shape(session.Save()));
+    }
+
+    // Like a bookmark, a permission range's end after a pending split keeps a tracked table out of the split,
+    // which rejecting has to join across.
+    [Fact]
+    public void InsertTable_Tracked_RefusesToSplitAPendingJoinPastAPermissionEnd()
+    {
+        using var session = Tracked(Document(new XElement(W.permStart, new XAttribute(W.id, 8)), RevisedP("A", W.ins, liveText: true),
+            new XElement(W.permEnd, new XAttribute(W.id, 8)), P("B")));
+        Assert.False(session.InsertTable(Block(session, "A"), Position.After, 1, 1).Success);
+    }
+
+    // A tracked move owns the paragraph it leaves between two tables past a permission range's end.
+    [Fact]
+    public void MoveBlock_Tracked_OwnsTheParagraphItLeavesPastAPermissionEnd()
+    {
+        var bytes = Document(new XElement(W.permStart, new XAttribute(W.id, 8)), Table("T1"), P("B"),
+            new XElement(W.permEnd, new XAttribute(W.id, 8)), Table("T2"), P("C"));
+        using var session = Tracked(bytes);
+        Assert.True(Move(session, "B", "T1", Position.Before).Success);
+
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.True(session.RejectRevision(revision.Id).Success);
+        Assert.Equal(Shape(bytes), Shape(session.Save()));
+    }
+
+    // On a tie the paragraph stays where it was put: here inside the bookmark the moved block was in, not moved
+    // into the one that ends after the first table (Word starts a range before it ends another at one place).
+    [Fact]
+    public void MoveBlock_KeepsTheParagraphWhereItWasPutOnATie()
+    {
+        using var session = new DocxSession(Document(BookmarkStart(1), Table("T1"), BookmarkStart(5), BookmarkEnd(1),
+            P("B"), Table("T2"), P("C"), BookmarkEnd(5), P("D")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("< [T1] < > - [T2] C B > D", Shape(session.Save()));
+    }
+
+    // A content control's revision markers stay against the control: the paragraph a table needs does not go
+    // between them, though going past the bookmark ends there would leave it inside fewer ranges.
+    [Fact]
+    public void MoveBlock_KeepsTheParagraphOutOfAContentControlsRevisionEnvelope()
+    {
+        XElement Range(XName name, int id) => new(name, new XAttribute(W.id, id), name.LocalName.EndsWith("End") ? null
+            : new object[] { new XAttribute(W.author, "Bob"), new XAttribute(W.date, "2031-01-01T00:00:00Z") });
+        using var session = new DocxSession(Document(BookmarkStart(1), BookmarkStart(2), P("A"),
+            Range(W.customXmlInsRangeStart, 91), BookmarkEnd(1), BookmarkEnd(2),
+            Control(Range(W.customXmlInsRangeEnd, 91), Table("T2"), P("S"), Range(W.customXmlInsRangeStart, 92)),
+            Range(W.customXmlInsRangeEnd, 92), P("C")));
+        Assert.True(session.InsertTable(Block(session, "A"), Position.After, 1, 1).Success);
+
+        Assert.Equal("< < A [] - < > > (> [T2] S <) > C", Shape(session.Save()));
+        Assert.DoesNotContain(session.ListRevisions(), r => r.ResolutionStatus == RevisionResolutionStatus.Malformed);
+    }
+
+    // A field's separate marks where its result begins: a block keeps its side of it.
+    [Theory]
+    [InlineData("B", "S", Position.Before, false)] // a result paragraph into the instructions
+    [InlineData("C", "B", Position.Before, true)]  // within the result
+    public void MoveBlock_KeepsAFieldsInstructionsAndResultApart(string source, string target, Position pos, bool allowed)
+    {
+        using var session = new DocxSession(Document(
+            P("A", FieldChar("begin"), new XElement(W.r, new XElement(W.instrText, " TOC "))),
+            P("S", FieldChar("separate")), P("B"), P("C"), P("E", FieldChar("end")), P("F")));
+        Assert.Equal(allowed, Move(session, source, target, pos).Success);
+    }
+
+    // A tracked table move owns the paragraph it leaves after its source table too.
+    [Fact]
+    public void MoveBlock_Tracked_ATableMoveOwnsTheParagraphItLeavesAtItsSource()
+    {
+        var bytes = Document(Table("T1"), RevisedP("D1", W.del), Table("Tm"), RevisedP("D2", W.del), Table("T2"), P("Q"));
+        using var session = Tracked(bytes);
+        Assert.True(Move(session, "Tm", "Q", Position.After).Success);
+
+        // The source's deleted rows (with the paragraph left after them) and the destination's inserted rows.
+        var alice = session.ListRevisions().Where(r => r.Author == "Alice").ToList();
+        Assert.Equal(2, alice.Count);
+        foreach (var revision in alice) Assert.True(session.RejectRevision(revision.Id).Success);
+
+        Assert.Equal(new[] { "delete", "delete" }, session.ListRevisions().Select(r => r.Type));
+        Assert.Equal(Shape(bytes), Shape(session.Save()));
+    }
+
+    // A shared fractional date is no proof one edit made both: an empty paragraph after a table that does not
+    // need it stays its own change, whether the date is written with an offset or in the session's own UTC form.
+    [Theory]
+    [InlineData("2026-11-26T23:55:30.9795274-06:00")]
+    [InlineData("2026-11-27T05:55:30.9795274Z")]
+    public void ListRevisions_AFractionalDateFromAnotherProducerLinksNothing(string date)
+    {
+        XElement Ins(int id) => new(W.ins, new XAttribute(W.id, id), new XAttribute(W.author, "Cmp"), new XAttribute(W.date, date));
+        var table = Table("New");
+        foreach (var row in table.Elements(W.tr)) row.AddFirst(new XElement(W.trPr, Ins(80)));
+        var blank = new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, Ins(81))));
+        using var session = new DocxSession(Document(P("Alpha"), table, blank, P("Beta")));
+
+        Assert.Equal(2, session.ListRevisions().Count);
+    }
+
+    // A content control's revision pair that encloses nothing holds no control, so it limits nothing.
+    [Fact]
+    public void MoveBlock_PlacesTheParagraphPastAnEmptyContentControlRevisionPair()
+    {
+        XElement Range(XName name, int id) => new(name, new XAttribute(W.id, id), name.LocalName.EndsWith("End") ? null
+            : new object[] { new XAttribute(W.author, "Bob"), new XAttribute(W.date, "2031-01-01T00:00:00Z") });
+        using var session = new DocxSession(Document(Table("T1"), BookmarkStart(5), Range(W.customXmlInsRangeStart, 95),
+            Range(W.customXmlInsRangeEnd, 95), BookmarkStart(7), P("B"), Table("T2"), P("C"), BookmarkEnd(7), BookmarkEnd(5), P("D")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] - < < > < [T2] C B > > D", Shape(session.Save()));
+    }
+
+    // Markup in a branch of alternate content that is not shown pairs with nothing.
+    [Theory]
+    [InlineData("wps", false)] // the choice is shown, so the fallback's end is not the field's
+    [InlineData("zz", true)]   // the fallback is shown: its end is the field's, and C is outside it
+    public void MoveBlock_IgnoresTheFieldCharactersOfAnAlternateBranchNotShown(string requires, bool allowed)
+    {
+        XNamespace mc = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+        var alternate = new XElement(W.r, new XElement(mc + "AlternateContent",
+            new XAttribute(XNamespace.Xmlns + "wps", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"),
+            new XAttribute(XNamespace.Xmlns + "zz", "urn:example:unsupported"),
+            new XElement(mc + "Choice", new XAttribute("Requires", requires), new XElement(W.t, "x")),
+            new XElement(mc + "Fallback", new XElement(W.fldChar, new XAttribute(W.fldCharType, "end")))));
+        using var session = new DocxSession(Document(
+            P("A", FieldChar("begin"), new XElement(W.r, new XElement(W.instrText, " TOC "))),
+            new XElement(W.p, alternate, new XElement(W.r, new XElement(W.t, "B"))), P("C", FieldChar("end")), P("D")));
+        Assert.Equal(allowed, Move(session, "C", "D", Position.After).Success);
+    }
+
+    // A field's instructions keep their order: a fragment in one paragraph does not move before another.
+    [Fact]
+    public void MoveBlock_KeepsTheOrderOfAFieldsInstructions()
+    {
+        XElement Instruction(string text) => new(W.r, new XElement(W.instrText, new XAttribute(Xml + "space", "preserve"), text));
+        using var session = new DocxSession(Document(P("A", FieldChar("begin"), Instruction(" TOC ")),
+            P("S1", Instruction("\\o ")), P("S2", Instruction("\"1-2\" ")), P("R", FieldChar("separate")), P("E", FieldChar("end")), P("F")));
+        Assert.False(Move(session, "S2", "S1", Position.Before).Success);
+    }
+
+    // Untracked, the tables stay apart however each pending change between them is resolved: rejecting the
+    // insertion and accepting the deletion would leave nothing between them.
+    [Fact]
+    public void MoveBlock_KeepsTablesApartWhicheverWayEachChangeBetweenThemIsResolved()
+    {
+        using var session = new DocxSession(Document(Table("T1"), RevisedP("new", W.ins), RevisedP("gone", W.del), P("B"), Table("T2"), P("C")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] new - - [T2] C B", Shape(session.Save()));
+    }
+
+    // A bookmark whose end comes before its start covers nothing, so it counts for nothing in placing the paragraph.
+    [Fact]
+    public void MoveBlock_PlacesTheParagraphIgnoringABookmarkWhoseEndComesFirst()
+    {
+        using var session = new DocxSession(Document(Table("T1"), BookmarkStart(1), BookmarkEnd(2), P("B"), BookmarkStart(2),
+            Table("T2"), P("C"), BookmarkEnd(1), P("D")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] - < > < [T2] C B > D", Shape(session.Save()));
+    }
+
+    // A move's two halves resolve together: with both between the tables, one always stays, so no paragraph is added.
+    [Fact]
+    public void MoveBlock_AddsNoParagraphWhereOnlyBothHalvesOfOneMoveWouldGo()
+    {
+        using var mover = Tracked(Document(Table("T1"), P("M"), P("B"), Table("T2"), P("C")));
+        Assert.True(Move(mover, "M", "B", Position.After).Success);
+        using var session = new DocxSession(mover.Save());
+
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] M M [T2] C B", Shape(session.Save()));
+    }
+
+    // Fields nested in another field's instructions keep their order too: swapping them would reverse its operands.
+    [Fact]
+    public void MoveBlock_KeepsTheOrderOfFieldsNestedInAFieldsInstructions()
+    {
+        XElement Instruction(string text) => new(W.r, new XElement(W.instrText, new XAttribute(Xml + "space", "preserve"), text));
+        using var session = new DocxSession(Document(P("A", FieldChar("begin"), Instruction(" IF ")),
+            P("N1", FieldChar("begin"), Instruction(" REF First "), FieldChar("end")),
+            P("N2", FieldChar("begin"), Instruction(" REF Last "), FieldChar("end")),
+            P("S", Instruction(" \"x\" \"y\" "), FieldChar("separate")), P("E", FieldChar("end")), P("F")));
+        Assert.False(Move(session, "N2", "N1", Position.Before).Success);
+    }
+
+    private static XElement TableWithRowMarks(string text, params XName[] revisions)
+    {
+        var table = Table(text);
+        int id = 70;
+        foreach (var row in table.Elements(W.tr))
+            row.AddFirst(new XElement(W.trPr, revisions.Select(r => new XElement(r, new XAttribute(W.id, id++),
+                new XAttribute(W.author, "Bob"), new XAttribute(W.date, "2031-01-01T00:00:00Z")))));
+        return table;
+    }
+
+    // A table whose rows were inserted and then deleted still stands as the markup is, and can stand once its
+    // marks are resolved one way and the other: the tables stay apart.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MoveBlock_KeepsTablesApartBesideATableWithRowsInsertedAndDeleted(bool deletedParagraph)
+    {
+        var body = new System.Collections.Generic.List<object> { TableWithRowMarks("T1", W.ins, W.del), P("B") };
+        if (deletedParagraph) body.Add(RevisedP("D", W.del));
+        body.AddRange(new object[] { deletedParagraph ? TableWithRowMarks("T2", W.ins, W.del) : Table("T2"), P("C") });
+        using var session = new DocxSession(Document(body.ToArray()));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal(deletedParagraph ? "[T1] - - [T2] C B" : "[T1] - [T2] C B", Shape(session.Save()));
+    }
+
+    // The paragraph never goes inside a content-control revision pair that encloses nothing: it would then enclose it.
+    [Fact]
+    public void MoveBlock_KeepsTheParagraphOutOfAnEmptyContentControlRevisionPair()
+    {
+        XElement Range(XName name, int id) => new(name, new XAttribute(W.id, id), name.LocalName.EndsWith("End") ? null
+            : new object[] { new XAttribute(W.author, "Bob"), new XAttribute(W.date, "2031-01-01T00:00:00Z") });
+        using var session = new DocxSession(Document(BookmarkStart(1), BookmarkStart(2), Table("T1"), P("B"),
+            Range(W.customXmlInsRangeStart, 95), BookmarkEnd(1), BookmarkEnd(2), BookmarkStart(3), BookmarkStart(4),
+            Range(W.customXmlInsRangeEnd, 95), Table("T2"), P("C"), BookmarkEnd(3), BookmarkEnd(4), P("D")));
+        Assert.True(Move(session, "B", "T1", Position.Before).Success);
+
+        Assert.Equal("< < B [T1] - < > > < < > [T2] C > > D", Shape(session.Save()));
+        Assert.DoesNotContain(session.ListRevisions(), r => r.ResolutionStatus == RevisionResolutionStatus.Malformed);
+    }
+
+    // A move's halves are paired by name with their range markers directly in the body too.
+    [Fact]
+    public void MoveBlock_PairsAMovesHalvesByTheRangesBesideThem()
+    {
+        using var mover = Tracked(Document(Table("T1"), P("M"), P("B"), Table("T2"), P("C")));
+        Assert.True(Move(mover, "M", "B", Position.After).Success);
+        var bytes = WithBody(mover.Save(), body =>
+        {
+            foreach (var paragraph in body.Elements(W.p).ToList())
+            {
+                foreach (var start in paragraph.Elements().Where(e => e.Name == W.moveFromRangeStart || e.Name == W.moveToRangeStart).ToList())
+                {
+                    start.Remove();
+                    paragraph.AddBeforeSelf(start);
+                }
+                foreach (var end in paragraph.Elements().Where(e => e.Name == W.moveFromRangeEnd || e.Name == W.moveToRangeEnd).ToList())
+                {
+                    end.Remove();
+                    paragraph.AddAfterSelf(end);
+                }
+            }
+        });
+        using var session = new DocxSession(bytes);
+
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] < M > < M > [T2] C B", Shape(session.Save()));
+    }
+
+    // Two different moves resolve on their own even when one author made them at the same whole second: only a
+    // move's own two halves are one decision.
+    [Fact]
+    public void MoveBlock_KeepsTablesApartBesideHalvesOfTwoMovesWithTheSameStamp()
+    {
+        using var mover = Tracked(Document(Table("T1"), P("A"), P("B"), Table("T2"), P("C"), P("D")));
+        Assert.True(Move(mover, "A", "D", Position.After).Success);
+        Assert.True(Move(mover, "D", "B", Position.Before).Success);
+        var bytes = WithBody(mover.Save(), body =>
+        {
+            foreach (var date in body.Descendants().Attributes(W.date)) date.Value = "2031-01-01T00:00:00Z";
+        });
+        using var session = new DocxSession(bytes);
+
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        var shape = Shape(session.Save());
+        Assert.StartsWith("[T1] A D - [T2]", shape);
+    }
+
+    // Grouping an imported blank with the table before it needs that blank to close the table where it is; a
+    // table it reaches only inside a content control is no proof the table's edit made it.
+    [Fact]
+    public void ListRevisions_AnImportedBlankBeforeAControlIsNotTheTablesOwn()
+    {
+        var blank = new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, Revised(W.ins))));
+        using var session = new DocxSession(Document(P("A"), RevisedTable("T1", W.ins), blank, Control(Table("T2"), P("S")), P("C")));
+        Assert.Equal(2, session.ListRevisions().Count);
+    }
+
+    // Rejecting an inserted empty paragraph at a content control's end keeps the bookmark that starts in it.
+    [Fact]
+    public void RejectRevision_KeepsTheRangeMarkersOfAnEmptyParagraphItRemoves()
+    {
+        var mark = new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, Revised(W.ins))), BookmarkStart(4));
+        using var session = new DocxSession(Document(Control(Table("T1"), P("S"), mark), P("B", BookmarkEnd(4)), P("C")));
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.True(session.RejectRevision(revision.Id).Success);
+
+        var body = BodyOf(session.Save());
+        Assert.Single(body.Descendants(W.bookmarkStart), b => (string?)b.Attribute(W.id) == "4");
+        Assert.Single(body.Descendants(W.bookmarkEnd), b => (string?)b.Attribute(W.id) == "4");
+    }
+
+    // Without an edit stamp, a blank closes the table before it only where it ends what holds them, or a table or
+    // the section follows it among its own siblings; a permission range or a control's end is no proof.
+    [Theory]
+    [InlineData("a control that something follows")]
+    [InlineData("a permission range before the next table")]
+    public void ListRevisions_AnImportedBlankIsTheTablesOnlyWhereItClosesTheTable(string scenario)
+    {
+        var blank = new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, Revised(W.ins))));
+        using var session = new DocxSession(Document(scenario.StartsWith("a control")
+            ? new object[] { Control(P("S"), RevisedTable("T", W.ins), blank), P("B") }
+            : new object[] { P("A"), RevisedTable("T", W.ins), blank, new XElement(W.permStart, new XAttribute(W.id, 8)),
+                new XElement(W.permEnd, new XAttribute(W.id, 8)), Table("T2"), P("C") }));
+        Assert.Equal(2, session.ListRevisions().Count);
+    }
+
+    // Deleted instruction text keeps its order too, so rejecting the deletion gives the field back as it was.
+    [Fact]
+    public void MoveBlock_KeepsTheOrderOfAFieldsDeletedInstructions()
+    {
+        XElement Deleted(string text) => Revised(W.del, new XElement(W.r, new XElement(W.delInstrText, new XAttribute(Xml + "space", "preserve"), text)));
+        using var session = new DocxSession(Document(P("A", FieldChar("begin"), Deleted(" TOC ")),
+            P("S1", Deleted("\\o ")), P("S2", Deleted("\"1-2\" ")), P("R", FieldChar("separate")), P("E", FieldChar("end")), P("F")));
+        Assert.False(Move(session, "S2", "S1", Position.Before).Success);
+    }
+
+    // A move range that has already closed before a paragraph does not name it.
+    [Fact]
+    public void MoveBlock_NamesAMovesHalfByTheRangeStillOpenAroundIt()
+    {
+        using var mover = Tracked(Document(Table("T1"), P("M"), P("B"), Table("T2"), P("C")));
+        Assert.True(Move(mover, "M", "B", Position.After).Success);
+        var bytes = WithBody(mover.Save(), body =>
+        {
+            foreach (var paragraph in body.Elements(W.p).ToList())
+            {
+                foreach (var start in paragraph.Elements().Where(e => e.Name == W.moveFromRangeStart || e.Name == W.moveToRangeStart).ToList())
+                { start.Remove(); paragraph.AddBeforeSelf(start); }
+                foreach (var end in paragraph.Elements().Where(e => e.Name == W.moveFromRangeEnd || e.Name == W.moveToRangeEnd).ToList())
+                { end.Remove(); paragraph.AddAfterSelf(end); }
+            }
+            // An empty source range of another move, closed right before this move's source paragraph.
+            var source = body.Elements(W.p).First(e => e.Descendants(W.moveFrom).Any());
+            source.AddBeforeSelf(new XElement(W.moveFromRangeStart, new XAttribute(W.id, 99), new XAttribute(W.name, "other"),
+                new XAttribute(W.author, "Bob"), new XAttribute(W.date, "2031-01-01T00:00:00Z")), new XElement(W.moveFromRangeEnd, new XAttribute(W.id, 99)));
+        });
+        using var session = new DocxSession(bytes);
+
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] < < > M > < M > [T2] C B", Shape(session.Save()));
     }
 }

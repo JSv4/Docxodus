@@ -1312,10 +1312,27 @@ internal static class RevisionOps
         // (issue #1649) comes ahead of the rows it belongs with, so it joins them only now.
         foreach (var lone in groups.Where(g => g.Units.Count == 1 && g.Units[0].Kind == UnitKind.ParaMark).ToList())
         {
-            if (ClosingTableGroup(lone.Units[0], rowGroupByTr, tableAfter: true) is not { } table) continue;
-            table.Units.Add(lone.Units[0]);
+            if ((ClosingTableGroup(lone.Units[0], rowGroupByTr, tableAfter: true)
+                ?? MoveLeavingParagraph(lone.Units[0], moveGroups.Values)) is not { } owner) continue;
+            owner.Units.Add(lone.Units[0]);
             groups.Remove(lone);
         }
+    }
+
+    /// <summary>The move that left <paramref name="mark"/>'s empty inserted paragraph in place of the
+    /// paragraph it moves away, to keep two tables apart (issue #1861): right after its source and
+    /// inserted by the same edit, which its stamp shows (<see cref="IsEditStamp"/>) whatever has changed
+    /// around it since. A paragraph with a section break is a change of its own.</summary>
+    private static RevisionGroup? MoveLeavingParagraph(RevisionUnit mark, IEnumerable<RevisionGroup> moves)
+    {
+        var paragraph = mark.Paragraph;
+        if (paragraph is null || mark.Type != TypeInsert || paragraph.Elements().Any(e => !IsIgnorableBetween(e))
+            || paragraph.Element(W.pPr)?.Element(W.sectPr) is not null || !IsEditStamp(mark.Date)
+            || SiblingBlock(paragraph, forward: false) is not { } source)
+            return null;
+        return moves.FirstOrDefault(move => move.Author == mark.Author && move.Date == mark.Date
+            && move.DateUtc == DateUtcOf(mark.Element)
+            && move.Units.Any(u => u.Kind == UnitKind.ParaMark && u.Element.Name == W.moveFrom && u.Paragraph == source));
     }
 
     /// <summary>
@@ -1331,39 +1348,73 @@ internal static class RevisionOps
         RevisionUnit mark, Dictionary<XElement, RevisionGroup> rowGroupByTr, bool tableAfter = false)
     {
         var paragraph = mark.Paragraph;
+        // Word's paragraph after a table is the table's while the table needs it; Docxodus's is the table's edit
+        // by its stamp also where only resolving another change would leave the tables touching, but never
+        // where no resolution would.
         if (paragraph is null || paragraph.Elements().Any(e => !IsIgnorableBetween(e))
-            || paragraph.Element(W.pPr)?.Element(W.sectPr) is not null || !ClosesTable(paragraph)
+            || paragraph.Element(W.pPr)?.Element(W.sectPr) is not null
+            || !(ClosesTableBesideIt(paragraph) || (IsEditStamp(mark.Date) && DocxSession.TablesCanMeet(paragraph, mark.Date)))
             || SiblingBlock(paragraph, forward: tableAfter) is not { } table || table.Name != W.tbl)
             return null;
         var rows = WordprocessingMLUtil.TableRows(table).ToList();
         return rows.Count > 0 && rowGroupByTr.TryGetValue(rows[0], out var group)
             && rows.All(row => rowGroupByTr.TryGetValue(row, out var rowGroup) && ReferenceEquals(rowGroup, group))
-            && group.Type == mark.Type && group.Author == mark.Author && group.Date == mark.Date
+            // The same type; or, where the same edit inserted it, the deleted rows a tracked table move left it after.
+            && (group.Type == mark.Type || (!tableAfter && mark.Type == TypeInsert && group.Type == TypeDelete && IsEditStamp(mark.Date)))
+            && group.Author == mark.Author && group.Date == mark.Date
             && group.DateUtc == DateUtcOf(mark.Element)
                 ? group
                 : null;
     }
 
     /// <summary>
-    /// Whether <paramref name="paragraph"/> is the paragraph a table needs after it: it directly
-    /// follows a table, and only the end of its container, the section properties or another
-    /// table follows it. Without it the table would end a cell or the body, or touch the next
-    /// table and be read as one table with it, so resolving a revision never removes it while
-    /// the table stands.
+    /// Whether <paramref name="paragraph"/> is the paragraph a table needs after it: a table comes
+    /// before it, and only the end of the cell or body, the section properties or another table
+    /// after it, looking past range markers and the edges of content controls and custom XML
+    /// elements as a move does (<see cref="DocxSession.TablesMeet"/>). Without it the table would end
+    /// a cell or the body, or touch the next table and be read as one table with it, so resolving a
+    /// revision never removes it while the table stands.
     /// </summary>
-    internal static bool ClosesTable(XElement paragraph)
+    internal static bool ClosesTable(XElement paragraph) => DocxSession.TablesMeet(paragraph, accepted: null);
+
+    /// <summary>Whether <paramref name="paragraph"/> closes the table right before it among its own siblings: a table, the
+    /// section properties or nothing right after it. Grouping takes only this, not <see cref="ClosesTable"/>'s view into
+    /// the next content control, as proof without an edit stamp that the table's edit made the paragraph.</summary>
+    private static bool ClosesTableBesideIt(XElement paragraph)
     {
-        if (SiblingBlock(paragraph, forward: false)?.Name != W.tbl) return false;
-        var next = SiblingBlock(paragraph, forward: true);
+        // Past bookmark, comment and move range markers only: a permission range between blocks is no proof.
+        static XElement? Beside(XElement element, bool forward)
+        {
+            var node = forward ? element.NextNode : element.PreviousNode;
+            while (node is not null && (node is not XElement sibling || IsIgnorableBetween(sibling)))
+                node = forward ? node.NextNode : node.PreviousNode;
+            return node as XElement;
+        }
+        if (Beside(paragraph, forward: false)?.Name != W.tbl) return false;
+        // The end of a content control is not the end of what holds it.
+        XElement? next = null;
+        for (XElement? e = paragraph; e is not null && next is null; e = BlockWrapperOf(e)) next = Beside(e, forward: true);
         return next is null || next.Name == W.sectPr || next.Name == W.tbl;
     }
 
+    /// <summary>Whether <paramref name="date"/> is a tracked edit's own stamp: Docxodus dates every tracked edit to
+    /// the tenth of a microsecond, one later than the last, so two marks with it came from the same edit. Word and
+    /// most producers write whole seconds, which many changes can share.</summary>
+    private static bool IsEditStamp(string? date) =>
+        date is { Length: 28 } && date[19] == '.' && date[^1] == 'Z' && date.AsSpan(20, 7).IndexOfAnyExceptInRange('0', '9') < 0;
+
+    /// <summary>The block content control or custom XML element <paramref name="block"/> is directly in, or null.</summary>
+    internal static XElement? BlockWrapperOf(XElement block) =>
+        block.Parent is { } parent && parent.Name == W.sdtContent ? parent.Parent
+        : block.Parent?.Name == W.customXml ? block.Parent : null;
+
     /// <summary>The nearest sibling element before or after <paramref name="element"/> that is not
-    /// a range marker (<see cref="IsIgnorableBetween"/>), walking only as far as it has to.</summary>
+    /// a range marker (<see cref="IsIgnorableBetween"/>, and permission and custom XML revision ranges
+    /// too), walking only as far as it has to.</summary>
     internal static XElement? SiblingBlock(XElement element, bool forward)
     {
         var node = forward ? element.NextNode : element.PreviousNode;
-        while (node is not null && (node is not XElement sibling || IsIgnorableBetween(sibling)))
+        while (node is not null && (node is not XElement sibling || IsIgnorableBetween(sibling) || DocxSession.IsBlockLevelMarker(sibling)))
             node = forward ? node.NextNode : node.PreviousNode;
         return node as XElement;
     }
@@ -2521,6 +2572,11 @@ internal static class RevisionOps
                         && HasSurvivingBlockSibling(u.Paragraph) && !ClosesTable(u.Paragraph))
                     {
                         var paragraph = u.Paragraph;
+                        // Its bookmark, comment and move range markers stay where it was, between the blocks,
+                        // so a range that starts or ends in it keeps its other end.
+                        var markers = paragraph.Elements().Where(e => e.Name != W.pPr && e.Name != W.proofErr && e.Name != W.r).ToList();
+                        foreach (var marker in markers) marker.Remove();
+                        paragraph.AddBeforeSelf(markers);
                         paragraph.Remove();
                         removedBlocks.Add(paragraph);
                         touchedParagraphs.Remove(paragraph);

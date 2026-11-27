@@ -1747,7 +1747,10 @@ class DocxSession:
         target_anchor_id: str,
         position: Position,
     ) -> EditResult:
-        """Move one top-level paragraph/list/table block before or after another."""
+        """Move one top-level paragraph/list/table block before or after another. Refused where it
+        would change what a bookmark, comment, permission or field covers. ``created`` holds the
+        destination of a tracked move, then any empty paragraph added between two tables or after
+        the last."""
         return EditResult._from_wire(
             self._call(
                 "move_block",
@@ -1769,9 +1772,10 @@ class DocxSession:
         """Move the top-level blocks from ``first_anchor_id`` to ``last_anchor_id`` (inclusive,
         in document order) before or after ``target_anchor_id`` as one edit: a heading and
         everything under it, as Word's Navigation Pane drags it (``OutlineEntry.last_anchor_id``
-        gives the end). One undo step. Refused across a section break, when it would cut a
-        bookmark or comment range running into the run, onto a target inside the run, and under
-        tracked changes."""
+        gives the end). One undo step. Refused across a section break, when it would change what a
+        bookmark, comment, permission or field covers, onto a target inside the run, and under
+        tracked changes. ``created`` holds any empty paragraph added between two tables or after the
+        last."""
         return EditResult._from_wire(
             self._call(
                 "move_block_range",

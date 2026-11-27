@@ -473,7 +473,7 @@ id-bearing marker the clone copies is a second live copy:
 
 | Marker | Policy | Owner |
 |---|---|---|
-| `w:bookmarkStart`/`w:bookmarkEnd` | The tracked move is rejected before snapshot. Fresh numeric ids cannot make two simultaneously-live copies of a globally unique bookmark NAME unambiguous, while placing the pair on only one side loses it on accept or reject. Direct-mode moves still relocate the one existing element safely. | `DocxSession.MoveBlock` |
+| `w:bookmarkStart`/`w:bookmarkEnd` | The tracked move is rejected before snapshot. Fresh numeric ids cannot make two simultaneously-live copies of a globally unique bookmark NAME unambiguous, while placing the pair on only one side loses it on accept or reject. Direct-mode moves still relocate the one existing element safely, with the markers beside it whose other ends move too; a tracked move takes none of those, so it is refused where it would change the range. | `DocxSession.MoveBlock` |
 | `w:commentRangeStart`/`End`/`Reference` | The **move source** takes a fresh comment id + a cloned definition (fresh `w14:paraId`, threading entries in both metadata parts, cloned replies re-pointed at cloned parents), leaving the destination on the original comment and its thread | `CommentOps.CloneCommentsForMoveSource`, mirroring `IrMarkupRenderer.NormalizeComments` (B) |
 | `w:footnoteReference`/`w:endnoteReference` | **Deliberately duplicated.** A note cited at both the old and the new position is a faithful depiction of a pending move, it is not uniqueness-constrained, and exactly one citation survives either resolution | — |
 
@@ -496,7 +496,7 @@ deleted. Both go through one owner, `DocxSession.MarkParagraphContentAndMark`.
 
 `DocxSession.ValidMoveTargets(sourceAnchorId)` returns the blocks a block may legally move next
 to **and on which side** (`MoveTarget(AnchorId, Before, After)`), sharing `MoveBlock`'s own guards
-(`MoveSourceRejection` + `BlockMoveSafetyError`) so the UI and the engine cannot disagree.
+(`MoveSourceRejection` + `LandRun`) so the UI and the engine cannot disagree.
 
 The two sides are reported separately because landing *into* a cross-block range changes its
 membership while landing outside it does not — the asymmetry is the common case, not an edge one.
