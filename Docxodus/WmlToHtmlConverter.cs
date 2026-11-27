@@ -3948,8 +3948,7 @@ namespace Docxodus
 
             // A simple HYPERLINK field is a link, as the complex form is (issue #1870).
             if (element.Name == W.fldSimple && !IsInsideLink(element)
-                && (string?)element.Attribute(W.instr) is { } simpleInstr
-                && FieldRetriever.ParseField(simpleInstr).FieldType == "HYPERLINK")
+                && (string?)element.Attribute(W.instr) is { } simpleInstr && IsHyperlinkField(simpleInstr))
             {
                 return HyperlinkFieldLink(simpleInstr, CreateBorderDivs(wordDoc, settings, element.Elements()));
             }
@@ -4285,16 +4284,32 @@ namespace Docxodus
         private static object ConvertRevisionContent(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
         {
-            static bool NoOpenField(XElement e) =>
-                e.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>() is not { Count: > 0 };
-
-            if (NoOpenField(element) && NoOpenField(element.DescendantsAndSelf().Last()))
+            // The fields open at the wrapper's start or at its end. A field that begins and ends inside it has a
+            // greater id than every one of them, so grouping above the greatest converts only whole fields (a
+            // marker built around part of a field would be wrong, issue #1272). So the fields in a wrapper inside
+            // another's result, as a contents entry is under tracked changes, convert as they do outside revision
+            // marks (issue #1870). Content in the instruction of an open field only feeds it, and converts run by
+            // run as before.
+            var open = new[] { element, element.DescendantsAndSelf().Last() }
+                .SelectMany(e => e.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()
+                    ?? Enumerable.Empty<FieldRetriever.FieldElementTypeInfo>())
+                .Select(info => info.Id)
+                .ToHashSet();
+            if (open.Count == 0)
             {
                 var alignedTabs = ConvertAlignedTabRuns(wordDoc, settings, element.Elements().ToList());
                 if (alignedTabs != null) return alignedTabs;
                 if (element.Descendants(W.fldChar).Any())
                     return ConvertContentThatCanContainFields(wordDoc, settings, element.Elements());
             }
+            else if (element.Descendants(W.fldChar).Any())
+                return element.Elements()
+                    .GroupAdjacent(e => e.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()?.Any(info => open.Contains(info.Id)
+                        && info.FieldElementType is FieldRetriever.FieldElementTypeEnum.Begin or FieldRetriever.FieldElementTypeEnum.InstrText) == true)
+                    .Select(part => part.Key
+                        ? part.Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                        : ConvertContentThatCanContainFields(wordDoc, settings, part, open.Max()))
+                    .ToList();
 
             return element.Elements()
                 .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
@@ -9141,7 +9156,7 @@ namespace Docxodus
         /// <summary>Whether a run is in a link in a cached TOC result: a <c>w:hyperlink</c> or a HYPERLINK field,
         /// simple or complex, as Word writes a contents entry in either form (issue #1870).</summary>
         private static bool IsTocLinkResult(XElement run) =>
-            IsInsideLink(run) && FieldRetriever.IsFieldResult(run, "TOC");
+            FieldRetriever.IsFieldResult(run, "TOC") && IsInsideLink(run);
 
         private static string DescribeFormatChange(XElement currentRPr, XElement rPrChange)
         {
@@ -12711,14 +12726,18 @@ namespace Docxodus
                         return PreserveJoinedFieldSources(InsideRevision(ReferenceFieldSpan(reference, g, referenceContent)));
                     }
 
-                    // A HYPERLINK field already inside a w:hyperlink renders as that link's content:
-                    // an anchor cannot hold another.
-                    var parsed = FieldRetriever.ParseField(instrText);
                     // A field nested in the result converts as it would outside it: a HYPERLINK there, as a
                     // contents entry written as a field is, is a link (issue #1870), and with
-                    // StampReferenceFields a reference there, as the entry's PAGEREF is, is marked.
-                    object Nested() => ConvertContentThatCanContainFields(wordDoc, settings, g, key);
-                    if (parsed.FieldType != "HYPERLINK" || g.First().Ancestors(W.hyperlink).Any())
+                    // StampReferenceFields a reference there, as the entry's PAGEREF is, is marked. A field
+                    // nested in the instruction only feeds it; its content converts as it always has.
+                    object Nested() => g.GroupAdjacent(e => IsResultOf(e, (int)key))
+                        .Select(part => part.Key || settings.StampReferenceFields
+                            ? ConvertContentThatCanContainFields(wordDoc, settings, part, key)
+                            : part.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m)))
+                        .ToList();
+                    // A HYPERLINK field already inside a w:hyperlink renders as that link's content:
+                    // an anchor cannot hold another.
+                    if (!IsHyperlinkField(instrText) || g.First().Ancestors(W.hyperlink).Any())
                         return Nested();
 
                     // Convert the field's own children, as a w:hyperlink does, so a tracked change,
@@ -12729,6 +12748,15 @@ namespace Docxodus
 
             return txformed;
         }
+
+        /// <summary>Whether a field instruction is a HYPERLINK, in any case, as Word reads a field's name.</summary>
+        private static bool IsHyperlinkField(string instruction) =>
+            string.Equals(FieldRetriever.FieldType(instruction), "HYPERLINK", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Whether an element is in the result of the field <paramref name="id"/>, not its instruction.</summary>
+        private static bool IsResultOf(XElement element, int id) =>
+            element.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()?
+                .Any(info => info.Id == id && info.FieldElementType == FieldRetriever.FieldElementTypeEnum.Result) == true;
 
         /// <summary>The <c>&lt;a&gt;</c> a HYPERLINK field's result renders in, the field simple or complex. An
         /// anchor cannot hold another: a bookmark target inside the link keeps its id on a span, and a

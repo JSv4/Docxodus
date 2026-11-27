@@ -2918,14 +2918,18 @@ location in any form, `w:hyperlink` included, so for those LibreOffice is the ev
 entry is a link. Word therefore applies the #427 rule to a contents entry in any of the three forms,
 and draws a simple field's link as it draws the other two.
 
-Docxodus had two gaps. A `w:fldSimple` fell through to its runs, with no `<a>`. A HYPERLINK field
+Docxodus had three gaps. A `w:fldSimple` fell through to its runs, with no `<a>`. A HYPERLINK field
 nested in another field's result became a link only with `StampReferenceFields`; by default the
-`TOC` field's group converted its content run by run. And the TOC rule asked for a `w:hyperlink`
-ancestor. Now `FieldRetriever.IsFieldResult` counts a `w:fldSimple` ancestor as a field result, so
-the converter's single "inside a link" test (`IsInsideLink`) covers all three forms and the TOC rule
-uses it; a nested field converts as it does at the top level; and both field forms build their
-`<a>` in one place (`HyperlinkFieldLink`). Tests:
-`Docxodus.Tests/WmlToHtmlConverterFieldLinkStyleTests.cs`.
+`TOC` field's group converted its content run by run, and under tracked changes so did a `w:ins` or
+`w:del` holding an entry's whole field. And the TOC rule asked for a `w:hyperlink` ancestor. Now
+`FieldRetriever.IsFieldResult` counts a `w:fldSimple` ancestor as a field result, so the converter's
+single "inside a link" test (`IsInsideLink`) covers all three forms and the TOC rule uses it; a field
+nested in another's *result* converts as it does at the top level, in a revision mark too (a field
+nested in an *instruction* only feeds it and converts as before); and both field forms build their
+`<a>` in one place (`HyperlinkFieldLink`). Not covered: a complex field inside a `w:fldSimple`, whose
+content converts element by element, and parts the converter does not annotate with field
+information. Tests: `Docxodus.Tests/WmlToHtmlConverterFieldLinkStyleTests.cs`,
+`Docxodus.Tests/FieldRetrieverTests.cs`.
 
 A known limit of the rule, in every form: Word drops only the Hyperlink style's colour and
 underline, not the run's own. In a Word reference PDF of authored entries, a run in the Hyperlink
@@ -2933,9 +2937,8 @@ style with a direct `<w:color w:val="FF0000"/>` prints red as a `w:hyperlink` en
 entry (with no underline), and a run with a direct `<w:u w:val="double"/>` keeps its double
 underline; LibreOffice agrees. Docxodus removes the run's colour and underline whatever their
 source, because the converter merges styles into each run's properties before it renders, so the
-rule cannot tell the style's colour from a direct one. In a corpus of about 7,000 Word documents,
-12 of 10,783 contents-entry runs (one document, all `w:hyperlink` entries) carry a direct colour
-other than black, and none a direct underline.
+rule cannot tell the style's colour from a direct one. Before #1870 a field-form entry kept a direct
+colour (with the style's underline); it now loses it, as a `w:hyperlink` entry already did.
 
 ### Text before a tab that is longer than its line wraps; the tab advances from the last line
 

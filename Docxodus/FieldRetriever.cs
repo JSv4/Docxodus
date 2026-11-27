@@ -103,23 +103,78 @@ namespace Docxodus
             if (element == null || string.IsNullOrWhiteSpace(fieldType))
                 return false;
 
-            bool IsType(string instruction) => string.Equals(
-                instruction.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault(),
-                fieldType,
-                StringComparison.OrdinalIgnoreCase);
-
-            if (element.Ancestors(W.fldSimple).Any(simple => IsType((string?)simple.Attribute(W.instr) ?? "")))
-                return true;
+            // Asked for every run, so it walks parents and the stack without allocating, and reads each field's type
+            // once.
+            var root = element;
+            for (var ancestor = element.Parent; ancestor != null; ancestor = ancestor.Parent)
+            {
+                if (ancestor.Name == W.fldSimple
+                    && string.Equals(FieldType((string?)ancestor.Attribute(W.instr) ?? ""), fieldType, StringComparison.OrdinalIgnoreCase))
+                    return true;
+                root = ancestor;
+            }
 
             var stack = element.Annotation<Stack<FieldElementTypeInfo>>();
-            var root = element.AncestorsAndSelf().LastOrDefault();
-            if (stack == null || root == null)
+            if (stack == null)
                 return false;
-
-            return stack
-                .Where(info => info.FieldElementType == FieldElementTypeEnum.Result)
-                .Any(info => IsType(InstrText(root, info.Id).TrimStart('{').TrimEnd('}')));
+            FieldTypes? types = null;
+            foreach (var info in stack)
+            {
+                if (info.FieldElementType != FieldElementTypeEnum.Result)
+                    continue;
+                if (types == null && (types = root.Annotation<FieldTypes>()) == null)
+                    root.AddAnnotation(types = new FieldTypes());
+                if (!types.TryGetValue(info.Id, out var type))
+                    types[info.Id] = type = FieldType(root, info.Id);
+                if (string.Equals(type, fieldType, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
         }
+
+        /// <summary>A field instruction's type, its first word as written (<c>HYPERLINK</c>, <c>TOC</c>); Word reads it
+        /// in any case.</summary>
+        internal static string FieldType(string instruction)
+        {
+            int start = 0;
+            while (start < instruction.Length && char.IsWhiteSpace(instruction[start])) start++;
+            int end = start;
+            while (end < instruction.Length && !char.IsWhiteSpace(instruction[end])) end++;
+            return instruction.Substring(start, end - start);
+        }
+
+        /// <summary>The type of the field <paramref name="id"/>, as <see cref="FieldType(string)"/> reads it from
+        /// <see cref="InstrText"/>, but from the code's first characters only: an instruction can be long, and
+        /// <see cref="IsFieldResult"/> asks this for every field around every run.</summary>
+        internal static string FieldType(XElement root, int id)
+        {
+            var cached = root.Annotation<Dictionary<int, List<XElement>>>();
+            if (cached == null || !cached.TryGetValue(id, out var elements))
+                return "";
+            var deletedField = IsDeletedField(root, id);
+            var word = new StringBuilder();
+            foreach (var element in elements)
+            {
+                // The instruction's own code, as InstrText reads it; a nested field ends the first word.
+                var own = element.Annotation<Stack<FieldElementTypeInfo>>()!.Peek();
+                if (own.Id != id)
+                    return word.ToString();
+                if (own.FieldElementType != FieldElementTypeEnum.InstrText
+                    || (element.Name != W.instrText && !(deletedField && element.Name == W.delInstrText)))
+                    continue;
+                foreach (var c in element.Value)
+                {
+                    if (!char.IsWhiteSpace(c))
+                        word.Append(c);
+                    else if (word.Length > 0)
+                        return word.ToString();
+                }
+            }
+            return word.ToString();
+        }
+
+        /// <summary>The type of each field of a part, by id, as <see cref="IsFieldResult"/> has read it.</summary>
+        private sealed class FieldTypes : Dictionary<int, string> { }
 
         public static void AnnotateWithFieldInfo(OpenXmlPart part)
         {
@@ -130,6 +185,7 @@ namespace Docxodus
             // set so removed nested fields cannot leave stale ids or instruction-cache entries.
             root.RemoveAnnotations<Dictionary<int, List<XElement>>>();
             root.RemoveAnnotations<DeletedFieldIds>();
+            root.RemoveAnnotations<FieldTypes>();
             foreach (var element in root.DescendantsAndSelf())
                 element.RemoveAnnotations<Stack<FieldElementTypeInfo>>();
             var r = root.DescendantsAndSelf()

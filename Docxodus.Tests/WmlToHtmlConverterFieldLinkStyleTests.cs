@@ -214,6 +214,7 @@ public class WmlToHtmlConverterFieldLinkStyleTests
     private static string Simple(string instruction, string result) =>
         $"<w:fldSimple w:instr=\"{instruction.Replace("\"", "&quot;")}\">{result}</w:fldSimple>";
 
+    /// <summary>A complex field's start: its begin character, instruction and separator.</summary>
     private static string Begin(string instruction) => $"""
         <w:r><w:fldChar w:fldCharType="begin"/></w:r>
         <w:r><w:instrText xml:space="preserve"> {instruction} </w:instrText></w:r>
@@ -358,5 +359,113 @@ public class WmlToHtmlConverterFieldLinkStyleTests
             Assert.Contains("color: #0563C1", declarations);
             Assert.Contains("text-decoration: underline", declarations);
         }
+    }
+
+    // Word reads a field's name in any case; so do the converter's two field forms, and the IR.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AHyperlinkFieldNamedInLowerCaseIsALink(bool simple)
+    {
+        var instruction = $"hyperlink \"{FieldUrl}\"";
+        var body = $"<w:p>{(simple ? Simple($" {instruction} ", Run("Go")) : FieldWith(instruction, Run("Go")))}</w:p>";
+        Assert.Equal("Go", Link(Render(body, fabricateCssClasses: false, PaginationMode.None), FieldUrl).Value);
+        var paragraph = Assert.Single(IrReader.Read(new WmlDocument("field.docx", Docx(body))).Body.Blocks.OfType<IrParagraph>());
+        Assert.Equal(FieldUrl, Assert.Single(paragraph.Inlines.OfType<IrHyperlink>()).Target);
+    }
+
+    // A HYPERLINK field in another's result is converted in every mode now, and still gives up its own link there.
+    [Theory]
+    [InlineData(PaginationMode.None)]
+    [InlineData(PaginationMode.Paginated)]
+    public void AHyperlinkFieldInAnothersResultIsNotALinkInsideALinkInAnyMode(PaginationMode mode)
+    {
+        var html = Render($"<w:p>{Field(Run("Outer ") + FieldWith("HYPERLINK \"https://example.test/inner\"", Run("Inner")))}</w:p>",
+            fabricateCssClasses: false, mode);
+        Assert.DoesNotContain(html.Descendants(Xhtml.a), a => a.Ancestors(Xhtml.a).Any());
+        Assert.Equal("Outer Inner", Link(html, FieldUrl).Value);
+    }
+
+    // Fields nested in an IF field's instruction only feed its condition: Word shows the IF's result. They make no link
+    // and no page-number marker, whatever becomes of their cached text (control: the same fields in the IF's result).
+    [Theory]
+    [InlineData(PaginationMode.None)]
+    [InlineData(PaginationMode.Paginated)]
+    public void AFieldInAnotherFieldsInstructionIsNoLinkAndNoPageMarker(PaginationMode mode)
+    {
+        var inInstruction = "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> IF </w:instrText></w:r>"
+            + FieldWith("HYPERLINK \"https://example.test/condition\"", Run("Left"))
+            + "<w:r><w:instrText xml:space=\"preserve\"> = </w:instrText></w:r>" + FieldWith("PAGE", Run("7"))
+            + "<w:r><w:instrText xml:space=\"preserve\"> \"Shown\" \"Hidden\" </w:instrText></w:r>"
+            + "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>" + Run("Shown") + EndOfField;
+        var inResult = FieldWith("QUOTE \"x\"", FieldWith($"HYPERLINK \"{FieldUrl}\"", Run("Linked")) + Run(" page ") + FieldWith("PAGE", Run("3")));
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("links.docx", Docx($"<w:p>{inInstruction}</w:p><w:p>{inResult}</w:p>")),
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false, RenderPagination = mode });
+        Assert.DoesNotContain(html.Descendants(Xhtml.a), a => ((string?)a.Attribute("href"))?.Contains("condition") == true);
+        Assert.Equal("Linked", Link(html, FieldUrl).Value);
+        var pageMarkers = html.Descendants().Where(e => (string?)e.Attribute("data-field") == "PAGE").ToList();
+        // In paginated HTML a PAGE field in another's result is marked for the paginator, as at the top level.
+        Assert.Equal(mode == PaginationMode.Paginated ? new[] { "3" } : Array.Empty<string>(), pageMarkers.Select(e => e.Value));
+    }
+
+    private const string Inserted = "w:id=\"{0}\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\"";
+
+    private static string Ins(int id, string content) => $"<w:ins {string.Format(Inserted, id)}>{content}</w:ins>";
+
+    // An old contents entry, deleted: its field code is w:delInstrText and its text w:delText.
+    private static string DeletedEntry(int id, string text) => $"""
+        <w:del {string.Format(Inserted, id)}>
+        <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+        <w:r><w:delInstrText xml:space="preserve"> HYPERLINK \l "_Toc1" </w:delInstrText></w:r>
+        <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+        <w:r>{HyperlinkStyle}<w:delText>{text}</w:delText></w:r>
+        <w:r><w:fldChar w:fldCharType="end"/></w:r>
+        </w:del>
+        """;
+
+    // A table of contents updated with changes tracked, as Word writes it: the first paragraph's insertion holds the TOC
+    // field's start and the first entry, each later entry sits in its own insertion beside the deleted old one, and the
+    // last insertion holds the last entry and the field's end.
+    [Theory]
+    [InlineData(true, PaginationMode.None)]
+    [InlineData(true, PaginationMode.Paginated)]
+    [InlineData(false, PaginationMode.None)]
+    [InlineData(false, PaginationMode.Paginated)]
+    public void AContentsEntryWrittenAsAFieldInsideTrackedChangesIsALink(bool fabricateCssClasses, PaginationMode mode)
+    {
+        var html = Render(
+            $"<w:p>{TocTabs}{Ins(11, Begin("TOC \\o \"1-3\" \\h \\z \\u") + FieldWith("HYPERLINK \\l \"_Toc1\"", EntryContent("FirstEntry")))}</w:p>"
+            + $"<w:p>{TocTabs}{DeletedEntry(12, "OldEntry")}{Ins(13, FieldWith("HYPERLINK \\l \"_Toc1\"", EntryContent("MiddleEntry")))}</w:p>"
+            + $"<w:p>{TocTabs}{Ins(14, FieldWith("HYPERLINK \\l \"_Toc1\"", EntryContent("LastEntry")) + EndOfField)}</w:p>"
+            + $"<w:p><w:bookmarkStart w:id=\"1\" w:name=\"_Toc1\"/>{Run("Heading")}<w:bookmarkEnd w:id=\"1\"/></w:p>",
+            fabricateCssClasses, mode);
+        Assert.DoesNotContain(html.Descendants(Xhtml.a), a => a.Ancestors(Xhtml.a).Any());
+        foreach (var entry in new[] { "FirstEntry", "MiddleEntry", "LastEntry" })
+        {
+            var link = LinkOf(html, entry);
+            Assert.Equal("#_Toc1", (string?)link.Attribute("href"));
+            Assert.NotEmpty(link.Ancestors(Xhtml.ins));
+            var declarations = Declarations(html, TextSpanIn(html, entry));
+            Assert.DoesNotContain("#0563C1", declarations);
+        }
+        // The deleted old entry stays a link too, as a deleted w:hyperlink entry does.
+        Assert.NotEmpty(TextSpanIn(html, "OldEntry").Ancestors(Xhtml.del));
+        Assert.Equal("#_Toc1", (string?)LinkOf(html, "OldEntry").Attribute("href"));
+    }
+
+    // An insertion that starts a field and ends in its result: a field nested in the started field's instruction still
+    // only feeds it, and the result's own field converts.
+    [Fact]
+    public void AnInsertionStartingAFieldLeavesFieldsInItsInstructionInert()
+    {
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("links.docx", Docx(
+                "<w:p>" + Ins(21, "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> IF </w:instrText></w:r>"
+                    + FieldWith("HYPERLINK \"https://example.test/condition\"", Run("Left"))
+                    + "<w:r><w:instrText xml:space=\"preserve\"> = \"Left\" \"Shown\" \"Hidden\" </w:instrText></w:r>"
+                    + "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>" + FieldWith($"HYPERLINK \"{FieldUrl}\"", Run("Shown")))
+                + EndOfField + "</w:p>")),
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false, RenderTrackedChanges = true });
+        Assert.DoesNotContain(html.Descendants(Xhtml.a), a => ((string?)a.Attribute("href"))?.Contains("condition") == true);
+        Assert.Equal("Shown", Link(html, FieldUrl).Value);
     }
 }
