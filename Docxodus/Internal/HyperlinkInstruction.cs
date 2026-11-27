@@ -72,14 +72,15 @@ internal static class HyperlinkInstruction
         }
     }
 
-    /// <summary>The quoted (without its quotes, escapes read) or bare operand at <paramref name="i"/>, which moves past
-    /// it.</summary>
+    /// <summary>The quoted (without its quotes, double or single as the field tokenizer takes them, escapes read) or
+    /// bare operand at <paramref name="i"/>, which moves past it.</summary>
     private static string ReadOperand(string s, ref int i)
     {
-        if (s[i] == '"')
+        if (s[i] is '"' or '\'')
         {
+            char quote = s[i];
             var quoted = new StringBuilder();
-            for (i++; i < s.Length && s[i] != '"'; i++)
+            for (i++; i < s.Length && s[i] != quote; i++)
             {
                 if (s[i] == '\\' && i + 1 < s.Length) i++;
                 quoted.Append(s[i]);

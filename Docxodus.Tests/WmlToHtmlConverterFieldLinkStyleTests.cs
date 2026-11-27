@@ -181,6 +181,7 @@ public class WmlToHtmlConverterFieldLinkStyleTests
     [InlineData("HYPERLINK \"\\\\\\\\server\\\\share\\\\a.docx\"", "\\\\server\\share\\a.docx")] // a network path as Word escapes it
     [InlineData("HYPERLINK \\o \"say \\\"hi\\\"\" \"https://example.test/doc\"", "https://example.test/doc")] // an escaped quote
     [InlineData("HYPERLINK \\m \"https://example.test/doc\"", "https://example.test/doc")] // \m takes no value
+    [InlineData("HYPERLINK 'https://example.test/doc'", "https://example.test/doc")] // single quotes, as on main
     [InlineData("HYPERLINK \\o \"\" \"https://example.test/doc\"", "https://example.test/doc")]  // an empty tooltip first
     [InlineData("HYPERLINK \"https://example.test/doc\" \\l \"\"", "https://example.test/doc")]  // an empty location
     [InlineData("HYPERLINK \\l \"Target\" \\*MERGEFORMAT", "#Target")]           // a switch with its value glued on
