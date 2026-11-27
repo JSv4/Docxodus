@@ -26,6 +26,7 @@
  */
 
 import { DocxEditor } from "./editor.js";
+import { keepScrollOffsets } from "./pagination.js";
 import type {
   DocxEditorExports,
   DocxEditorOptions,
@@ -666,31 +667,60 @@ class RibbonSurface implements RibbonEditor {
     const tracked = this.require<HTMLInputElement>("trackchanges").checked
       ? TrackedChangeMode.RenderInline
       : (this.options.trackedChanges ?? TrackedChangeMode.Accept);
-    const candidate = DocxEditor.open(candidateSurface, bytes, this.exports, {
-      cssPrefix: this.options.cssPrefix,
-      fabricateClasses: this.options.fabricateClasses,
-      editable: this.options.editable,
-      scale: this.options.scale,
-      columnWidth: this.options.columnWidth,
-      fitToWidth: this.options.fitToWidth,
-      onEdit: (info) => {
-        this.history?.edited();
-        this.options.onEdit?.(info);
-        this.scheduleStats();
-      },
-      onMove: info => { this.history?.edited(); this.options.onMove?.(info); },
-      onStoryChange: (which) => this.onStoryChange(which),
-      onCommentsChange: (info) => this.onCommentsChange(info),
-      paginated,
-      headerFooter: this.headerFooter,
-      blockDrag: this.options.blockDrag ?? true,
-      trackedChanges: tracked,
-      showRevisions: this.showRevisions,
-      revisionAuthor: this.author,
-      revisionIdentities: this.options.revisionIdentities,
-      comments: this.options.comments,
-      commentAuthor: this.author,
-    });
+    let candidate: DocxEditor;
+    // Page view measures what it lays out (issue #1868), so there the candidate renders in the
+    // document: just after the live surface, under the embed's rules for a surface, off screen.
+    // The live document's own stylesheets would apply to it too (fabricated class names repeat
+    // across documents), so they are switched off until it is laid out. Continuous view measures
+    // nothing and stays detached rather than being laid out twice.
+    const liveSheets = paginated
+      ? Array.from(this.surface.querySelectorAll<HTMLStyleElement | HTMLLinkElement>("style, link[rel~='stylesheet']"),
+          (sheet) => ({ sheet, media: sheet.getAttribute("media") }))
+      : [];
+    // With its stylesheets off the live document's pages are briefly shorter, and laying out the candidate
+    // would clamp the scroll offsets around them to that; they are put back once the sheets are.
+    const restoreScroll = paginated ? keepScrollOffsets(this.surface) : null;
+    try {
+      if (paginated) {
+        candidateSurface.removeAttribute("id");
+        candidateSurface.style.cssText +=
+          `;position:fixed;top:0;left:-100000px;width:${getComputedStyle(this.surface).width}`;
+        for (const { sheet } of liveSheets) sheet.setAttribute("media", "not all");
+        this.surface.after(candidateSurface);
+      }
+      candidate = DocxEditor.open(candidateSurface, bytes, this.exports, {
+        cssPrefix: this.options.cssPrefix,
+        fabricateClasses: this.options.fabricateClasses,
+        editable: this.options.editable,
+        scale: this.options.scale,
+        columnWidth: this.options.columnWidth,
+        fitToWidth: this.options.fitToWidth,
+        onEdit: (info) => {
+          this.history?.edited();
+          this.options.onEdit?.(info);
+          this.scheduleStats();
+        },
+        onMove: info => { this.history?.edited(); this.options.onMove?.(info); },
+        onStoryChange: (which) => this.onStoryChange(which),
+        onCommentsChange: (info) => this.onCommentsChange(info),
+        paginated,
+        headerFooter: this.headerFooter,
+        blockDrag: this.options.blockDrag ?? true,
+        trackedChanges: tracked,
+        showRevisions: this.showRevisions,
+        revisionAuthor: this.author,
+        revisionIdentities: this.options.revisionIdentities,
+        comments: this.options.comments,
+        commentAuthor: this.author,
+      });
+    } finally {
+      candidateSurface.remove();
+      for (const { sheet, media } of liveSheets) {
+        if (media === null) sheet.removeAttribute("media");
+        else sheet.setAttribute("media", media);
+      }
+      restoreScroll?.();
+    }
     this.live?.close();
     candidate.adoptContainer(this.surface);
     this.surface.dataset.view = paginated ? "paginated" : "continuous";
