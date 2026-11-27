@@ -2359,6 +2359,17 @@ public class DocxSessionMoveBlockTests
         Assert.False(Move(session, "A", "C", Position.After).Success);
     }
 
+    // The same when the tables are in a content control and the pair's other end is past it.
+    [Fact]
+    public void MoveBlock_PlacesTheParagraphIgnoringAPairInvertedPastItsControl()
+    {
+        var start = new XElement(W.permStart, new XAttribute(W.id, 7), new XAttribute(W.edGrp, "everyone"));
+        using var session = new DocxSession(Document(Control(Table("T1"), start, BookmarkEnd(8), P("B"), Table("T2"), P("C"),
+            new XElement(W.permEnd, new XAttribute(W.id, 7))), BookmarkStart(8), P("D")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("([T1] - < > [T2] C B >) < D", Shape(session.Save()));
+    }
+
     // A text box is a story of its own: an end in one before the gap does not make the body's pair inverted, so the
     // paragraph between the tables still goes outside the body's permission range.
     [Fact]

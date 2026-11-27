@@ -581,12 +581,6 @@ public sealed partial class DocxSession
         return kept;
     }
 
-    /// <summary>Move <paramref name="separator"/> within the markers around it (between the blocks on either side) to
-    /// a place inside the fewest of the ranges that start or end there, staying where it is on a tie: past the ends
-    /// of those that cover the table, short of those that start after it. A range with no marker there contains every
-    /// such place or none. An empty range keeps covering nothing, so where no place outside the others is left before
-    /// it, it can come to mark the added paragraph rather than the table after it. A content control's revision
-    /// markers stay against the control they enclose: the paragraph never goes between them.</summary>
     /// <summary>The <c>w:id</c> a range marker's two ends pair on: a number by its value, so <c>4</c> and <c>04</c>
     /// are one id, and anything else as written.</summary>
     private static string RangeId(XElement marker) =>
@@ -594,6 +588,12 @@ public sealed partial class DocxSession
         : long.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value.ToString(CultureInfo.InvariantCulture)
         : id;
 
+    /// <summary>Move <paramref name="separator"/> within the markers around it (between the blocks on either side) to
+    /// a place inside the fewest of the ranges that start or end there, staying where it is on a tie: past the ends
+    /// of those that cover the table, short of those that start after it. A range with no marker there contains every
+    /// such place or none. An empty range keeps covering nothing, so where no place outside the others is left before
+    /// it, it can come to mark the added paragraph rather than the table after it. A content control's revision
+    /// markers stay against the control they enclose: the paragraph never goes between them.</summary>
     private static void PlaceOutsideRanges(XElement separator)
     {
         static XElement? Sibling(XElement e, bool forward)
@@ -623,23 +623,44 @@ public sealed partial class DocxSession
         var tally = keys.OfType<(XName End, string Id)>().GroupBy(k => k).ToDictionary(g => g.Key, g => g.Count());
         var inverted = new HashSet<(XName End, string Id)>();
         var startsSeen = new HashSet<(XName End, string Id)>();
-        // Where the other end lies beyond the gap, the document beside it says whether the pair is inverted: its own
-        // story and the markup shown, as the move's scan pairs them.
-        var story = separator.Ancestors(W.txbxContent).FirstOrDefault();
-        bool Beyond(XElement marker, (XName End, string Id) key, bool forward, bool wantStart) =>
-            (forward ? marker.ElementsAfterSelf() : marker.ElementsBeforeSelf()).SelectMany(e => e.DescendantsAndSelf())
-                .Any(e => Key(e) == key && (e.Name != key.End) == wantStart
-                    && e.Ancestors(W.txbxContent).FirstOrDefault() == story && WmlToMarkdownConverter.IsSelectedMarkup(e));
+        // Where a pair's other end lies beyond the gap, the document around it says whether the pair is inverted. One
+        // pass over the body, past any control the gap is in, collects the ends before the markers and the starts after
+        // them, of the same story and shown markup, as the move's scan pairs them; only a lone end here needs it.
+        HashSet<(XName End, string Id)>? endsBefore = null, startsAfter = null;
+        void Survey()
+        {
+            endsBefore = new();
+            startsAfter = new();
+            var story = separator.Ancestors(W.txbxContent).FirstOrDefault();
+            var root = separator.AncestorsAndSelf(W.body).FirstOrDefault() ?? separator.Ancestors().Last();
+            bool before = true, after = false;
+            foreach (var e in root.Descendants())
+            {
+                if (ReferenceEquals(e, markers[0])) before = false;
+                if (!before && !after)
+                {
+                    after = ReferenceEquals(e, markers[^1]);
+                    continue;
+                }
+                if (Key(e) is not { } k || e.Ancestors(W.txbxContent).FirstOrDefault() != story || !WmlToMarkdownConverter.IsSelectedMarkup(e))
+                    continue;
+                if (before && e.Name == k.End) endsBefore.Add(k);
+                else if (after && e.Name != k.End) startsAfter.Add(k);
+            }
+        }
         for (int i = 0; i < count; i++)
             if (keys[i] is { } k)
             {
                 bool isEnd = markers[i].Name == k.End;
                 if (!isEnd) startsSeen.Add(k);
-                if (isEnd && !startsSeen.Contains(k)
-                    && (Enumerable.Range(i + 1, count - i - 1).Any(j => keys[j] == k) || Beyond(markers[^1], k, forward: true, wantStart: true)))
+                bool loneEnd = isEnd && !startsSeen.Contains(k);
+                if (loneEnd && Enumerable.Range(i + 1, count - i - 1).Any(j => keys[j] == k))
                     inverted.Add(k);
-                if (!isEnd && tally[k] == 1 && Beyond(markers[0], k, forward: false, wantStart: false))
-                    inverted.Add(k);
+                else if (loneEnd || !isEnd && tally[k] == 1)
+                {
+                    if (startsAfter is null) Survey();
+                    if (loneEnd ? startsAfter!.Contains(k) : endsBefore!.Contains(k)) inverted.Add(k);
+                }
             }
         for (int i = 0; i < count; i++)
         {
