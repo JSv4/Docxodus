@@ -8683,6 +8683,7 @@ export class PaginationEngine {
 }
 
 /**
+ * Internal (shared with the ribbon, not public API).
  * Records the scroll offsets of `element` and of every box around it, across shadow roots and slots,
  * for the returned function to put back once its pages are replaced (issue #1863). Emptying the element
  * for the new HTML collapses it for the layout the engine forces, and the browser clamps each of those
@@ -8691,7 +8692,7 @@ export class PaginationEngine {
  * so a smooth scroll under way goes on. If the new pages are shorter or narrower, an offset stops at
  * their end.
  */
-function keepScrollOffsets(element: HTMLElement): () => void {
+export function keepScrollOffsets(element: HTMLElement): () => void {
   const scrolled: Array<[Element, number, number]> = [];
   for (let box: Element | null = element; box;
     box = box.assignedSlot ?? box.parentElement ?? ((box.parentNode as ShadowRoot | null)?.host ?? null))

@@ -145,7 +145,11 @@ const budgetsKiB = {
   // The outline (ListOutline and MoveBlockRange on the session) adds 56-59 gzip bytes over that:
   // embed/IIFE 167571/167620 -> 167627/167679, which leaves too little under 163.8. Raise the same
   // two gates by another 0.1 KiB; editor and pagination are unchanged.
-  'embed.bundle.js': 163.9,
+  // Laying out a document the ribbon opens in page view inside the page, with the live document's
+  // stylesheets switched off and the scroll offsets kept meanwhile (#1868), on top of #1861-#1869,
+  // measures 164.064/164.102/142.946/57.258 KiB for embed/IIFE/editor/pagination. Raise the four
+  // exhausted gates, to the next 0.1 KiB with at least 0.05 KiB to spare.
+  'embed.bundle.js': 164.2,
   // Floating-picture height measurement brings this bundle just above 138 KiB.
   // The same whole-box continuation moves IIFE from 138.989 to 139.234 KiB.
   // The appended bullet-normalization option adds 29 gzip bytes (161996 -> 162025).
@@ -166,7 +170,8 @@ const budgetsKiB = {
   // Tab stops (above).
   // The outline (above).
   // Scroll offsets after re-pagination (#1863): see the editor budget.
-  'embed.iife.js': 164,
+  // Opening in page view (#1868, above).
+  'embed.iife.js': 164.2,
   // Oversized merged-grid recovery adds 0.39 KiB (117.832 -> 118.220 on current main).
   // #1776 (above): 0.1 KiB.
   // #1789 (above).
@@ -175,7 +180,7 @@ const budgetsKiB = {
   // Putting scroll offsets back after re-pagination (#1863), on top of #1861 and #1862, measures
   // 163.880/163.908/142.757/57.249 KiB for embed/IIFE/editor/pagination. Embed still fits by 20 bytes;
   // raise only the three exhausted gates, to the next 0.1 KiB with at least 0.05 KiB to spare.
-  'editor.bundle.js': 142.9,
+  'editor.bundle.js': 143,
   // Whole inline-image continuation adds about 0.25 KiB to the shared paginator.
   // Oversized floating-picture fitting adds 0.20 KiB here (34.902 -> 35.105).
   // Whole inline-layout continuation adds 0.24 KiB (35.801 -> 36.038 on main).
@@ -190,7 +195,8 @@ const budgetsKiB = {
   // over 0dfb5eae: embed/IIFE/editor/pagination 163921/163970/142600/57960. Only this gate is
   // exhausted (by 2 bytes); round it to the next 0.1 KiB.
   // Scroll offsets after re-pagination (#1863): see the editor budget.
-  'pagination.bundle.js': 57.3,
+  // Opening in page view (#1868, above).
+  'pagination.bundle.js': 57.4,
   'session.bundle.js': 9,
   'docxodus.worker.js': 6,
   'worker-proxy.bundle.js': 4,
