@@ -4118,14 +4118,16 @@ namespace Docxodus
         private static string? HyperlinkFieldHref(string instruction)
         {
             var tokens = FieldRetriever.GetTokens(instruction);
+            // A switch is a backslash and one character; a longer token starting with one is a path ("\\server\share").
+            static bool IsSwitch(string token) => token.Length == 2 && token[0] == '\\';
             string? address = null, location = null;
             for (int i = 1; i < tokens.Length; i++)
             {
-                if (tokens[i].Length > 1 && tokens[i][0] == '\\')
+                if (IsSwitch(tokens[i]))
                 {
                     var name = char.ToLowerInvariant(tokens[i][1]);
                     // \l, \o and \t take a value, as do the general switches \* (format), \# and \@ (pictures).
-                    if ((name is 'l' or 'o' or 't' or '*' or '#' or '@') && i + 1 < tokens.Length && tokens[i + 1][0] != '\\')
+                    if ((name is 'l' or 'o' or 't' or '*' or '#' or '@') && i + 1 < tokens.Length && !IsSwitch(tokens[i + 1]))
                     {
                         if (name == 'l') location = tokens[i + 1];
                         i++;
