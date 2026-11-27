@@ -140,4 +140,51 @@ public class HtmlPageBreakTests
         Assert.Single(markers, e => e.Ancestors().Any(a => a.Attribute("data-docx-textbox") != null));
         Assert.Contains(html.Descendants(Xhtml.p), p => p.Value == "Tail");
     }
+
+    /// <summary>The serialized HTML for <paramref name="paragraph"/>, which must write each direction mark
+    /// as a character reference, never as the text "#x200e" or "#x200f" (issue #1862).</summary>
+    private static string MarkedHtml(string paragraph, PaginationMode mode = PaginationMode.Paginated)
+    {
+        var html = Render(paragraph, mode).ToString(SaveOptions.DisableFormatting);
+        Assert.DoesNotMatch("(?<!&)#x200[ef]", html);
+        return html;
+    }
+
+    [Theory]
+    [InlineData($"<w:r><w:t>AB</w:t>{Break}<w:br/><w:t>CD</w:t></w:r>", "&#x200e;")]
+    [InlineData($"<w:r><w:t>AB</w:t><w:br/><w:t>CD</w:t>{Break}<w:t>EF</w:t></w:r>", "&#x200e;")]
+    [InlineData("<w:r><w:t>AB</w:t><w:br w:type=\"column\"/><w:br/><w:t>CD</w:t></w:r>", "&#x200e;")]
+    [InlineData($"<w:pPr><w:bidi/></w:pPr><w:r><w:t>AB</w:t>{Break}<w:br/><w:t>CD</w:t></w:r>", "&#x200f;")]
+    [InlineData("<w:r><w:t>AB</w:t><w:br/><w:t>CD</w:t></w:r>", "&#x200e;")] // control: nothing to split
+    public void LineBreakInASplitParagraphKeepsItsDirectionMark(string content, string mark)
+    {
+        var html = MarkedHtml($"<w:p>{content}</w:p>");
+        Assert.Matches($"<br data-docx-break=\"true\"[^>]*/>{mark}", html);
+    }
+
+    [Fact]
+    public void RightToLeftRunMarksSurviveAPageBreakWithoutALineBreak()
+    {
+        const string rtl = "<w:rPr><w:rtl/></w:rPr>";
+        var html = MarkedHtml($"""
+            <w:p><w:pPr><w:bidi/></w:pPr><w:r>{rtl}<w:t>אב</w:t></w:r><w:r>{Break}</w:r><w:r>{rtl}<w:t>גד</w:t></w:r></w:p>
+            """);
+        Assert.Matches("&#x200f;אב&#x200f;", html);
+        Assert.Matches("&#x200f;גד&#x200f;", html);
+    }
+
+    // A w:hyperlink in a HYPERLINK field's result gives up its own link; its runs move out of it.
+    [Theory]
+    [InlineData(PaginationMode.None)]
+    [InlineData(PaginationMode.Paginated)]
+    public void ARunMovedOutOfALinkInAHyperlinkFieldKeepsItsMarkAndFormatting(PaginationMode mode)
+    {
+        var html = MarkedHtml("""
+            <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> HYPERLINK "https://example.test/" </w:instrText></w:r>
+              <w:r><w:fldChar w:fldCharType="separate"/></w:r><w:hyperlink w:anchor="Target"><w:r><w:rPr><w:b/></w:rPr>
+              <w:t>Inner</w:t><w:br/><w:t>link</w:t></w:r></w:hyperlink><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+            """, mode);
+        Assert.Matches("<br data-docx-break=\"true\"[^>]*/>&#x200e;", html);
+        Assert.Matches("font-weight: bold[^>]*>Inner<", html);
+    }
 }
