@@ -8350,10 +8350,25 @@ registry attaches it to that table's revision the same way as the one after it.
 
 Nor do a permission marker or the edge of a content control (#1861):
 
+Two `w:body` fragments, each opened in LibreOffice 25.8.7 as written (no Docxodus operation involved):
+
 ```xml
-<w:tbl>…</w:tbl><w:permStart w:id="1" w:edGrp="everyone"/><w:permEnd w:id="1"/><w:tbl>…</w:tbl>
-<w:sdt><w:sdtContent><w:p>…</w:p><w:tbl>…</w:tbl></w:sdtContent></w:sdt><w:tbl>…</w:tbl>
+<w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>T1</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+<w:permStart w:id="1" w:edGrp="everyone"/><w:permEnd w:id="1"/>
+<w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>T2</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+<w:p/><w:sectPr/>
 ```
+
+```xml
+<w:sdt><w:sdtContent><w:p><w:r><w:t>A</w:t></w:r></w:p>
+  <w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>T1</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+</w:sdtContent></w:sdt>
+<w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>T2</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+<w:p/><w:sectPr/>
+```
+
+In Docxodus the same shapes arise from `MoveBlock` moving the paragraph that stood between the two tables
+out from between them (before #1861 no paragraph was added).
 
 | | Permission markers between two tables | A control's edge between two tables |
 |---|---|---|

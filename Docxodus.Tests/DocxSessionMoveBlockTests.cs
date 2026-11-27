@@ -2311,5 +2311,65 @@ public class DocxSessionMoveBlockTests
         using var session = Tracked(Document(P("A", PermStart(int.MaxValue), PermEnd(int.MaxValue)), P("Z", PermStart(0), PermEnd(0)), paragraph, P("C")));
         Assert.True(Move(session, "B", "C", Position.After).Success);
         AssertValid(session.Save());
+        // The lowest free id: 0 and int.MaxValue are taken.
+        var copy = BodyOf(session.Save()).Elements(W.p).Last(e => Text(e) == "B");
+        Assert.All(copy.Descendants().Where(e => e.Name == W.permStart || e.Name == W.permEnd), m => Assert.Equal("1", (string?)m.Attribute(W.id)));
+    }
+
+    // Permission ids are numbers: a range written "4" … "04" stays one range in the copy, and no copy id leaves
+    // w:id's 32 bits whatever ids the part already uses.
+    [Theory]
+    [InlineData("4", "04", "1")]
+    [InlineData("4", "4", "2147483646")]
+    [InlineData("4", "4", "9223372036854775807")]
+    public void MoveBlock_Tracked_GivesTheCopyValidPairedIds(string startId, string endId, string otherId)
+    {
+        XElement Perm(XName name, string id) => new(name, new XAttribute(W.id, id), name == W.permStart ? new XAttribute(W.edGrp, "everyone") : null);
+        var paragraph = new XElement(W.p, Perm(W.permStart, startId), Perm(W.permStart, "5"), new XElement(W.r, new XElement(W.t, "B")),
+            Perm(W.permEnd, endId), Perm(W.permEnd, "5"));
+        using var session = Tracked(Document(P("A", Perm(W.permStart, otherId), Perm(W.permEnd, otherId)), paragraph, P("C")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+
+        var copy = BodyOf(session.Save()).Elements(W.p).Last(e => Text(e) == "B");
+        var ids = copy.Descendants().Where(e => e.Name == W.permStart || e.Name == W.permEnd).Select(e => (string?)e.Attribute(W.id)).ToList();
+        Assert.Equal(ids[0], ids[2]);
+        Assert.Equal(ids[1], ids[3]);
+        Assert.All(ids, id => Assert.True(int.TryParse(id, out _), id));
+        Assert.NotEqual(ids[0], ids[1]);
+    }
+
+    // Rejecting an inserted empty paragraph never takes a comment's reference with it.
+    [Fact]
+    public void RejectRevision_KeepsAnEmptyParagraphThatHoldsACommentReference()
+    {
+        var mark = new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, Revised(W.ins))),
+            new XElement(W.commentRangeStart, new XAttribute(W.id, 7)), new XElement(W.commentRangeEnd, new XAttribute(W.id, 7)),
+            new XElement(W.r, new XElement(W.commentReference, new XAttribute(W.id, 7))));
+        // The last paragraph: with no paragraph after it to merge into, rejecting removes it.
+        using var session = new DocxSession(Document(P("A"), mark));
+        var revision = Assert.Single(session.ListRevisions(), r => r.Type == "insert");
+        Assert.True(session.RejectRevision(revision.Id).Success);
+        Assert.Single(BodyOf(session.Save()).Descendants(W.commentReference));
+    }
+
+    // A pair inverted across the gap (its start beyond the next table) covers nothing there, so the paragraph
+    // goes outside the permission range that does cover the gap.
+    [Fact]
+    public void MoveBlock_PlacesTheParagraphIgnoringAPairInvertedAcrossTheGap()
+    {
+        using var session = new DocxSession(Document(Table("T1"), new XElement(W.permStart, new XAttribute(W.id, 7)), BookmarkEnd(8), P("B"),
+            Table("T2"), P("C"), BookmarkStart(8), new XElement(W.permEnd, new XAttribute(W.id, 7)), P("D")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] - < > [T2] C B < > D", Shape(session.Save()));
+    }
+
+    // The same with the inverted pair's end before the gap: bookmark 2 ends (at the start) before it starts beside T2.
+    [Fact]
+    public void MoveBlock_PlacesTheParagraphIgnoringAPairInvertedBeforeTheGap()
+    {
+        using var session = new DocxSession(Document(P("X"), BookmarkEnd(2), BookmarkStart(1), Table("T1"), BookmarkStart(2), P("B"),
+            BookmarkEnd(1), Table("T2"), P("C")));
+        Assert.True(Move(session, "B", "T1", Position.Before).Success);
+        Assert.Equal("X > < B [T1] < > - [T2] C", Shape(session.Save()));
     }
 }

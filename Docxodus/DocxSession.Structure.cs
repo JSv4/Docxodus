@@ -616,11 +616,20 @@ public sealed partial class DocxSession
         var tally = keys.OfType<(XName End, string Id)>().GroupBy(k => k).ToDictionary(g => g.Key, g => g.Count());
         var inverted = new HashSet<(XName End, string Id)>();
         var startsSeen = new HashSet<(XName End, string Id)>();
+        // Where the other end lies beyond the gap, the document beside it says whether the pair is inverted.
+        bool Beyond(XElement marker, (XName End, string Id) key, bool forward, bool wantStart) =>
+            (forward ? marker.ElementsAfterSelf() : marker.ElementsBeforeSelf()).SelectMany(e => e.DescendantsAndSelf())
+                .Any(e => Key(e) == key && (e.Name != key.End) == wantStart);
         for (int i = 0; i < count; i++)
             if (keys[i] is { } k)
             {
-                if (markers[i].Name != k.End) startsSeen.Add(k);
-                else if (!startsSeen.Contains(k) && Enumerable.Range(i + 1, count - i - 1).Any(j => keys[j] == k)) inverted.Add(k);
+                bool isEnd = markers[i].Name == k.End;
+                if (!isEnd) startsSeen.Add(k);
+                if (isEnd && !startsSeen.Contains(k)
+                    && (Enumerable.Range(i + 1, count - i - 1).Any(j => keys[j] == k) || Beyond(markers[^1], k, forward: true, wantStart: true)))
+                    inverted.Add(k);
+                if (!isEnd && tally[k] == 1 && Beyond(markers[0], k, forward: false, wantStart: false))
+                    inverted.Add(k);
             }
         for (int i = 0; i < count; i++)
         {
@@ -1013,19 +1022,21 @@ public sealed partial class DocxSession
         static bool IsPermission(XElement e) => e.Name == W.permStart || e.Name == W.permEnd;
         var markers = copy.Descendants().Where(IsPermission).ToList();
         if (markers.Count == 0) return;
-        // Above every id in use, or the lowest free one where that would not fit w:id's 32 bits.
-        var used = story.Descendants().Where(IsPermission)
-            .Select(e => long.TryParse((string?)e.Attribute(W.id), NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) ? id : 0)
-            .ToHashSet();
-        long next = used.DefaultIfEmpty(0).Max() + 1;
-        if (next > int.MaxValue) next = 0;
-        var fresh = new Dictionary<string, string>();
+        // An id is a number ("4" and "04" are one range). Above every id in use, or the lowest free one once that
+        // would not fit w:id's 32 bits.
+        static long? IdOf(XElement e) =>
+            long.TryParse((string?)e.Attribute(W.id), NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) ? id : null;
+        var used = story.Descendants().Where(IsPermission).Select(IdOf).OfType<long>().ToHashSet();
+        long highest = used.DefaultIfEmpty(0).Max();
+        long next = highest < int.MaxValue ? highest + 1 : 0;
+        var fresh = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var marker in markers)
         {
-            var id = (string?)marker.Attribute(W.id) ?? "";
+            var id = IdOf(marker)?.ToString(CultureInfo.InvariantCulture) ?? (string?)marker.Attribute(W.id) ?? "";
             if (!fresh.TryGetValue(id, out var renumbered))
             {
-                while (used.Contains(next)) next++;
+                while (next > int.MaxValue || used.Contains(next)) next = next > int.MaxValue ? 0 : next + 1;
+                used.Add(next);
                 fresh[id] = renumbered = (next++).ToString(CultureInfo.InvariantCulture);
             }
             marker.SetAttributeValue(W.id, renumbered);

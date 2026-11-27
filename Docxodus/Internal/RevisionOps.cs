@@ -2567,8 +2567,10 @@ internal static class RevisionOps
                     // comment, header/footer or body left with no w:p/w:tbl violates the content
                     // model and sends Word into repair. Nor the paragraph a surviving table needs
                     // after it (ClosesTable). There the mark is stripped instead.
+                    // Nor one holding a comment's reference, which only a paragraph can hold: the comment would lose it.
                     if (!u.Paragraph.Elements().Any(element => element.Name != W.pPr
                         && !IsIgnorableBetween(element))
+                        && !u.Paragraph.Descendants(W.commentReference).Any()
                         && HasSurvivingBlockSibling(u.Paragraph) && !ClosesTable(u.Paragraph))
                     {
                         var paragraph = u.Paragraph;
