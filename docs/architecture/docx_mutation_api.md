@@ -949,8 +949,9 @@ Otherwise it decides and moves as a direct `MoveBlock` does: the same markers tr
 refused and the same paragraphs are added between tables. It moves the children of the closest body or
 block content control that holds the run and the target, so blocks that share a control move inside
 it. A control that holds only some of them moves whole: a run that reaches into one must cover it, and
-a target inside one stands for the place just outside it, so membership never changes; a move that
-would split a control is refused (`InvalidPosition`). A move to where the run already is succeeds and
+a target inside one must be its first block for `Before` or its last for `After`, where it stands for
+the place just outside the control, so membership never changes; any other target in it, and a move
+that would split a control, is refused (`InvalidPosition`). A move to where the run already is succeeds and
 takes no undo step.
 
 ## Bulk block removal — `DeleteRange` and `DeleteSection`

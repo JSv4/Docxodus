@@ -1663,37 +1663,70 @@ public class DocxSessionMoveBlockTests
         if (!accept) Assert.Equal(Shape(bytes), Shape(session.Save()));
     }
 
-    // An inserted blank paragraph after a move's source is the move's only when it is the one the move
-    // needs between two tables: not with no table before the source, and never one with a section break.
+    // A tracked move owns the inserted paragraph after its source only when the same edit inserted it: its
+    // author and its edit stamp (Docxodus stamps every tracked edit with its own sub-second date), and never a
+    // paragraph with a section break. A paragraph with a whole-second stamp, as Word writes, is its own change.
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, true)]
-    public void ListRevisions_AnInsertedParagraphAfterAMoveSourceIsTheMovesOnlyWhereItKeepsTablesApart(bool tableBefore, bool sectionBreak)
+    [InlineData("section break")]
+    [InlineData("whole-second stamps")]
+    public void ListRevisions_AMoveOwnsOnlyTheParagraphItsOwnEditInserted(string scenario)
     {
-        var blocks = tableBefore
-            ? new object[] { Table("T1"), P("B"), Table("T2"), P("C") }
-            : new object[] { P("A"), P("B"), Table("T2"), P("C") };
-        using var mover = Tracked(Document(blocks));
+        using var mover = Tracked(Document(Table("T1"), P("B"), Table("T2"), P("C")));
         Assert.True(Move(mover, "B", "C", Position.After).Success);
         var bytes = WithBody(mover.Save(), body =>
         {
             var source = body.Elements(W.p).First(e => e.Descendants(W.moveFrom).Any());
-            var mark = source.Element(W.pPr)!.Element(W.rPr)!.Element(W.moveFrom)!;
-            var after = source.ElementsAfterSelf(W.p).FirstOrDefault(e => e.ElementsBeforeSelf().Last() == source);
-            if (after is null)
-            {
-                after = new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, new XElement(W.ins,
-                    new XAttribute(W.id, 77), mark.Attribute(W.author), mark.Attribute(W.date)))));
-                source.AddAfterSelf(after);
-            }
-            if (sectionBreak) after.Element(W.pPr)!.Element(W.rPr)!.AddAfterSelf(new XElement(W.sectPr));
+            var separator = source.ElementsAfterSelf().First();
+            Assert.Equal(W.p, separator.Name);
+            if (scenario == "section break")
+                separator.Element(W.pPr)!.Element(W.rPr)!.AddAfterSelf(new XElement(W.sectPr));
+            else
+                foreach (var date in body.Descendants().Attributes(W.date)) date.Value = "2031-01-01T00:00:00Z";
         });
 
         using var session = Tracked(bytes);
         var revisions = session.ListRevisions();
         Assert.Equal(new[] { "insert", "move" }, revisions.Select(r => r.Type).OrderBy(t => t, StringComparer.Ordinal));
         Assert.True(session.RejectRevision(revisions.Single(r => r.Type == "move").Id).Success);
-        Assert.Equal(sectionBreak ? 1 : 0, BodyOf(session.Save()).Elements(W.p).Count(e => e.Element(W.pPr)?.Element(W.sectPr) is not null));
+        var paragraphs = BodyOf(session.Save()).Elements(W.p).ToList();
+        Assert.Equal(scenario == "section break" ? 1 : 0, paragraphs.Count(e => e.Element(W.pPr)?.Element(W.sectPr) is not null));
+        Assert.Single(session.ListRevisions(), r => r.Type == "insert");
+    }
+
+    // The paragraph stays the move's after another move beside it is rejected first.
+    [Fact]
+    public void MoveBlock_Tracked_EachMoveTakesItsParagraphWhicheverIsRejectedFirst()
+    {
+        var bytes = Document(Table("T1"), P("A"), P("B"), Table("T2"), P("C"));
+        using var session = Tracked(bytes);
+        Assert.True(Move(session, "A", "C", Position.After).Success);
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+
+        foreach (var text in new[] { "A", "B" })
+        {
+            var move = session.ListRevisions().First(r => r.Type == "move" && r.Text.StartsWith(text, StringComparison.Ordinal));
+            Assert.True(session.RejectRevision(move.Id).Success);
+        }
+
+        Assert.Empty(session.ListRevisions());
+        Assert.Equal(Shape(bytes), Shape(session.Save()));
+    }
+
+    // A moved table keeps the paragraph it needs once a pending deletion beside it is accepted in its revision.
+    [Fact]
+    public void MoveBlock_Tracked_ATableKeepsTheParagraphItNeedsBesideAPendingDeletionInItsRevision()
+    {
+        var bytes = Document(P("A"), Table("Tm"), P("B"), Table("T1"), RevisedP("D", W.del), Table("T2"), P("C"));
+        using var session = Tracked(bytes);
+        Assert.True(Move(session, "Tm", "T1", Position.After).Success);
+
+        // The source's deleted rows and the destination's inserted rows, its paragraphs in that revision.
+        var alice = session.ListRevisions().Where(r => r.Author == "Alice").ToList();
+        Assert.Equal(2, alice.Count);
+        foreach (var revision in alice) Assert.True(session.RejectRevision(revision.Id).Success);
+
+        Assert.Equal("delete", Assert.Single(session.ListRevisions()).Type);
+        Assert.Equal(Shape(bytes), Shape(session.Save()));
     }
 
     // A tracked table keeps the paragraph it needs in its own revision when that paragraph goes past a
@@ -1771,5 +1804,78 @@ public class DocxSessionMoveBlockTests
             P("B"), Table("T2"), P("C"), BookmarkEnd(5), P("D")));
         Assert.True(Move(session, "B", "C", Position.After).Success);
         Assert.Equal("< [T1] < > - [T2] C B > D", Shape(session.Save()));
+    }
+
+    // A content control's revision markers stay against the control: the paragraph a table needs does not go
+    // between them, though going past the bookmark ends there would leave it inside fewer ranges.
+    [Fact]
+    public void MoveBlock_KeepsTheParagraphOutOfAContentControlsRevisionEnvelope()
+    {
+        XElement Range(XName name, int id) => new(name, new XAttribute(W.id, id), name.LocalName.EndsWith("End") ? null
+            : new object[] { new XAttribute(W.author, "Bob"), new XAttribute(W.date, "2031-01-01T00:00:00Z") });
+        using var session = new DocxSession(Document(BookmarkStart(1), BookmarkStart(2), P("A"),
+            Range(W.customXmlInsRangeStart, 91), BookmarkEnd(1), BookmarkEnd(2),
+            Control(Range(W.customXmlInsRangeEnd, 91), Table("T2"), P("S"), Range(W.customXmlInsRangeStart, 92)),
+            Range(W.customXmlInsRangeEnd, 92), P("C")));
+        Assert.True(session.InsertTable(Block(session, "A"), Position.After, 1, 1).Success);
+
+        Assert.Equal("< < A [] - < > > (> [T2] S <) > C", Shape(session.Save()));
+        Assert.DoesNotContain(session.ListRevisions(), r => r.ResolutionStatus == RevisionResolutionStatus.Malformed);
+    }
+
+    // A field's separate marks where its result begins: a block keeps its side of it.
+    [Theory]
+    [InlineData("B", "S", Position.Before, false)] // a result paragraph into the instructions
+    [InlineData("C", "B", Position.Before, true)]  // within the result
+    public void MoveBlock_KeepsAFieldsInstructionsAndResultApart(string source, string target, Position pos, bool allowed)
+    {
+        using var session = new DocxSession(Document(
+            P("A", FieldChar("begin"), new XElement(W.r, new XElement(W.instrText, " TOC "))),
+            P("S", FieldChar("separate")), P("B"), P("C"), P("E", FieldChar("end")), P("F")));
+        Assert.Equal(allowed, Move(session, source, target, pos).Success);
+    }
+
+    // A tracked table move owns the paragraph it leaves after its source table too.
+    [Fact]
+    public void MoveBlock_Tracked_ATableMoveOwnsTheParagraphItLeavesAtItsSource()
+    {
+        var bytes = Document(Table("T1"), RevisedP("D1", W.del), Table("Tm"), RevisedP("D2", W.del), Table("T2"), P("Q"));
+        using var session = Tracked(bytes);
+        Assert.True(Move(session, "Tm", "Q", Position.After).Success);
+
+        // The source's deleted rows (with the paragraph left after them) and the destination's inserted rows.
+        var alice = session.ListRevisions().Where(r => r.Author == "Alice").ToList();
+        Assert.Equal(2, alice.Count);
+        foreach (var revision in alice) Assert.True(session.RejectRevision(revision.Id).Success);
+
+        Assert.Equal(new[] { "delete", "delete" }, session.ListRevisions().Select(r => r.Type));
+        Assert.Equal(Shape(bytes), Shape(session.Save()));
+    }
+
+    // Only a session's own edit stamp links marks: a producer that writes one fractional date for many changes,
+    // as a comparison does with wall-clock dates, keeps an empty paragraph after a table its own change.
+    [Fact]
+    public void ListRevisions_AFractionalDateFromAnotherProducerLinksNothing()
+    {
+        const string date = "2026-11-26T23:55:30.9795274-06:00";
+        XElement Ins(int id) => new(W.ins, new XAttribute(W.id, id), new XAttribute(W.author, "Cmp"), new XAttribute(W.date, date));
+        var table = Table("New");
+        foreach (var row in table.Elements(W.tr)) row.AddFirst(new XElement(W.trPr, Ins(80)));
+        var blank = new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, Ins(81))));
+        using var session = new DocxSession(Document(P("Alpha"), table, blank, P("Beta")));
+
+        Assert.Equal(2, session.ListRevisions().Count);
+    }
+
+    // A content control's revision pair that encloses nothing holds no control, so it limits nothing.
+    [Fact]
+    public void MoveBlock_PlacesTheParagraphPastAnEmptyContentControlRevisionPair()
+    {
+        XElement Range(XName name, int id) => new(name, new XAttribute(W.id, id), name.LocalName.EndsWith("End") ? null
+            : new object[] { new XAttribute(W.author, "Bob"), new XAttribute(W.date, "2031-01-01T00:00:00Z") });
+        using var session = new DocxSession(Document(Table("T1"), BookmarkStart(5), Range(W.customXmlInsRangeStart, 95),
+            Range(W.customXmlInsRangeEnd, 95), BookmarkStart(7), P("B"), Table("T2"), P("C"), BookmarkEnd(7), BookmarkEnd(5), P("D")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] - < < > < [T2] C B > > D", Shape(session.Save()));
     }
 }

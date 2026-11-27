@@ -358,7 +358,8 @@ public sealed partial class DocxSession
         var past = container.AncestorsAndSelf().TakeWhile(e => e != body)
             .Select(e => e.ElementsAfterSelf().FirstOrDefault()).FirstOrDefault(e => e is not null);
         var starts = new Dictionary<(XName End, string Id), int>();
-        var fields = new Stack<int>();
+        // Each open field: the child its begin is in, and the child of its separate once seen.
+        var fields = new Stack<(int Begin, int? Separate)>();
         int at = -1;
         foreach (var e in body.Descendants())
         {
@@ -370,8 +371,20 @@ public sealed partial class DocxSession
             if (e.Name == W.fldChar)
             {
                 var type = (string?)e.Attribute(W.fldCharType);
-                if (type == "begin") fields.Push(at);
-                else if (type == "end" && fields.Count > 0) Add(fields.Pop(), at, "field");
+                if (type == "begin") fields.Push((at, null));
+                else if (type == "separate" && fields.Count > 0 && fields.Peek().Separate is null)
+                    fields.Push((fields.Pop().Begin, at));
+                else if (type == "end" && fields.Count > 0)
+                {
+                    // The separate is where the result begins: instructions and result are each a range.
+                    var (begin, separate) = fields.Pop();
+                    if (separate is { } middle && middle != begin && middle != at)
+                    {
+                        Add(begin, middle, "field");
+                        Add(middle, at, "field");
+                    }
+                    else Add(begin, at, "field");
+                }
             }
             else if (e.Name == W.sectPr)
             {
@@ -545,39 +558,57 @@ public sealed partial class DocxSession
     }
 
     /// <summary>Move <paramref name="separator"/> within the markers around it (between the blocks on either side) to
-    /// a place inside the fewest of the ranges that start or end there, staying where it is on a tie: past the ends of those that cover the
-    /// table, short of those that start after it. A range with no marker there contains every such place or none. An
-    /// empty range keeps covering nothing, so where no place outside the others is left before it, it can come to mark
-    /// the added paragraph rather than the table after it.</summary>
+    /// a place inside the fewest of the ranges that start or end there, staying where it is on a tie: past the ends
+    /// of those that cover the table, short of those that start after it. A range with no marker there contains every
+    /// such place or none. An empty range keeps covering nothing, so where no place outside the others is left before
+    /// it, it can come to mark the added paragraph rather than the table after it. A content control's revision
+    /// markers stay against the control they enclose: the paragraph never goes between them.</summary>
     private static void PlaceOutsideRanges(XElement separator)
     {
+        static XElement? Sibling(XElement e, bool forward)
+        {
+            for (var node = forward ? e.NextNode : e.PreviousNode; node is not null; node = forward ? node.NextNode : node.PreviousNode)
+                if (node is XElement element) return element;
+            return null;
+        }
         var markers = new List<XElement>();
-        for (var e = separator.ElementsBeforeSelf().LastOrDefault(); e is not null && IsBlockLevelMarker(e);
-            e = e.ElementsBeforeSelf().LastOrDefault())
-            markers.Insert(0, e);
-        int here = markers.Count;
-        for (var e = separator.ElementsAfterSelf().FirstOrDefault(); e is not null && IsBlockLevelMarker(e);
-            e = e.ElementsAfterSelf().FirstOrDefault())
+        for (var e = Sibling(separator, forward: false); e is not null && IsBlockLevelMarker(e); e = Sibling(e, forward: false))
             markers.Add(e);
+        markers.Reverse();
+        int here = markers.Count;
+        for (var e = Sibling(separator, forward: true); e is not null && IsBlockLevelMarker(e); e = Sibling(e, forward: true))
+            markers.Add(e);
+
+        // How many of those ranges each place among the markers is inside, counted in one pass: an end is
+        // inside from its start (or from before the markers) up to it, a start whose end is further on after it.
+        int count = markers.Count, lo = 0, hi = count;
+        var inside = new int[count + 2];
+        var open = new Dictionary<(XName End, string Id), int>();
         (XName End, string Id)? Key(XElement m) =>
             CrossBlockRangeNames.TryGetValue(m.Name, out var r) ? (r.End, (string?)m.Attribute(W.id) ?? "") : null;
-        int Inside(int slot)
+        // A pair with both ends here encloses no block, so it holds no control to stay against.
+        var keys = markers.Select(Key).ToList();
+        var tally = keys.OfType<(XName End, string Id)>().GroupBy(k => k).ToDictionary(g => g.Key, g => g.Count());
+        for (int i = 0; i < count; i++)
         {
-            int count = 0;
-            for (int i = 0; i < markers.Count; i++)
+            if (keys[i] is not { } key) continue;
+            bool isEnd = markers[i].Name == key.End;
+            if (markers[i].Name.LocalName.StartsWith("customXml", StringComparison.Ordinal) && tally[key] == 1)
             {
-                if (Key(markers[i]) is not { } key) continue;
-                int other = markers.FindIndex(m => !ReferenceEquals(m, markers[i]) && Key(m) is { } k && k == key);
-                // An end: inside from its start (or from before the markers) up to it. A start: after it, when
-                // its end is further on.
-                if (markers[i].Name == key.End) count += slot <= i && other < slot ? 1 : 0;
-                else count += other < 0 && slot > i ? 1 : 0;
+                if (isEnd) lo = Math.Max(lo, i + 1);
+                else hi = Math.Min(hi, i);
             }
-            return count;
+            if (!isEnd) { open.TryAdd(key, i); continue; }
+            inside[open.Remove(key, out int from) ? from + 1 : 0]++;
+            inside[i + 1]--;
         }
-        // Where it was put wins a tie: another place only when it is inside fewer ranges.
-        int fewest = Enumerable.Range(0, markers.Count + 1).Min(Inside);
-        int best = Inside(here) == fewest ? here : Enumerable.Range(0, markers.Count + 1).First(slot => Inside(slot) == fewest);
+        foreach (var from in open.Values) { inside[from + 1]++; inside[count + 1]--; }
+        for (int slot = 1; slot <= count; slot++) inside[slot] += inside[slot - 1];
+        if (lo > hi) return;
+
+        int best = here >= lo && here <= hi ? here : lo;
+        for (int slot = lo; slot <= hi; slot++)
+            if (inside[slot] < inside[best]) best = slot;
         if (best == here) return;
         separator.Remove();
         if (best == 0) markers[0].AddBeforeSelf(separator);

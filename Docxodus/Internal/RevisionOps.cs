@@ -1320,15 +1320,15 @@ internal static class RevisionOps
     }
 
     /// <summary>The move that left <paramref name="mark"/>'s empty inserted paragraph in place of the
-    /// paragraph it moves away, to keep two tables apart (issue #1861): the same edit's, right after
-    /// its source, and keeping two tables apart once the move is accepted. A paragraph with a section
-    /// break is a change of its own.</summary>
+    /// paragraph it moves away, to keep two tables apart (issue #1861): right after its source and
+    /// inserted by the same edit, which its stamp shows (<see cref="IsEditStamp"/>) whatever has changed
+    /// around it since. A paragraph with a section break is a change of its own.</summary>
     private static RevisionGroup? MoveLeavingParagraph(RevisionUnit mark, IEnumerable<RevisionGroup> moves)
     {
         var paragraph = mark.Paragraph;
         if (paragraph is null || mark.Type != TypeInsert || paragraph.Elements().Any(e => !IsIgnorableBetween(e))
-            || paragraph.Element(W.pPr)?.Element(W.sectPr) is not null
-            || !DocxSession.TablesMeet(paragraph, accepted: true) || SiblingBlock(paragraph, forward: false) is not { } source)
+            || paragraph.Element(W.pPr)?.Element(W.sectPr) is not null || !IsEditStamp(mark.Date)
+            || SiblingBlock(paragraph, forward: false) is not { } source)
             return null;
         return moves.FirstOrDefault(move => move.Author == mark.Author && move.Date == mark.Date
             && move.DateUtc == DateUtcOf(mark.Element)
@@ -1348,14 +1348,18 @@ internal static class RevisionOps
         RevisionUnit mark, Dictionary<XElement, RevisionGroup> rowGroupByTr, bool tableAfter = false)
     {
         var paragraph = mark.Paragraph;
+        // Word's paragraph after a table is the table's while the table needs it; Docxodus's is the table's
+        // edit by its stamp, also where only accepting another change would leave the tables touching.
         if (paragraph is null || paragraph.Elements().Any(e => !IsIgnorableBetween(e))
-            || paragraph.Element(W.pPr)?.Element(W.sectPr) is not null || !ClosesTable(paragraph)
+            || paragraph.Element(W.pPr)?.Element(W.sectPr) is not null || !(ClosesTable(paragraph) || IsEditStamp(mark.Date))
             || SiblingBlock(paragraph, forward: tableAfter) is not { } table || table.Name != W.tbl)
             return null;
         var rows = WordprocessingMLUtil.TableRows(table).ToList();
         return rows.Count > 0 && rowGroupByTr.TryGetValue(rows[0], out var group)
             && rows.All(row => rowGroupByTr.TryGetValue(row, out var rowGroup) && ReferenceEquals(rowGroup, group))
-            && group.Type == mark.Type && group.Author == mark.Author && group.Date == mark.Date
+            // The same type; or, where the same edit inserted it, the deleted rows a tracked table move left it after.
+            && (group.Type == mark.Type || (!tableAfter && mark.Type == TypeInsert && group.Type == TypeDelete && IsEditStamp(mark.Date)))
+            && group.Author == mark.Author && group.Date == mark.Date
             && group.DateUtc == DateUtcOf(mark.Element)
                 ? group
                 : null;
@@ -1370,6 +1374,12 @@ internal static class RevisionOps
     /// revision never removes it while the table stands.
     /// </summary>
     internal static bool ClosesTable(XElement paragraph) => DocxSession.TablesMeet(paragraph, accepted: null);
+
+    /// <summary>Whether <paramref name="date"/> is a tracked edit's own stamp: Docxodus dates every tracked edit to
+    /// the tenth of a microsecond, one later than the last, so two marks with it came from the same edit. Word and
+    /// most producers write whole seconds, which many changes can share.</summary>
+    private static bool IsEditStamp(string? date) =>
+        date is { Length: 28 } && date[19] == '.' && date[^1] == 'Z' && date.AsSpan(20, 7).IndexOfAnyExceptInRange('0', '9') < 0;
 
     /// <summary>The block content control or custom XML element <paramref name="block"/> is directly in, or null.</summary>
     internal static XElement? BlockWrapperOf(XElement block) =>
