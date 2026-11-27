@@ -6,6 +6,7 @@ using System.Xml.Linq;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus.Internal;
+using Docxodus.Ir;
 using Xunit;
 
 namespace Docxodus.Tests;
@@ -169,6 +170,7 @@ public class WmlToHtmlConverterFieldLinkStyleTests
         """;
 
     // A HYPERLINK field's \l names a place in the document, so the link goes there: after the address if there is one.
+    // The IR reads the same target (one parser serves both), so the markdown projection and the diff agree with the HTML.
     [Theory]
     [InlineData("HYPERLINK \\l \"Target\"", "#Target")]
     [InlineData("HYPERLINK \"https://example.test/doc\" \\l \"Section\"", "https://example.test/doc#Section")]
@@ -176,13 +178,22 @@ public class WmlToHtmlConverterFieldLinkStyleTests
     [InlineData("HYPERLINK \\l \"Target\" \\o \"A tip\"", "#Target")]           // a tooltip after the location
     [InlineData("HYPERLINK \\o \"A tip\" \"https://example.test/doc\"", "https://example.test/doc")] // a tooltip first
     [InlineData("HYPERLINK \\l \"Target\" \\* MERGEFORMAT", "#Target")]           // a general switch's value
-    [InlineData("HYPERLINK \"\\\\server\\share\\a.docx\"", "\\\\server\\share\\a.docx")]          // a network path, not a switch
+    [InlineData("HYPERLINK \"\\\\\\\\server\\\\share\\\\a.docx\"", "\\\\server\\share\\a.docx")] // a network path as Word escapes it
+    [InlineData("HYPERLINK \\o \"say \\\"hi\\\"\" \"https://example.test/doc\"", "https://example.test/doc")] // an escaped quote
+    [InlineData("HYPERLINK \\m \"https://example.test/doc\"", "https://example.test/doc")] // \m takes no value
     [InlineData("HYPERLINK \\o \"\" \"https://example.test/doc\"", "https://example.test/doc")]  // an empty tooltip first
     [InlineData("HYPERLINK \"https://example.test/doc\" \\l \"\"", "https://example.test/doc")]  // an empty location
+    [InlineData("HYPERLINK \\l \"Target\" \\*MERGEFORMAT", "#Target")]           // a switch with its value glued on
+    [InlineData("HYPERLINK \\l\"Target\"", "#Target")]
+    [InlineData("HYPERLINK \\o\"A tip\" \"https://example.test/doc\"", "https://example.test/doc")]
+    [InlineData("HYPERLINK \\t\"_blank\" \"https://example.test/doc\"", "https://example.test/doc")]
     public void AHyperlinkFieldLinksToTheLocationItNames(string instruction, string href)
     {
-        var html = Render($"<w:p>{FieldWith(instruction, Run("Go"))}</w:p>", fabricateCssClasses: false, PaginationMode.None);
+        var body = $"<w:p>{FieldWith(instruction, Run("Go"))}</w:p>";
+        var html = Render(body, fabricateCssClasses: false, PaginationMode.None);
         Assert.Equal("Go", Link(html, href).Value);
+        var paragraph = Assert.Single(IrReader.Read(new WmlDocument("field.docx", Docx(body))).Body.Blocks.OfType<IrParagraph>());
+        Assert.Equal(href, Assert.Single(paragraph.Inlines.OfType<IrHyperlink>()).Target);
     }
 
     // A HYPERLINK field in another's result gives up its own link there too, as a w:hyperlink does: an anchor

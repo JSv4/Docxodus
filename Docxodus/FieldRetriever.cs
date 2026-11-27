@@ -322,9 +322,7 @@ namespace Docxodus
             OnBackslash,
         }
 
-        /// <param name="keepEmptyOperands">Whether an empty quoted operand (<c>""</c>) is a token, so that a switch
-        /// written with an empty value does not take the next operand as its value.</param>
-        internal static string[] GetTokens(string field, bool keepEmptyOperands = false)
+        private static string[] GetTokens(string field)
         {
             State state = State.InWhiteSpace;
             int tokenStart = 0;
@@ -384,7 +382,6 @@ namespace Docxodus
                     {
                         if (field[c] == quoteStart)
                         {
-                            if (keepEmptyOperands) tokens.Add(string.Empty);
                             state = State.OnClosingQuote;
                             continue;
                         }

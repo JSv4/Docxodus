@@ -4112,33 +4112,6 @@ namespace Docxodus
             return a;
         }
 
-        /// <summary>Where a HYPERLINK field's <paramref name="instruction"/> links to: its address, with the place
-        /// <c>\l</c> names in the document as the fragment, or that place alone. The values of <c>\o</c> (a tooltip),
-        /// <c>\t</c> (a target frame) and the general switches are not part of the address.</summary>
-        private static string? HyperlinkFieldHref(string instruction)
-        {
-            var tokens = FieldRetriever.GetTokens(instruction, keepEmptyOperands: true);
-            // A switch is a backslash and one character; a longer token starting with one is a path ("\\server\share").
-            static bool IsSwitch(string token) => token.Length == 2 && token[0] == '\\';
-            string? address = null, location = null;
-            for (int i = 1; i < tokens.Length; i++)
-            {
-                if (IsSwitch(tokens[i]))
-                {
-                    var name = char.ToLowerInvariant(tokens[i][1]);
-                    // \l, \o and \t take a value, as do the general switches \* (format), \# and \@ (pictures).
-                    if ((name is 'l' or 'o' or 't' or '*' or '#' or '@') && i + 1 < tokens.Length && !IsSwitch(tokens[i + 1]))
-                    {
-                        if (name == 'l' && tokens[i + 1].Length > 0) location = tokens[i + 1];
-                        i++;
-                    }
-                    continue;
-                }
-                if (tokens[i].Length > 0) address ??= tokens[i];
-            }
-            return location is null ? address : (address ?? "") + "#" + location;
-        }
-
         /// <summary>Marks the <c>&lt;a&gt;</c> a <c>w:hyperlink</c> renders as, as opposed to the
         /// anchors the converter generates for note references, comment markers and bookmarks.</summary>
         private sealed class WordHyperlinkAnchor
@@ -12741,7 +12714,7 @@ namespace Docxodus
                     // Convert the field's own children, as a w:hyperlink does, so a tracked change,
                     // bookmark or comment range inside the link keeps its rendering.
                     var content = Nested();
-                    var a = HyperlinkFieldHref(instrText) is { } href
+                    var a = HyperlinkInstruction.Target(instrText) is { } href
                         ? new XElement(Xhtml.a, new XAttribute("href", href), content)
                         : new XElement(Xhtml.a, content);
                     // An anchor cannot hold another: a bookmark target inside the link keeps its id
