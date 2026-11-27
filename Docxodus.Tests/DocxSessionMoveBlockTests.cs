@@ -906,7 +906,10 @@ public class DocxSessionMoveBlockTests
             {
                 var (begin, separate) = fields.Count > 0 ? fields.Pop() : (-1, -1);
                 if (begin < 0) { found.Add("field broken"); continue; }
-                found.Add(separate < 0 ? $"field: {Words(begin, i)}" : $"field instructions: {Words(begin, separate)} | result: {Words(separate, i)}");
+                string Instructions(int from, int to) => string.Concat(elements.Take(to).Skip(from)
+                    .Where(e => e.Name == W.instrText || e.Name == W.delInstrText).Select(e => e.Value));
+                found.Add(separate < 0 ? $"field: {Instructions(begin, i)} {Words(begin, i)}"
+                    : $"field instructions: {Instructions(begin, separate)} {Words(begin, separate)} | result: {Words(separate, i)}");
                 continue;
             }
             if (fieldCharacter is not null || !name.EndsWith("End")) continue;
@@ -2064,5 +2067,70 @@ public class DocxSessionMoveBlockTests
         var blank = new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, Revised(W.ins))));
         using var session = new DocxSession(Document(P("A"), RevisedTable("T1", W.ins), blank, Control(Table("T2"), P("S")), P("C")));
         Assert.Equal(2, session.ListRevisions().Count);
+    }
+
+    // Rejecting an inserted empty paragraph at a content control's end keeps the bookmark that starts in it.
+    [Fact]
+    public void RejectRevision_KeepsTheRangeMarkersOfAnEmptyParagraphItRemoves()
+    {
+        var mark = new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, Revised(W.ins))), BookmarkStart(4));
+        using var session = new DocxSession(Document(Control(Table("T1"), P("S"), mark), P("B", BookmarkEnd(4)), P("C")));
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.True(session.RejectRevision(revision.Id).Success);
+
+        var body = BodyOf(session.Save());
+        Assert.Single(body.Descendants(W.bookmarkStart), b => (string?)b.Attribute(W.id) == "4");
+        Assert.Single(body.Descendants(W.bookmarkEnd), b => (string?)b.Attribute(W.id) == "4");
+    }
+
+    // Without an edit stamp, a blank closes the table before it only where it ends what holds them, or a table or
+    // the section follows it among its own siblings; a permission range or a control's end is no proof.
+    [Theory]
+    [InlineData("a control that something follows")]
+    [InlineData("a permission range before the next table")]
+    public void ListRevisions_AnImportedBlankIsTheTablesOnlyWhereItClosesTheTable(string scenario)
+    {
+        var blank = new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, Revised(W.ins))));
+        using var session = new DocxSession(Document(scenario.StartsWith("a control")
+            ? new object[] { Control(P("S"), RevisedTable("T", W.ins), blank), P("B") }
+            : new object[] { P("A"), RevisedTable("T", W.ins), blank, new XElement(W.permStart, new XAttribute(W.id, 8)),
+                new XElement(W.permEnd, new XAttribute(W.id, 8)), Table("T2"), P("C") }));
+        Assert.Equal(2, session.ListRevisions().Count);
+    }
+
+    // Deleted instruction text keeps its order too, so rejecting the deletion gives the field back as it was.
+    [Fact]
+    public void MoveBlock_KeepsTheOrderOfAFieldsDeletedInstructions()
+    {
+        XElement Deleted(string text) => Revised(W.del, new XElement(W.r, new XElement(W.delInstrText, new XAttribute(Xml + "space", "preserve"), text)));
+        using var session = new DocxSession(Document(P("A", FieldChar("begin"), Deleted(" TOC ")),
+            P("S1", Deleted("\\o ")), P("S2", Deleted("\"1-2\" ")), P("R", FieldChar("separate")), P("E", FieldChar("end")), P("F")));
+        Assert.False(Move(session, "S2", "S1", Position.Before).Success);
+    }
+
+    // A move range that has already closed before a paragraph does not name it.
+    [Fact]
+    public void MoveBlock_NamesAMovesHalfByTheRangeStillOpenAroundIt()
+    {
+        using var mover = Tracked(Document(Table("T1"), P("M"), P("B"), Table("T2"), P("C")));
+        Assert.True(Move(mover, "M", "B", Position.After).Success);
+        var bytes = WithBody(mover.Save(), body =>
+        {
+            foreach (var paragraph in body.Elements(W.p).ToList())
+            {
+                foreach (var start in paragraph.Elements().Where(e => e.Name == W.moveFromRangeStart || e.Name == W.moveToRangeStart).ToList())
+                { start.Remove(); paragraph.AddBeforeSelf(start); }
+                foreach (var end in paragraph.Elements().Where(e => e.Name == W.moveFromRangeEnd || e.Name == W.moveToRangeEnd).ToList())
+                { end.Remove(); paragraph.AddAfterSelf(end); }
+            }
+            // An empty source range of another move, closed right before this move's source paragraph.
+            var source = body.Elements(W.p).First(e => e.Descendants(W.moveFrom).Any());
+            source.AddBeforeSelf(new XElement(W.moveFromRangeStart, new XAttribute(W.id, 99), new XAttribute(W.name, "other"),
+                new XAttribute(W.author, "Bob"), new XAttribute(W.date, "2031-01-01T00:00:00Z")), new XElement(W.moveFromRangeEnd, new XAttribute(W.id, 99)));
+        });
+        using var session = new DocxSession(bytes);
+
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] < < > M > < M > [T2] C B", Shape(session.Save()));
     }
 }

@@ -1380,9 +1380,22 @@ internal static class RevisionOps
     /// <summary>Whether <paramref name="paragraph"/> closes the table right before it among its own siblings: a table, the
     /// section properties or nothing right after it. Grouping takes only this, not <see cref="ClosesTable"/>'s view into
     /// the next content control, as proof without an edit stamp that the table's edit made the paragraph.</summary>
-    private static bool ClosesTableBesideIt(XElement paragraph) =>
-        SiblingBlock(paragraph, forward: false)?.Name == W.tbl
-        && SiblingBlock(paragraph, forward: true) is var next && (next is null || next.Name == W.sectPr || next.Name == W.tbl);
+    private static bool ClosesTableBesideIt(XElement paragraph)
+    {
+        // Past bookmark, comment and move range markers only: a permission range between blocks is no proof.
+        static XElement? Beside(XElement element, bool forward)
+        {
+            var node = forward ? element.NextNode : element.PreviousNode;
+            while (node is not null && (node is not XElement sibling || IsIgnorableBetween(sibling)))
+                node = forward ? node.NextNode : node.PreviousNode;
+            return node as XElement;
+        }
+        if (Beside(paragraph, forward: false)?.Name != W.tbl) return false;
+        // The end of a content control is not the end of what holds it.
+        XElement? next = null;
+        for (XElement? e = paragraph; e is not null && next is null; e = BlockWrapperOf(e)) next = Beside(e, forward: true);
+        return next is null || next.Name == W.sectPr || next.Name == W.tbl;
+    }
 
     /// <summary>Whether <paramref name="date"/> is a tracked edit's own stamp: Docxodus dates every tracked edit to
     /// the tenth of a microsecond, one later than the last, so two marks with it came from the same edit. Word and
@@ -2559,6 +2572,11 @@ internal static class RevisionOps
                         && HasSurvivingBlockSibling(u.Paragraph) && !ClosesTable(u.Paragraph))
                     {
                         var paragraph = u.Paragraph;
+                        // Its bookmark, comment and move range markers stay where it was, between the blocks,
+                        // so a range that starts or ends in it keeps its other end.
+                        var markers = paragraph.Elements().Where(e => e.Name != W.pPr && e.Name != W.proofErr && e.Name != W.r).ToList();
+                        foreach (var marker in markers) marker.Remove();
+                        paragraph.AddBeforeSelf(markers);
                         paragraph.Remove();
                         removedBlocks.Add(paragraph);
                         touchedParagraphs.Remove(paragraph);

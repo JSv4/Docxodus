@@ -366,10 +366,10 @@ public sealed partial class DocxSession
         {
             if (ReferenceEquals(e.Parent, container)) at = index[e];
             else if (ReferenceEquals(e, past)) at = children.Count;
-            if ((e.Name == W.fldChar || e.Name == W.instrText || CrossBlockRangeNames.ContainsKey(e.Name))
+            if ((e.Name == W.fldChar || e.Name == W.instrText || e.Name == W.delInstrText || CrossBlockRangeNames.ContainsKey(e.Name))
                 && (e.Ancestors(W.txbxContent).FirstOrDefault() != story || !WmlToMarkdownConverter.IsSelectedMarkup(e)))
                 continue;
-            if (e.Name == W.instrText)
+            if (e.Name == W.instrText || e.Name == W.delInstrText)
             {
                 if (fields.Count > 0 && fields.Peek().Separate is null && fields.Peek().Instructions is var instructions
                     && (instructions.Count == 0 ? fields.Peek().Begin : instructions[^1]) != at)
@@ -718,11 +718,16 @@ public sealed partial class DocxSession
         string? MoveName(XElement paragraph, XName start)
         {
             if (paragraph.Element(start) is { } inside) return (string?)inside.Attribute(W.name);
+            // The nearest range of that kind still open at the paragraph: one whose end comes first has closed.
+            var end = start == W.moveFromRangeStart ? W.moveFromRangeEnd : W.moveToRangeEnd;
+            var closed = new HashSet<string>(StringComparer.Ordinal);
             for (var node = paragraph.PreviousNode; node is not null; node = node.PreviousNode)
                 if (node is XElement marker)
                 {
-                    if (marker.Name == start) return (string?)marker.Attribute(W.name);
-                    if (!IsBlockLevelMarker(marker)) break;
+                    var id = (string?)marker.Attribute(W.id) ?? "";
+                    if (marker.Name == end) closed.Add(id);
+                    else if (marker.Name == start && !closed.Contains(id)) return (string?)marker.Attribute(W.name);
+                    else if (!IsBlockLevelMarker(marker)) break;
                 }
             return null;
         }
