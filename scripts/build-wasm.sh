@@ -227,7 +227,12 @@ du -sh "$WASM_DIST"
 # 6,112,865 bytes on one runner and 6,123,723 on another, 203 over 5980 KiB, and UpdateFields on top of it at
 # 6,123,332 and 6,123,941. 12 KiB more covers both and that spread; assembly roots, dependencies and the
 # AOT profile are unchanged.
-WIRE_BUDGET_BYTES=$((5992 * 1024))
+# The shared move rules (#1861: the move context, the paragraph between tables, revision grouping, and their
+# review rounds), with #1862 and #1863 above them: CI measured the three branches at 6,130,903 to 6,138,923
+# bytes on its build, build-npm and compare jobs, up to 3,115 over 5992 KiB, against 6,131,871 for main on the
+# compare job; the same code measured up to 8 KB apart on different runners. 12 KiB more covers the change and
+# that spread; assembly roots, dependencies and the AOT profile are unchanged.
+WIRE_BUDGET_BYTES=$((6004 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""

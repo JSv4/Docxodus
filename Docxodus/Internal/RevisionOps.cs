@@ -1353,7 +1353,7 @@ internal static class RevisionOps
         // where no resolution would.
         if (paragraph is null || paragraph.Elements().Any(e => !IsIgnorableBetween(e))
             || paragraph.Element(W.pPr)?.Element(W.sectPr) is not null
-            || !(ClosesTable(paragraph) || (IsEditStamp(mark.Date) && DocxSession.TablesCanMeet(paragraph, mark.Date)))
+            || !(ClosesTableBesideIt(paragraph) || (IsEditStamp(mark.Date) && DocxSession.TablesCanMeet(paragraph, mark.Date)))
             || SiblingBlock(paragraph, forward: tableAfter) is not { } table || table.Name != W.tbl)
             return null;
         var rows = WordprocessingMLUtil.TableRows(table).ToList();
@@ -1376,6 +1376,13 @@ internal static class RevisionOps
     /// revision never removes it while the table stands.
     /// </summary>
     internal static bool ClosesTable(XElement paragraph) => DocxSession.TablesMeet(paragraph, accepted: null);
+
+    /// <summary>Whether <paramref name="paragraph"/> closes the table right before it among its own siblings: a table, the
+    /// section properties or nothing right after it. Grouping takes only this, not <see cref="ClosesTable"/>'s view into
+    /// the next content control, as proof without an edit stamp that the table's edit made the paragraph.</summary>
+    private static bool ClosesTableBesideIt(XElement paragraph) =>
+        SiblingBlock(paragraph, forward: false)?.Name == W.tbl
+        && SiblingBlock(paragraph, forward: true) is var next && (next is null || next.Name == W.sectPr || next.Name == W.tbl);
 
     /// <summary>Whether <paramref name="date"/> is a tracked edit's own stamp: Docxodus dates every tracked edit to
     /// the tenth of a microsecond, one later than the last, so two marks with it came from the same edit. Word and

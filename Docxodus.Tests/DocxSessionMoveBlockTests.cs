@@ -1956,4 +1956,113 @@ public class DocxSessionMoveBlockTests
         Assert.True(Move(session, "B", "C", Position.After).Success);
         Assert.Equal("[T1] M M [T2] C B", Shape(session.Save()));
     }
+
+    // Fields nested in another field's instructions keep their order too: swapping them would reverse its operands.
+    [Fact]
+    public void MoveBlock_KeepsTheOrderOfFieldsNestedInAFieldsInstructions()
+    {
+        XElement Instruction(string text) => new(W.r, new XElement(W.instrText, new XAttribute(Xml + "space", "preserve"), text));
+        using var session = new DocxSession(Document(P("A", FieldChar("begin"), Instruction(" IF ")),
+            P("N1", FieldChar("begin"), Instruction(" REF First "), FieldChar("end")),
+            P("N2", FieldChar("begin"), Instruction(" REF Last "), FieldChar("end")),
+            P("S", Instruction(" \"x\" \"y\" "), FieldChar("separate")), P("E", FieldChar("end")), P("F")));
+        Assert.False(Move(session, "N2", "N1", Position.Before).Success);
+    }
+
+    private static XElement TableWithRowMarks(string text, params XName[] revisions)
+    {
+        var table = Table(text);
+        int id = 70;
+        foreach (var row in table.Elements(W.tr))
+            row.AddFirst(new XElement(W.trPr, revisions.Select(r => new XElement(r, new XAttribute(W.id, id++),
+                new XAttribute(W.author, "Bob"), new XAttribute(W.date, "2031-01-01T00:00:00Z")))));
+        return table;
+    }
+
+    // A table whose rows were inserted and then deleted still stands as the markup is, and can stand once its
+    // marks are resolved one way and the other: the tables stay apart.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MoveBlock_KeepsTablesApartBesideATableWithRowsInsertedAndDeleted(bool deletedParagraph)
+    {
+        var body = new System.Collections.Generic.List<object> { TableWithRowMarks("T1", W.ins, W.del), P("B") };
+        if (deletedParagraph) body.Add(RevisedP("D", W.del));
+        body.AddRange(new object[] { deletedParagraph ? TableWithRowMarks("T2", W.ins, W.del) : Table("T2"), P("C") });
+        using var session = new DocxSession(Document(body.ToArray()));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal(deletedParagraph ? "[T1] - - [T2] C B" : "[T1] - [T2] C B", Shape(session.Save()));
+    }
+
+    // The paragraph never goes inside a content-control revision pair that encloses nothing: it would then enclose it.
+    [Fact]
+    public void MoveBlock_KeepsTheParagraphOutOfAnEmptyContentControlRevisionPair()
+    {
+        XElement Range(XName name, int id) => new(name, new XAttribute(W.id, id), name.LocalName.EndsWith("End") ? null
+            : new object[] { new XAttribute(W.author, "Bob"), new XAttribute(W.date, "2031-01-01T00:00:00Z") });
+        using var session = new DocxSession(Document(BookmarkStart(1), BookmarkStart(2), Table("T1"), P("B"),
+            Range(W.customXmlInsRangeStart, 95), BookmarkEnd(1), BookmarkEnd(2), BookmarkStart(3), BookmarkStart(4),
+            Range(W.customXmlInsRangeEnd, 95), Table("T2"), P("C"), BookmarkEnd(3), BookmarkEnd(4), P("D")));
+        Assert.True(Move(session, "B", "T1", Position.Before).Success);
+
+        Assert.Equal("< < B [T1] - < > > < < > [T2] C > > D", Shape(session.Save()));
+        Assert.DoesNotContain(session.ListRevisions(), r => r.ResolutionStatus == RevisionResolutionStatus.Malformed);
+    }
+
+    // A move's halves are paired by name with their range markers directly in the body too.
+    [Fact]
+    public void MoveBlock_PairsAMovesHalvesByTheRangesBesideThem()
+    {
+        using var mover = Tracked(Document(Table("T1"), P("M"), P("B"), Table("T2"), P("C")));
+        Assert.True(Move(mover, "M", "B", Position.After).Success);
+        var bytes = WithBody(mover.Save(), body =>
+        {
+            foreach (var paragraph in body.Elements(W.p).ToList())
+            {
+                foreach (var start in paragraph.Elements().Where(e => e.Name == W.moveFromRangeStart || e.Name == W.moveToRangeStart).ToList())
+                {
+                    start.Remove();
+                    paragraph.AddBeforeSelf(start);
+                }
+                foreach (var end in paragraph.Elements().Where(e => e.Name == W.moveFromRangeEnd || e.Name == W.moveToRangeEnd).ToList())
+                {
+                    end.Remove();
+                    paragraph.AddAfterSelf(end);
+                }
+            }
+        });
+        using var session = new DocxSession(bytes);
+
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("[T1] < M > < M > [T2] C B", Shape(session.Save()));
+    }
+
+    // Two different moves resolve on their own even when one author made them at the same whole second: only a
+    // move's own two halves are one decision.
+    [Fact]
+    public void MoveBlock_KeepsTablesApartBesideHalvesOfTwoMovesWithTheSameStamp()
+    {
+        using var mover = Tracked(Document(Table("T1"), P("A"), P("B"), Table("T2"), P("C"), P("D")));
+        Assert.True(Move(mover, "A", "D", Position.After).Success);
+        Assert.True(Move(mover, "D", "B", Position.Before).Success);
+        var bytes = WithBody(mover.Save(), body =>
+        {
+            foreach (var date in body.Descendants().Attributes(W.date)) date.Value = "2031-01-01T00:00:00Z";
+        });
+        using var session = new DocxSession(bytes);
+
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        var shape = Shape(session.Save());
+        Assert.StartsWith("[T1] A D - [T2]", shape);
+    }
+
+    // Grouping an imported blank with the table before it needs that blank to close the table where it is; a
+    // table it reaches only inside a content control is no proof the table's edit made it.
+    [Fact]
+    public void ListRevisions_AnImportedBlankBeforeAControlIsNotTheTablesOwn()
+    {
+        var blank = new XElement(W.p, new XElement(W.pPr, new XElement(W.rPr, Revised(W.ins))));
+        using var session = new DocxSession(Document(P("A"), RevisedTable("T1", W.ins), blank, Control(Table("T2"), P("S")), P("C")));
+        Assert.Equal(2, session.ListRevisions().Count);
+    }
 }

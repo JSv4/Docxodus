@@ -379,7 +379,14 @@ public sealed partial class DocxSession
             if (e.Name == W.fldChar)
             {
                 var type = (string?)e.Attribute(W.fldCharType);
-                if (type == "begin") fields.Push((at, new List<int>(), null));
+                // A field nested in another's instructions is part of them: where it begins and ends is kept in order.
+                void InEnclosingInstructions()
+                {
+                    if (fields.Count > 0 && fields.Peek().Separate is null && fields.Peek().Instructions is var outer
+                        && (outer.Count == 0 ? fields.Peek().Begin : outer[^1]) != at)
+                        outer.Add(at);
+                }
+                if (type == "begin") { InEnclosingInstructions(); fields.Push((at, new List<int>(), null)); }
                 else if (type == "separate" && fields.Count > 0 && fields.Peek().Separate is null)
                 {
                     var (begin, instructions, _) = fields.Pop();
@@ -395,6 +402,7 @@ public sealed partial class DocxSession
                         if (child != points[^1]) points.Add(child);
                     for (int k = 0; k + 1 < points.Count; k++) Add(points[k], points[k + 1], "field");
                     if (separate is { } middle && middle != at) Add(middle, at, "field");
+                    InEnclosingInstructions();
                 }
             }
             else if (e.Name == W.sectPr)
@@ -556,7 +564,7 @@ public sealed partial class DocxSession
             place?.Invoke(separator);
             PlaceOutsideRanges(separator);
             // An edit that is not tracked keeps the tables apart however the pending changes beside it are
-            // resolved, each on its own. A tracked one keeps them apart as the markup stands and once it is
+            // resolved, each on its own (which includes the markup as it stands, every table there able to stay). A tracked one keeps them apart as the markup stands and once it is
             // accepted, adding nothing that only another change's resolution would need; rejecting it gives the
             // original, and where the paragraph is needed later, resolving the other change keeps it (ClosesTable).
             if (_trackedChanges == TrackedChangeMode.RenderInline
@@ -630,8 +638,16 @@ public sealed partial class DocxSession
         if (lo > hi) return;
 
         int best = here >= lo && here <= hi ? here : lo;
+        // Inside a content-control revision pair that encloses nothing, the paragraph would make it enclose itself.
+        var shut = new bool[count + 1];
+        for (int i = 0; i < count; i++)
+            if (keys[i] is { } key && markers[i].Name != key.End && markers[i].Name.LocalName.StartsWith("customXml", StringComparison.Ordinal)
+                && tally[key] == 2 && Enumerable.Range(i + 1, count - i - 1).FirstOrDefault(j => keys[j] == key, -1) is int end and >= 0)
+                for (int slot = i + 1; slot <= end; slot++) shut[slot] = true;
+        if (shut[best]) best = Enumerable.Range(lo, hi - lo + 1).FirstOrDefault(slot => !shut[slot], -1);
+        if (best < 0) return;
         for (int slot = lo; slot <= hi; slot++)
-            if (inside[slot] < inside[best]) best = slot;
+            if (!shut[slot] && inside[slot] < inside[best]) best = slot;
         if (best == here) return;
         separator.Remove();
         if (best == 0) markers[0].AddBeforeSelf(separator);
@@ -689,15 +705,32 @@ public sealed partial class DocxSession
         bool OfEdit(XElement b) => editDate is not null && b.Descendants().Any(e =>
             (e.Name == W.ins || e.Name == W.del || e.Name == W.moveFrom || e.Name == W.moveTo) && (string?)e.Attribute(W.date) == editDate);
         bool CanGo(XElement b) => Goes(b, accepted: true) || (!OfEdit(b) && Goes(b, accepted: false));
-        bool CanStay(XElement b) => !Goes(b, accepted: true) || (!OfEdit(b) && !Goes(b, accepted: false));
+        // Each row's marks resolve on their own, so a table can stay under some resolution (a row inserted and
+        // deleted stays when the insertion is accepted and the deletion rejected), unless the edit's own marks,
+        // taken as accepted, remove it.
+        bool CanStay(XElement b) => b.Name == W.tbl ? !OfEdit(b) || !Goes(b, accepted: true)
+            : !Goes(b, accepted: true) || (!OfEdit(b) && !Goes(b, accepted: false));
         // A move's two halves are one decision: its source goes only when it is accepted, its destination only
-        // when it is rejected, so the paragraphs between the tables can all go only if no move needs both.
-        var decided = new Dictionary<(string? Author, string? Date), bool>();
+        // when it is rejected, so the paragraphs between the tables can all go only if no move needs both. A
+        // move is known by its native name, on the move range in its paragraph or among the markers right before
+        // it; a half without one stands alone.
+        var decided = new Dictionary<string, bool>(StringComparer.Ordinal);
+        string? MoveName(XElement paragraph, XName start)
+        {
+            if (paragraph.Element(start) is { } inside) return (string?)inside.Attribute(W.name);
+            for (var node = paragraph.PreviousNode; node is not null; node = node.PreviousNode)
+                if (node is XElement marker)
+                {
+                    if (marker.Name == start) return (string?)marker.Attribute(W.name);
+                    if (!IsBlockLevelMarker(marker)) break;
+                }
+            return null;
+        }
         bool Agrees(XElement b)
         {
-            if (b.Element(W.pPr)?.Element(W.rPr)?.Elements().FirstOrDefault(e => e.Name == W.moveFrom || e.Name == W.moveTo) is not { } mark)
+            if (b.Element(W.pPr)?.Element(W.rPr)?.Elements().FirstOrDefault(e => e.Name == W.moveFrom || e.Name == W.moveTo) is not { } mark
+                || MoveName(b, mark.Name == W.moveFrom ? W.moveFromRangeStart : W.moveToRangeStart) is not { } key)
                 return true;
-            var key = ((string?)mark.Attribute(W.author), (string?)mark.Attribute(W.date));
             bool accepted = mark.Name == W.moveFrom;
             if (decided.TryGetValue(key, out bool earlier)) return earlier == accepted;
             decided[key] = accepted;
