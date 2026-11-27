@@ -4117,7 +4117,7 @@ namespace Docxodus
         /// <c>\t</c> (a target frame) and the general switches are not part of the address.</summary>
         private static string? HyperlinkFieldHref(string instruction)
         {
-            var tokens = FieldRetriever.GetTokens(instruction);
+            var tokens = FieldRetriever.GetTokens(instruction, keepEmptyOperands: true);
             // A switch is a backslash and one character; a longer token starting with one is a path ("\\server\share").
             static bool IsSwitch(string token) => token.Length == 2 && token[0] == '\\';
             string? address = null, location = null;
@@ -4129,12 +4129,12 @@ namespace Docxodus
                     // \l, \o and \t take a value, as do the general switches \* (format), \# and \@ (pictures).
                     if ((name is 'l' or 'o' or 't' or '*' or '#' or '@') && i + 1 < tokens.Length && !IsSwitch(tokens[i + 1]))
                     {
-                        if (name == 'l') location = tokens[i + 1];
+                        if (name == 'l' && tokens[i + 1].Length > 0) location = tokens[i + 1];
                         i++;
                     }
                     continue;
                 }
-                address ??= tokens[i];
+                if (tokens[i].Length > 0) address ??= tokens[i];
             }
             return location is null ? address : (address ?? "") + "#" + location;
         }

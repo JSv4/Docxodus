@@ -177,6 +177,8 @@ public class WmlToHtmlConverterFieldLinkStyleTests
     [InlineData("HYPERLINK \\o \"A tip\" \"https://example.test/doc\"", "https://example.test/doc")] // a tooltip first
     [InlineData("HYPERLINK \\l \"Target\" \\* MERGEFORMAT", "#Target")]           // a general switch's value
     [InlineData("HYPERLINK \"\\\\server\\share\\a.docx\"", "\\\\server\\share\\a.docx")]          // a network path, not a switch
+    [InlineData("HYPERLINK \\o \"\" \"https://example.test/doc\"", "https://example.test/doc")]  // an empty tooltip first
+    [InlineData("HYPERLINK \"https://example.test/doc\" \\l \"\"", "https://example.test/doc")]  // an empty location
     public void AHyperlinkFieldLinksToTheLocationItNames(string instruction, string href)
     {
         var html = Render($"<w:p>{FieldWith(instruction, Run("Go"))}</w:p>", fabricateCssClasses: false, PaginationMode.None);
