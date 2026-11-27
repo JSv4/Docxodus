@@ -3820,18 +3820,9 @@ namespace Docxodus
                     if (relationship == null)
                         return element.Elements().Select(e =>
                             ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
-                    var a = new XElement(Xhtml.a,
+                    var a = DocumentLink(new XElement(Xhtml.a,
                         new XAttribute("href", PackageOpenRepair.TargetText(relationship.Uri)),
-                        ConvertHyperlinkRuns(wordDoc, settings, element)
-                        );
-                    if (!a.Nodes().Any())
-                        a.Add(new XText(""));
-                    a.AddAnnotation(new Dictionary<string, string>
-                    {
-                        { "color", "inherit" },
-                        { "text-decoration", "none" },
-                    });
-                    a.AddAnnotation(WordHyperlinkAnchor.Instance);
+                        ConvertHyperlinkRuns(wordDoc, settings, element)));
                     return a;
                 }
                 catch (UriFormatException)
@@ -4097,16 +4088,27 @@ namespace Docxodus
 
         private static object ProcessHyperlinkToBookmark(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element)
         {
-            var style = new Dictionary<string, string>();
-            var a = new XElement(Xhtml.a,
+            var a = DocumentLink(new XElement(Xhtml.a,
                 new XAttribute("href", "#" + (string?) element.Attribute(W.anchor)),
-                ConvertHyperlinkRuns(wordDoc, settings, element));
+                ConvertHyperlinkRuns(wordDoc, settings, element)));
+            return a;
+        }
+
+        /// <summary>Finishes the <c>&lt;a&gt;</c> of a link the document makes: a <c>w:hyperlink</c>, or the
+        /// result of a HYPERLINK field. Word draws a link's text in its runs' own formatting (a run in the
+        /// Hyperlink character style is blue and underlined by that style), so the link turns off the
+        /// browser's own link colour and underline (issue #1869). An empty link keeps a text node, so it
+        /// does not serialize self-closed.</summary>
+        private static XElement DocumentLink(XElement a)
+        {
             if (!a.Nodes().Any())
                 a.Add(new XText(""));
-            style.Add("color", "inherit");
-            style.Add("text-decoration", "none");
-            a.AddAnnotation(style);
             a.AddAnnotation(WordHyperlinkAnchor.Instance);
+            a.AddAnnotation(new Dictionary<string, string>
+            {
+                { "color", "inherit" },
+                { "text-decoration", "none" },
+            });
             return a;
         }
 
@@ -12712,8 +12714,8 @@ namespace Docxodus
                     // Convert the field's own children, as a w:hyperlink does, so a tracked change,
                     // bookmark or comment range inside the link keeps its rendering.
                     var content = Nested();
-                    var a = parsed.Arguments.Length > 0
-                        ? new XElement(Xhtml.a, new XAttribute("href", parsed.Arguments[0]), content)
+                    var a = HyperlinkInstruction.Target(instrText) is { } href
+                        ? new XElement(Xhtml.a, new XAttribute("href", href), content)
                         : new XElement(Xhtml.a, content);
                     // An anchor cannot hold another: a bookmark target inside the link keeps its id
                     // on a span, and a w:hyperlink inside the result gives up its own link. The
@@ -12725,13 +12727,7 @@ namespace Docxodus
                         else if (inner.Annotation<WordHyperlinkAnchor>() != null)
                             inner.ReplaceWith(TakeNodes(inner));
                     }
-                    var a2 = a as XElement;
-                    if (!a2.Nodes().Any())
-                    {
-                        a2.Add(new XText(""));
-                        return a2;
-                    }
-                    return a;
+                    return DocumentLink(a);
                 })
                 .ToList();
 

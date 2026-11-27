@@ -2224,7 +2224,7 @@ internal static class IrReader
         IrHash scaffoldDigest = default,
         IrHash hyperlinkFieldMetadataDigest = default)
     {
-        if (TryParseHyperlinkInstruction(instruction, out var target))
+        if (HyperlinkInstruction.Target(instruction) is { } target)
         {
             return new IrHyperlink(target, InternalTarget: null, result)
             {
@@ -2251,7 +2251,7 @@ internal static class IrReader
     private static IrHash HyperlinkFieldMetadataDigestForSimple(
         string instruction, XElement fldSimple, ReadContext ctx)
     {
-        if (!TryParseHyperlinkInstruction(instruction, out _))
+        if (HyperlinkInstruction.Target(instruction) is null)
             return default;
 
         var metadata = new XElement("hyperlinkFieldMetadata");
@@ -2292,7 +2292,7 @@ internal static class IrReader
     private static IrHash HyperlinkFieldMetadataDigest(
         string instruction, IReadOnlyList<XElement> fieldScaffold, ReadContext ctx)
     {
-        if (!TryParseHyperlinkInstruction(instruction, out _))
+        if (HyperlinkInstruction.Target(instruction) is null)
             return default;
 
         var metadata = new XElement("hyperlinkFieldMetadata");
@@ -2399,63 +2399,6 @@ internal static class IrReader
             atTokenStart = false;
         }
         return false;
-    }
-
-    /// <summary>
-    /// Parse a <c>HYPERLINK</c> field instruction to the same target convention
-    /// <see cref="BuildHyperlink"/> produces for the element form: the URL argument verbatim, an
-    /// internal <c>\l</c> anchor as <c>#anchor</c> (URL + <c>#anchor</c> when both present).
-    /// Argument-taking switches (<c>\l \o \t \m</c>) consume the following quoted token so a screen
-    /// tip is never mistaken for the URL. Returns false for a target-less instruction.
-    /// </summary>
-    private static bool TryParseHyperlinkInstruction(string instruction, out string target)
-    {
-        target = string.Empty;
-        var s = instruction.Trim();
-        if (!s.StartsWith("HYPERLINK", StringComparison.OrdinalIgnoreCase))
-            return false;
-        string? url = null, anchor = null;
-        string? pendingSwitch = null;
-        int i = "HYPERLINK".Length;
-        while (i < s.Length)
-        {
-            while (i < s.Length && char.IsWhiteSpace(s[i])) i++;
-            if (i >= s.Length)
-                break;
-            if (s[i] == '\\' && i + 1 < s.Length)
-            {
-                int end = i + 1;
-                while (end < s.Length && !char.IsWhiteSpace(s[end]) && s[end] != '"') end++;
-                var sw = s.Substring(i + 1, end - i - 1).ToLowerInvariant();
-                pendingSwitch = sw is "l" or "o" or "t" or "m" ? sw : null;
-                i = end;
-                continue;
-            }
-            string token;
-            if (s[i] == '"')
-            {
-                int end = s.IndexOf('"', i + 1);
-                if (end < 0) end = s.Length;
-                token = s.Substring(i + 1, end - i - 1);
-                i = end + 1;
-            }
-            else
-            {
-                int end = i;
-                while (end < s.Length && !char.IsWhiteSpace(s[end])) end++;
-                token = s.Substring(i, end - i);
-                i = end;
-            }
-            if (pendingSwitch == "l")
-                anchor ??= token;
-            else if (pendingSwitch is null)
-                url ??= token;
-            pendingSwitch = null;
-        }
-        if (url is null && anchor is null)
-            return false;
-        target = url is null ? "#" + anchor : anchor is null ? url : url + "#" + anchor;
-        return true;
     }
 
     /// <summary>
