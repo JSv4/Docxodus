@@ -93,14 +93,23 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Returns whether <paramref name="element"/> is in the cached result of a complex field
-        /// of <paramref name="fieldType"/>. Nested fields are considered independently, so a
-        /// PAGEREF result nested inside a TOC result still reports both contexts correctly.
+        /// Returns whether <paramref name="element"/> is in the cached result of a field of
+        /// <paramref name="fieldType"/>: a complex field's, or a simple field's, whose content is
+        /// its result. Nested fields are considered independently, so a PAGEREF result nested
+        /// inside a TOC result still reports both contexts correctly.
         /// </summary>
         internal static bool IsFieldResult(XElement element, string fieldType)
         {
             if (element == null || string.IsNullOrWhiteSpace(fieldType))
                 return false;
+
+            bool IsType(string instruction) => string.Equals(
+                instruction.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault(),
+                fieldType,
+                StringComparison.OrdinalIgnoreCase);
+
+            if (element.Ancestors(W.fldSimple).Any(simple => IsType((string?)simple.Attribute(W.instr) ?? "")))
+                return true;
 
             var stack = element.Annotation<Stack<FieldElementTypeInfo>>();
             var root = element.AncestorsAndSelf().LastOrDefault();
@@ -109,16 +118,7 @@ namespace Docxodus
 
             return stack
                 .Where(info => info.FieldElementType == FieldElementTypeEnum.Result)
-                .Select(info => InstrText(root, info.Id).TrimStart('{').TrimEnd('}'))
-                .Select(instruction => instruction
-                    .Split(
-                        new[] { ' ', '\t', '\r', '\n' },
-                        StringSplitOptions.RemoveEmptyEntries)
-                    .FirstOrDefault())
-                .Any(type => string.Equals(
-                    type,
-                    fieldType,
-                    StringComparison.OrdinalIgnoreCase));
+                .Any(info => IsType(InstrText(root, info.Id).TrimStart('{').TrimEnd('}')));
         }
 
         public static void AnnotateWithFieldInfo(OpenXmlPart part)

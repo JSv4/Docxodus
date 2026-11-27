@@ -207,4 +207,156 @@ public class WmlToHtmlConverterFieldLinkStyleTests
             new WmlToHtmlConverterSettings { FabricateCssClasses = false, StampReferenceFields = true });
         Assert.DoesNotContain(html.Descendants(Xhtml.a), a => a.Ancestors(Xhtml.a).Any());
     }
+
+    // Issue #1870: the simple field form, w:fldSimple, is a link too, and a link written as a field inside a table of
+    // contents is drawn as Word draws a w:hyperlink there.
+
+    private static string Simple(string instruction, string result) =>
+        $"<w:fldSimple w:instr=\"{instruction.Replace("\"", "&quot;")}\">{result}</w:fldSimple>";
+
+    private static string Begin(string instruction) => $"""
+        <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+        <w:r><w:instrText xml:space="preserve"> {instruction} </w:instrText></w:r>
+        <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+        """;
+
+    private const string EndOfField = "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>";
+
+    /// <summary>The one link that holds the text, which no other link holds.</summary>
+    private static XElement LinkOf(XElement html, string text) =>
+        Assert.Single(TextSpanIn(html, text).Ancestors(Xhtml.a));
+
+    private static XElement TextSpanIn(XElement html, string text) =>
+        Assert.Single(html.Descendants(Xhtml.span), s => !s.HasElements && s.Value == text);
+
+    [Theory]
+    [InlineData(true, PaginationMode.None)]
+    [InlineData(true, PaginationMode.Paginated)]
+    [InlineData(false, PaginationMode.None)]
+    [InlineData(false, PaginationMode.Paginated)]
+    public void ASimpleHyperlinkFieldIsALinkStyledAsAWordHyperlinkIs(bool fabricateCssClasses, PaginationMode mode)
+    {
+        var html = Render(Links + $"<w:p>{Simple($" HYPERLINK \"{FieldUrl}\" ", Run("Styled", HyperlinkStyle) + Run("Plain"))}</w:p>",
+            fabricateCssClasses, mode);
+        var link = LinkOf(html, "Plain");
+        Assert.Equal(FieldUrl, (string?)link.Attribute("href"));
+        Assert.Equal("StyledPlain", link.Value);
+        // The same link as the w:hyperlink's, and the runs keep their own formatting inside it.
+        Assert.Equal(Declarations(html, Link(html, "#Target")), Declarations(html, link));
+        var styled = Declarations(html, TextSpan(link, "Styled"));
+        Assert.Contains("color: #0563C1", styled);
+        Assert.Contains("text-decoration: underline", styled);
+        var plain = Declarations(html, TextSpan(link, "Plain"));
+        Assert.DoesNotContain("color:", plain);
+        Assert.DoesNotContain("text-decoration:", plain);
+    }
+
+    // The simple form reads its target with the complex form's parser, and the IR agrees with the HTML.
+    [Theory]
+    [InlineData(" HYPERLINK \\l \"Target\" ", "#Target")]
+    [InlineData(" HYPERLINK \"https://example.test/doc\" \\l \"Section\" \\o \"A tip\" ", "https://example.test/doc#Section")]
+    public void ASimpleHyperlinkFieldLinksToTheLocationItNames(string instruction, string href)
+    {
+        var body = $"<w:p>{Simple(instruction, Run("Go"))}</w:p>";
+        var html = Render(body, fabricateCssClasses: false, PaginationMode.None);
+        Assert.Equal("Go", Link(html, href).Value);
+        var paragraph = Assert.Single(IrReader.Read(new WmlDocument("field.docx", Docx(body))).Body.Blocks.OfType<IrParagraph>());
+        Assert.Equal(href, Assert.Single(paragraph.Inlines.OfType<IrHyperlink>()).Target);
+    }
+
+    // Control: a simple field of another kind is not a link.
+    [Fact]
+    public void ASimpleFieldOfAnotherKindIsNotALink()
+    {
+        var html = Render($"<w:p>{Simple(" AUTHOR ", Run("Someone"))}</w:p>", fabricateCssClasses: false, PaginationMode.None);
+        Assert.Empty(html.Descendants(Xhtml.a));
+        Assert.Equal("Someone", TextSpanIn(html, "Someone").Value);
+    }
+
+    // An anchor cannot hold another, whichever form each link is written in; a bookmark in a simple field's link keeps
+    // its id on a span inside it.
+    [Theory]
+    [InlineData("<w:hyperlink r:id=\"rIdLink\">{0}</w:hyperlink>")]
+    [InlineData("{1}")]
+    [InlineData("<w:fldSimple w:instr=\" HYPERLINK &quot;https://example.test/outer&quot; \">{0}</w:fldSimple>")]
+    public void ASimpleHyperlinkFieldInsideAnotherLinkIsNotALinkInsideALink(string outer)
+    {
+        var inner = Simple(" HYPERLINK \"https://example.test/inner\" ",
+            "<w:bookmarkStart w:id=\"7\" w:name=\"Inside\"/>" + Run("Inner") + "<w:bookmarkEnd w:id=\"7\"/>");
+        var body = $"<w:p>{string.Format(outer, Run("Outer ") + inner, Field(Run("Outer ") + inner))}</w:p>";
+        foreach (var stamp in new[] { false, true })
+        {
+            var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("links.docx", Docx(body)),
+                new WmlToHtmlConverterSettings { FabricateCssClasses = false, StampReferenceFields = stamp });
+            Assert.DoesNotContain(html.Descendants(Xhtml.a), a => a.Ancestors(Xhtml.a).Any());
+            var link = Assert.Single(html.Descendants(Xhtml.a), a => a.Attribute("href") != null);
+            Assert.Equal("Outer Inner", link.Value);
+            Assert.DoesNotContain("inner", (string?)link.Attribute("href"));
+            Assert.Single(link.Descendants(Xhtml.span), s => (string?)s.Attribute("id") == "Inside");
+        }
+    }
+
+    // A w:hyperlink inside a simple HYPERLINK field's result gives up its own link, as it does in the complex form's.
+    [Fact]
+    public void AWordHyperlinkInsideASimpleHyperlinkFieldIsNotALinkInsideALink()
+    {
+        var html = Render($"<w:p>{Simple($" HYPERLINK \"{FieldUrl}\" ", Run("Outer ") + $"<w:hyperlink r:id=\"rIdLink\">{Run("Inner")}</w:hyperlink>")}</w:p>",
+            fabricateCssClasses: false, PaginationMode.None);
+        Assert.Equal("Outer Inner", Assert.Single(html.Descendants(Xhtml.a)).Value);
+        Assert.Equal(FieldUrl, (string?)html.Descendants(Xhtml.a).Single().Attribute("href"));
+    }
+
+    private const string PageNumber = "<w:rPr><w:webHidden/></w:rPr>";
+
+    // A contents entry as Word writes it: the heading's text and a leader tab in the Hyperlink style, then a PAGEREF
+    // to the heading's page.
+    private static string EntryContent(string text) =>
+        Run(text, HyperlinkStyle) + $"<w:r>{HyperlinkStyle}<w:tab/></w:r>" + FieldWith("PAGEREF _Toc1 \\h", Run("1", PageNumber));
+
+    private const string TocTabs = "<w:pPr><w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9350\"/></w:tabs></w:pPr>";
+
+    // A table of contents over three paragraphs with one entry in each form (a HYPERLINK field, a w:hyperlink, and a
+    // simple HYPERLINK field); then the field forms outside it, and the heading the entries lead to.
+    private static readonly string Contents =
+        $"<w:p>{TocTabs}{Begin("TOC \\o \"1-3\" \\h \\z \\u")}{FieldWith("HYPERLINK \\l \"_Toc1\"", EntryContent("FieldEntry"))}</w:p>"
+        + $"<w:p>{TocTabs}<w:hyperlink w:anchor=\"_Toc1\" w:history=\"1\">{EntryContent("ElementEntry")}</w:hyperlink></w:p>"
+        + $"<w:p>{TocTabs}{Simple(" HYPERLINK \\l \"_Toc1\" ", Run("SimpleEntry", HyperlinkStyle))}{EndOfField}</w:p>"
+        + $"<w:p>{FieldWith("HYPERLINK \\l \"_Toc1\"", Run("FieldOutside", HyperlinkStyle))}</w:p>"
+        + $"<w:p>{Simple(" HYPERLINK \\l \"_Toc1\" ", Run("SimpleOutside", HyperlinkStyle))}</w:p>"
+        + $"<w:p><w:bookmarkStart w:id=\"1\" w:name=\"_Toc1\"/>{Run("Heading")}<w:bookmarkEnd w:id=\"1\"/></w:p>";
+
+    [Theory]
+    [InlineData(true, PaginationMode.None)]
+    [InlineData(true, PaginationMode.Paginated)]
+    [InlineData(false, PaginationMode.None)]
+    [InlineData(false, PaginationMode.Paginated)]
+    public void AContentsEntryWrittenAsAFieldIsALinkDrawnAsAWordHyperlinkEntryIs(bool fabricateCssClasses, PaginationMode mode)
+    {
+        var html = Render(Contents, fabricateCssClasses, mode);
+        Assert.DoesNotContain(html.Descendants(Xhtml.a), a => a.Ancestors(Xhtml.a).Any());
+        var element = Declarations(html, TextSpanIn(html, "ElementEntry"));
+        Assert.DoesNotContain("color:", element);
+        Assert.DoesNotContain("text-decoration:", element);
+        foreach (var entry in new[] { "FieldEntry", "ElementEntry", "SimpleEntry" })
+        {
+            var link = LinkOf(html, entry);
+            Assert.Equal("#_Toc1", (string?)link.Attribute("href"));
+            AssertNeutral(html)(link);
+            // The entry's text is drawn as the w:hyperlink entry's is: no link colour, no underline.
+            Assert.Equal(element, Declarations(html, TextSpanIn(html, entry)));
+            // Nor does the leader tab draw the link's underline.
+            Assert.DoesNotContain(link.DescendantsAndSelf(), e => Declarations(html, e).Contains("border-top:"));
+        }
+        // The whole entry is one link, its leader tab too. (Word marks the page number web-hidden, so flow HTML hides it.)
+        Assert.All(new[] { "FieldEntry", "ElementEntry" }, entry =>
+            Assert.Single(LinkOf(html, entry).Descendants(), e => e.Attribute("data-docx-tab") != null));
+        // Control: the same links outside the table of contents keep the Hyperlink style's colour and underline.
+        foreach (var outside in new[] { "FieldOutside", "SimpleOutside" })
+        {
+            Assert.Equal("#_Toc1", (string?)LinkOf(html, outside).Attribute("href"));
+            var declarations = Declarations(html, TextSpanIn(html, outside));
+            Assert.Contains("color: #0563C1", declarations);
+            Assert.Contains("text-decoration: underline", declarations);
+        }
+    }
 }

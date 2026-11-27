@@ -2881,6 +2881,62 @@ run but generates an **empty rule** for it, so `w:rStyle` silently loses every d
 the reduced case appears to pass without exercising suppression. This is the same requirement
 CLAUDE.md notes for programmatic .NET test documents.
 
+#### The field forms of a link (issue #1870)
+
+A contents entry, like any link, can be written three ways: a `w:hyperlink` (what the reproducer above
+uses), a complex `HYPERLINK \l "_Toc…"` field nested in the `TOC` field's result, or a simple
+`w:fldSimple` one. A link outside a table of contents can be written as a simple field too:
+
+```xml
+<w:p>
+  <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+  <w:r><w:instrText> HYPERLINK \l "_Toc1" </w:instrText></w:r>
+  <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+  <w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr><w:t>Entry</w:t></w:r>
+  <w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr><w:tab/></w:r>
+  <!-- PAGEREF _Toc1 \h field -->
+  <w:r><w:fldChar w:fldCharType="end"/></w:r>
+</w:p>
+<w:p><w:fldSimple w:instr=" HYPERLINK &quot;https://example.test/&quot; "><w:r><w:t>Simple</w:t></w:r></w:fldSimple></w:p>
+```
+
+Measured on authored fixtures (the Hyperlink character style declares `0563C1` and an underline;
+each table of contents is a complex `TOC \o "1-3" \h \z \u` field over two paragraphs, with a
+leader tab and a nested `PAGEREF`):
+
+| Case | Word reference PDF | LibreOffice 25.8 | Docxodus before | Docxodus after |
+|---|---|---|---|---|
+| Simple HYPERLINK field to an address, plain run | link; black | link; black | no `<a>` | link; black |
+| Simple HYPERLINK field, run in the Hyperlink style | link; `#0563C1`, underlined | same | no `<a>` | same as Word |
+| TOC entry as `w:hyperlink` | black, no underline | link; black | link; black (#427) | unchanged |
+| TOC entry as a complex HYPERLINK field | black, no underline | link; black | no `<a>`; blue, underlined | link; black |
+| TOC entry as a simple HYPERLINK field | black, no underline | link; black | no `<a>`; blue, underlined | link; black |
+| The same complex or simple field outside the TOC | `#0563C1`, underlined | link; same | blue, underlined | link; same |
+
+Word's PDF has a link annotation for each simple field to an address; it writes none for a `\l`
+location in any form, `w:hyperlink` included, so for those LibreOffice is the evidence that the
+entry is a link. Word therefore applies the #427 rule to a contents entry in any of the three forms,
+and draws a simple field's link as it draws the other two.
+
+Docxodus had two gaps. A `w:fldSimple` fell through to its runs, with no `<a>`. A HYPERLINK field
+nested in another field's result became a link only with `StampReferenceFields`; by default the
+`TOC` field's group converted its content run by run. And the TOC rule asked for a `w:hyperlink`
+ancestor. Now `FieldRetriever.IsFieldResult` counts a `w:fldSimple` ancestor as a field result, so
+the converter's single "inside a link" test (`IsInsideLink`) covers all three forms and the TOC rule
+uses it; a nested field converts as it does at the top level; and both field forms build their
+`<a>` in one place (`HyperlinkFieldLink`). Tests:
+`Docxodus.Tests/WmlToHtmlConverterFieldLinkStyleTests.cs`.
+
+A known limit of the rule, in every form: Word drops only the Hyperlink style's colour and
+underline, not the run's own. In a Word reference PDF of authored entries, a run in the Hyperlink
+style with a direct `<w:color w:val="FF0000"/>` prints red as a `w:hyperlink` entry and as a field
+entry (with no underline), and a run with a direct `<w:u w:val="double"/>` keeps its double
+underline; LibreOffice agrees. Docxodus removes the run's colour and underline whatever their
+source, because the converter merges styles into each run's properties before it renders, so the
+rule cannot tell the style's colour from a direct one. In a corpus of about 7,000 Word documents,
+12 of 10,783 contents-entry runs (one document, all `w:hyperlink` entries) carry a direct colour
+other than black, and none a direct underline.
+
 ### Text before a tab that is longer than its line wraps; the tab advances from the last line
 
 **Issue:** #891.

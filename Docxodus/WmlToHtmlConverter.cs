@@ -3946,6 +3946,14 @@ namespace Docxodus
                 return ReferenceFieldSpan(simpleReference, element.Elements(), CreateBorderDivs(wordDoc, settings, element.Elements()));
             }
 
+            // A simple HYPERLINK field is a link, as the complex form is (issue #1870).
+            if (element.Name == W.fldSimple && !IsInsideLink(element)
+                && (string?)element.Attribute(W.instr) is { } simpleInstr
+                && FieldRetriever.ParseField(simpleInstr).FieldType == "HYPERLINK")
+            {
+                return HyperlinkFieldLink(simpleInstr, CreateBorderDivs(wordDoc, settings, element.Elements()));
+            }
+
             // Transform smart tags and simple fields.
             if (element.Name == W.smartTag || element.Name == W.fldSimple)
             {
@@ -4188,7 +4196,8 @@ namespace Docxodus
         }
 
         /// <summary>Whether an element renders inside an HTML link: a <c>w:hyperlink</c>, or the
-        /// result of a HYPERLINK field. Content there must not open an <c>&lt;a&gt;</c> of its own.</summary>
+        /// result of a HYPERLINK field, simple or complex. Content there must not open an <c>&lt;a&gt;</c>
+        /// of its own.</summary>
         private static bool IsInsideLink(XElement element) =>
             element.Ancestors(W.hyperlink).Any() || FieldRetriever.IsFieldResult(element, "HYPERLINK");
 
@@ -9129,8 +9138,10 @@ namespace Docxodus
                 style["text-decoration"] = string.Join(" ", remaining);
         }
 
+        /// <summary>Whether a run is in a link in a cached TOC result: a <c>w:hyperlink</c> or a HYPERLINK field,
+        /// simple or complex, as Word writes a contents entry in either form (issue #1870).</summary>
         private static bool IsTocLinkResult(XElement run) =>
-            run.Ancestors(W.hyperlink).Any() && FieldRetriever.IsFieldResult(run, "TOC");
+            IsInsideLink(run) && FieldRetriever.IsFieldResult(run, "TOC");
 
         private static string DescribeFormatChange(XElement currentRPr, XElement rPrChange)
         {
@@ -12703,35 +12714,39 @@ namespace Docxodus
                     // A HYPERLINK field already inside a w:hyperlink renders as that link's content:
                     // an anchor cannot hold another.
                     var parsed = FieldRetriever.ParseField(instrText);
-                    // (with StampReferenceFields a reference nested in the result, as the PAGEREF of a contents
-                    // entry is, is marked too)
-                    object Nested() => settings.StampReferenceFields
-                        ? ConvertContentThatCanContainFields(wordDoc, settings, g, key)
-                        : g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m));
+                    // A field nested in the result converts as it would outside it: a HYPERLINK there, as a
+                    // contents entry written as a field is, is a link (issue #1870), and with
+                    // StampReferenceFields a reference there, as the entry's PAGEREF is, is marked.
+                    object Nested() => ConvertContentThatCanContainFields(wordDoc, settings, g, key);
                     if (parsed.FieldType != "HYPERLINK" || g.First().Ancestors(W.hyperlink).Any())
                         return Nested();
 
                     // Convert the field's own children, as a w:hyperlink does, so a tracked change,
                     // bookmark or comment range inside the link keeps its rendering.
-                    var content = Nested();
-                    var a = HyperlinkInstruction.Target(instrText) is { } href
-                        ? new XElement(Xhtml.a, new XAttribute("href", href), content)
-                        : new XElement(Xhtml.a, content);
-                    // An anchor cannot hold another: a bookmark target inside the link keeps its id
-                    // on a span, and a w:hyperlink inside the result gives up its own link. The
-                    // anchors generated for note references and comment markers stay as they are.
-                    foreach (var inner in a.Descendants(Xhtml.a).ToList())
-                    {
-                        if (inner.Attributes().All(attribute => attribute.Name == "id"))
-                            inner.Name = Xhtml.span;
-                        else if (inner.Annotation<WordHyperlinkAnchor>() != null)
-                            inner.ReplaceWith(TakeNodes(inner));
-                    }
-                    return DocumentLink(a);
+                    return HyperlinkFieldLink(instrText, Nested());
                 })
                 .ToList();
 
             return txformed;
+        }
+
+        /// <summary>The <c>&lt;a&gt;</c> a HYPERLINK field's result renders in, the field simple or complex. An
+        /// anchor cannot hold another: a bookmark target inside the link keeps its id on a span, and a
+        /// w:hyperlink inside the result gives up its own link. The anchors generated for note references
+        /// and comment markers stay as they are.</summary>
+        private static XElement HyperlinkFieldLink(string instruction, object content)
+        {
+            var a = HyperlinkInstruction.Target(instruction) is { } href
+                ? new XElement(Xhtml.a, new XAttribute("href", href), content)
+                : new XElement(Xhtml.a, content);
+            foreach (var inner in a.Descendants(Xhtml.a).ToList())
+            {
+                if (inner.Attributes().All(attribute => attribute.Name == "id"))
+                    inner.Name = Xhtml.span;
+                else if (inner.Annotation<WordHyperlinkAnchor>() != null)
+                    inner.ReplaceWith(TakeNodes(inner));
+            }
+            return DocumentLink(a);
         }
 
         /// <summary>
