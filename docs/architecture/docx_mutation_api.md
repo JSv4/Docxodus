@@ -874,8 +874,8 @@ moved paragraph, or of the table beside it, resolves it too.
 - comments — the move SOURCE takes a fresh comment id and a cloned definition (fresh
   `w14:paraId`, entries in both threading parts, cloned replies re-pointed at cloned parents),
   leaving the destination on the original comment and its thread;
-- permission ranges — the DESTINATION's ranges take ids no range in the part uses (above the highest,
-  or the lowest free ones where that would not fit `w:id`'s 32 bits), so rejecting gives back the
+- permission ranges — the DESTINATION's ranges take ids no range in the part uses (above the highest and
+  never below 0, or the lowest free ones where that would not fit `w:id`'s 32 bits), so rejecting gives back the
   original ids. In a paragraph each copy's `w:permStart`/`w:permEnd`, and its comment range markers,
   also go inside that copy's `w:moveFrom`/`w:moveTo`: the nearest mark beside them, past other markers
   and proofing marks, in their order, with a mark of their own only where there is none. So accepting

@@ -414,7 +414,7 @@ public sealed partial class DocxSession
             }
             else if (CrossBlockRangeNames.TryGetValue(e.Name, out var range))
             {
-                var key = (range.End, (string?)e.Attribute(W.id) ?? "");
+                var key = (range.End, RangeId(e));
                 if (e.Name != range.End)
                 {
                     if (starts.TryAdd(key, at) && endsFirst.TryGetValue(key, out int end) && end >= 0 && end < at && at < children.Count)
@@ -587,6 +587,13 @@ public sealed partial class DocxSession
     /// such place or none. An empty range keeps covering nothing, so where no place outside the others is left before
     /// it, it can come to mark the added paragraph rather than the table after it. A content control's revision
     /// markers stay against the control they enclose: the paragraph never goes between them.</summary>
+    /// <summary>The <c>w:id</c> a range marker's two ends pair on: a number by its value, so <c>4</c> and <c>04</c>
+    /// are one id, and anything else as written.</summary>
+    private static string RangeId(XElement marker) =>
+        (string?)marker.Attribute(W.id) is not { } id ? ""
+        : long.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value.ToString(CultureInfo.InvariantCulture)
+        : id;
+
     private static void PlaceOutsideRanges(XElement separator)
     {
         static XElement? Sibling(XElement e, bool forward)
@@ -609,17 +616,20 @@ public sealed partial class DocxSession
         var inside = new int[count + 2];
         var open = new Dictionary<(XName End, string Id), int>();
         (XName End, string Id)? Key(XElement m) =>
-            CrossBlockRangeNames.TryGetValue(m.Name, out var r) ? (r.End, (string?)m.Attribute(W.id) ?? "") : null;
+            CrossBlockRangeNames.TryGetValue(m.Name, out var r) ? (r.End, RangeId(m)) : null;
         // A pair with both ends here encloses no block, so it holds no control to stay against; one whose end comes
         // before its start covers nothing, so it counts for nothing.
         var keys = markers.Select(Key).ToList();
         var tally = keys.OfType<(XName End, string Id)>().GroupBy(k => k).ToDictionary(g => g.Key, g => g.Count());
         var inverted = new HashSet<(XName End, string Id)>();
         var startsSeen = new HashSet<(XName End, string Id)>();
-        // Where the other end lies beyond the gap, the document beside it says whether the pair is inverted.
+        // Where the other end lies beyond the gap, the document beside it says whether the pair is inverted: its own
+        // story and the markup shown, as the move's scan pairs them.
+        var story = separator.Ancestors(W.txbxContent).FirstOrDefault();
         bool Beyond(XElement marker, (XName End, string Id) key, bool forward, bool wantStart) =>
             (forward ? marker.ElementsAfterSelf() : marker.ElementsBeforeSelf()).SelectMany(e => e.DescendantsAndSelf())
-                .Any(e => Key(e) == key && (e.Name != key.End) == wantStart);
+                .Any(e => Key(e) == key && (e.Name != key.End) == wantStart
+                    && e.Ancestors(W.txbxContent).FirstOrDefault() == story && WmlToMarkdownConverter.IsSelectedMarkup(e));
         for (int i = 0; i < count; i++)
             if (keys[i] is { } k)
             {
@@ -1022,17 +1032,17 @@ public sealed partial class DocxSession
         static bool IsPermission(XElement e) => e.Name == W.permStart || e.Name == W.permEnd;
         var markers = copy.Descendants().Where(IsPermission).ToList();
         if (markers.Count == 0) return;
-        // An id is a number ("4" and "04" are one range). Above every id in use, or the lowest free one once that
-        // would not fit w:id's 32 bits.
+        // An id is a number ("4" and "04" are one range). Above every id in use and never below 0, or the lowest free
+        // one once that would not fit w:id's 32 bits.
         static long? IdOf(XElement e) =>
             long.TryParse((string?)e.Attribute(W.id), NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) ? id : null;
         var used = story.Descendants().Where(IsPermission).Select(IdOf).OfType<long>().ToHashSet();
         long highest = used.DefaultIfEmpty(0).Max();
-        long next = highest < int.MaxValue ? highest + 1 : 0;
+        long next = highest is >= 0 and < int.MaxValue ? highest + 1 : 0;
         var fresh = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var marker in markers)
         {
-            var id = IdOf(marker)?.ToString(CultureInfo.InvariantCulture) ?? (string?)marker.Attribute(W.id) ?? "";
+            var id = RangeId(marker);
             if (!fresh.TryGetValue(id, out var renumbered))
             {
                 while (next > int.MaxValue || used.Contains(next)) next = next > int.MaxValue ? 0 : next + 1;

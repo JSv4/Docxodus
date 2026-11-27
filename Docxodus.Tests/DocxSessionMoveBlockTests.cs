@@ -2334,8 +2334,41 @@ public class DocxSessionMoveBlockTests
         var ids = copy.Descendants().Where(e => e.Name == W.permStart || e.Name == W.permEnd).Select(e => (string?)e.Attribute(W.id)).ToList();
         Assert.Equal(ids[0], ids[2]);
         Assert.Equal(ids[1], ids[3]);
-        Assert.All(ids, id => Assert.True(int.TryParse(id, out _), id));
+        Assert.All(ids, id => Assert.True(int.TryParse(id, out var value) && value >= 0, id));
         Assert.NotEqual(ids[0], ids[1]);
+    }
+
+    // Where every id in use is negative, below w:id's 32 bits, the copy's ids still start at 0.
+    [Fact]
+    public void MoveBlock_Tracked_GivesTheCopyIdsFromZeroWhenEveryIdIsNegative()
+    {
+        XElement Perm(XName name) => new(name, new XAttribute(W.id, "-2147483650"), name == W.permStart ? new XAttribute(W.edGrp, "everyone") : null);
+        using var session = Tracked(Document(P("A"), new XElement(W.p, Perm(W.permStart), new XElement(W.r, new XElement(W.t, "B")), Perm(W.permEnd)), P("C")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        var copy = BodyOf(session.Save()).Elements(W.p).Last(e => Text(e) == "B");
+        Assert.All(copy.Descendants().Where(e => e.Name == W.permStart || e.Name == W.permEnd), m => Assert.Equal("0", (string?)m.Attribute(W.id)));
+    }
+
+    // A range's two ends pair by the id's value, so a block holding one end of "4" … "04" keeps its place.
+    [Theory]
+    [InlineData("4")]
+    [InlineData("04")]
+    public void MoveBlock_PairsRangeEndsByTheValueOfTheirId(string endId)
+    {
+        using var session = new DocxSession(Document(P("A", PermStart(4)), P("B", new XElement(W.permEnd, new XAttribute(W.id, endId))), P("C")));
+        Assert.False(Move(session, "A", "C", Position.After).Success);
+    }
+
+    // A text box is a story of its own: an end in one before the gap does not make the body's pair inverted, so the
+    // paragraph between the tables still goes outside the body's permission range.
+    [Fact]
+    public void MoveBlock_PlacesTheParagraphIgnoringAnEndInATextBox()
+    {
+        var start = new XElement(W.permStart, new XAttribute(W.id, 7), new XAttribute(W.edGrp, "everyone"));
+        using var session = new DocxSession(Document(TextBoxParagraph("X", new XElement(W.permEnd, new XAttribute(W.id, 7))), Table("T1"),
+            start, P("B"), Table("T2"), P("C"), new XElement(W.permEnd, new XAttribute(W.id, 7)), P("D")));
+        Assert.True(Move(session, "B", "C", Position.After).Success);
+        Assert.Equal("X [T1] - < [T2] C B > D", Shape(session.Save()));
     }
 
     // Rejecting an inserted empty paragraph never takes a comment's reference with it.
