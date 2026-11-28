@@ -2926,9 +2926,10 @@ nested in another field's result became a link only with `StampReferenceFields`;
 single "inside a link" test (`IsInsideLink`) covers all three forms and the TOC rule uses it; a field
 nested in another's *result* converts as it does at the top level, in a revision mark too (a field
 nested in an *instruction* only feeds it: see "A field nested in another field's code (#1875)"); and both field forms build their
-`<a>` in one place (`HyperlinkFieldLink`). Not covered: a complex field inside a `w:fldSimple`, whose
-content converts element by element, and parts the converter does not annotate with field
-information. Tests: `Docxodus.Tests/WmlToHtmlConverterFieldLinkStyleTests.cs`,
+`<a>` in one place (`HyperlinkFieldLink`). Not covered then: a complex field inside a `w:fldSimple`,
+whose content converted element by element (it converts as a field since #1878, below), and parts
+the converter does not annotate with field information (notes, headers and footers are annotated in
+every mode since #1876). Tests: `Docxodus.Tests/WmlToHtmlConverterFieldLinkStyleTests.cs`,
 `Docxodus.Tests/FieldRetrieverTests.cs`.
 
 A known limit of the rule, in every form: Word drops only the Hyperlink style's colour and
@@ -2938,8 +2939,42 @@ entry (with no underline), and a run with a direct `<w:u w:val="double"/>` keeps
 underline; LibreOffice agrees. Docxodus removes the run's colour and underline whatever their
 source, because the converter merges styles into each run's properties before it renders, so the
 rule cannot tell the style's colour from a direct one. Before #1870 a field-form entry kept a direct
-colour (with the style's underline); it now loses it, as a `w:hyperlink` entry already did. Tracked
-in #1878.
+colour (with the style's underline); it now loses it, as a `w:hyperlink` entry already did. Fixed
+in #1878, below.
+
+#### The run's own colour and underline (issue #1878)
+
+Authored entries, each run in a `TOC \o "1-3" \h \z \u` field's result (the Hyperlink style declares
+`0563C1` and a single underline; `Accent` is a second character style with `00B050` and a wavy
+underline). The Word reference PDFs cover entries written as a `w:hyperlink` and as a HYPERLINK field;
+LibreOffice was checked on all three forms, the simple field too, with the same result in each:
+
+```xml
+<w:r><w:rPr><w:rStyle w:val="Hyperlink"/><w:color w:val="FF0000"/></w:rPr><w:t>Red</w:t></w:r>
+<w:r><w:rPr><w:u w:val="double"/></w:rPr><w:t>Double</w:t></w:r>
+<w:r><w:rPr><w:u w:val="double"/></w:rPr><w:tab/></w:r>
+```
+
+| Run in a contents entry | Word reference PDF | LibreOffice 25.8 | Docxodus before | Docxodus after |
+|---|---|---|---|---|
+| Hyperlink style and a direct `FF0000` | red, not underlined | red, not underlined | plain | red, not underlined |
+| A direct double underline, no style | double underline | double underline | plain | double underline |
+| Hyperlink style, nothing direct | plain | plain | plain | plain |
+| `Accent` style, nothing direct | not measured | plain | plain | plain (unchanged) |
+| A tab in a run with a direct double underline | not measured | double line under the leader | no line | no line (unchanged) |
+
+So the rule drops what the entry's styles give its runs and keeps what a run sets itself. Formatting
+assembly merges styles into each run's `w:rPr` before the converter renders, so the converter now
+records, before assembly, which runs set `w:color` or `w:u` themselves
+(`StampDirectColorAndUnderline`, as balloon wording records direct properties for #1300), and the TOC
+rule (`ApplyFieldResultPresentation`) leaves those alone. Only the Word-measured cases changed: a
+colour or underline from any style, the Hyperlink style or another, is still dropped, and a tab in an
+entry still draws no underline, even when its run sets one.
+
+A complex field inside a `w:fldSimple` (Word does not normally write one, but the schema allows it)
+now converts as it does in a paragraph: a HYPERLINK field there is a link, and with
+`StampReferenceFields` a `PAGEREF` in a contents entry written as a simple field is marked once
+(`SimpleFieldContent`). Tests: `Docxodus.Tests/WmlToHtmlConverterLinkGapTests.cs`.
 
 ### Text before a tab that is longer than its line wraps; the tab advances from the last line
 
