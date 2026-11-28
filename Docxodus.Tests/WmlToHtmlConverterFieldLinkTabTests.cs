@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
@@ -181,5 +182,124 @@ public class WmlToHtmlConverterFieldLinkTabTests
         var marker = Assert.Single(entries[1].Descendants(Xhtml.a).Single().Descendants(), e => (string?)e.Attribute("data-field") == "PAGE");
         // (the fallback: the text after the tab is not in the tab's box)
         Assert.DoesNotContain(marker.Ancestors().TakeWhile(e => e.Name != Xhtml.a), e => e.Descendants().Any(IsTab));
+    }
+
+    // The shapes a link's tabs keep out of the segment for. A form names how the content is written: in a w:hyperlink, a
+    // HYPERLINK field (on its own or in a TOC field), a simple HYPERLINK field, or as the paragraph's own runs.
+    private static string In(string form, string content) => form switch
+    {
+        "element" => AsElement(content),
+        "field" => AsField(content),
+        "field in TOC" => TocBegin + AsField(content) + TocEnd,
+        "simple" => AsSimpleField(content),
+        "plain" => content,
+        _ => throw new ArgumentOutOfRangeException(nameof(form)),
+    };
+
+    private static List<XElement> Render(string body, WmlToHtmlConverterSettings settings)
+    {
+        settings.FabricateCssClasses = false;
+        return WmlToHtmlConverter.ConvertToHtml(new WmlDocument("contents.docx", Docx(body)), settings)
+            .Descendants(Xhtml.p).Where(p => p.Descendants().Any(IsTab)).ToList();
+    }
+
+    private static string? Declaration(XElement element, string property) =>
+        ((string?)element.Attribute("style") ?? "").Split(';').Select(d => d.Split(':', 2))
+            .Where(d => d.Length == 2 && d[0].Trim() == property).Select(d => d[1].Trim()).SingleOrDefault();
+
+    /// <summary>The elements a node sits in below its link, or its paragraph.</summary>
+    private static IEnumerable<XElement> Boxes(XElement element) =>
+        element.Ancestors().TakeWhile(e => e.Name != Xhtml.a && e.Name != Xhtml.p);
+
+    private static XElement Marker(XElement entry, string kind) =>
+        Assert.Single(entry.Descendants(), e => (string?)e.Attribute("data-field") == kind);
+
+    // A line break before the link's first tab: the tab and the page number go on from the line after the break. Boxed
+    // with the text before the break, they would sit on its first line, past the stop.
+    [Theory]
+    [InlineData("element", PaginationMode.None)]
+    [InlineData("field", PaginationMode.None)]
+    [InlineData("field in TOC", PaginationMode.None)]
+    [InlineData("simple", PaginationMode.None)]
+    [InlineData("element", PaginationMode.Paginated)]
+    [InlineData("field", PaginationMode.Paginated)]
+    [InlineData("field in TOC", PaginationMode.Paginated)]
+    [InlineData("simple", PaginationMode.Paginated)]
+    public void ALineBreakBeforeALinksTabLeavesTheTabAndPageNumberOnTheLineAfterIt(string form, PaginationMode mode)
+    {
+        var entry = Assert.Single(Render(Paragraph(In(form, Run(Hyperlink, Text("Line one")) + Run(Hyperlink, "<w:br/>")
+                + Run(Hyperlink, Text("two")) + Run(Hyperlink, "<w:tab/>") + Field("PAGEREF _Toc1 \\h", Run("", Text("12")))))
+            + Heading, new WmlToHtmlConverterSettings { RenderPagination = mode }));
+        var number = Assert.Single(entry.Descendants(Xhtml.span), s => !s.HasElements && s.Value == "12");
+        foreach (var element in new[] { Assert.Single(entry.Descendants(), IsTab), number })
+            Assert.DoesNotContain(Boxes(element), box => box.Value.Contains("Line one"));
+        Assert.Single(entry.Descendants(Xhtml.a));
+    }
+
+    // A field the converter keeps whole that holds the link's tab is not cut in two at the tab: a cross-reference marked
+    // for an editor keeps one marker, its cached text the whole result.
+    [Theory]
+    [InlineData("element", PaginationMode.None)]
+    [InlineData("field", PaginationMode.None)]
+    [InlineData("field in TOC", PaginationMode.None)]
+    [InlineData("field", PaginationMode.Paginated)]
+    public void AMarkedReferenceHoldingALinksTabIsMarkedOnce(string form, PaginationMode mode)
+    {
+        var entry = Assert.Single(Render(Paragraph(In(form, Run(Hyperlink, Text("A"))
+                + Field("REF _Ref9 \\h", Run("", Text("x")) + Run("", "<w:tab/>") + Run("", Text("y"))) + Run(Hyperlink, Text("z"))))
+            + Heading, new WmlToHtmlConverterSettings { RenderPagination = mode, StampReferenceFields = true }));
+        Assert.Equal("x\ty", (string?)Marker(entry, "REF").Attribute("data-field-cached"));
+    }
+
+    // A page-number field holding a HYPERLINK field's tab gets one marker for the paginator to fill in.
+    [Theory]
+    [InlineData(false)] // paginated HTML
+    [InlineData(true)]  // a block render for an editor that paginates it
+    public void APageFieldHoldingAHyperlinkFieldsTabGetsOneMarker(bool stampPageNumberFields)
+    {
+        var entry = Assert.Single(Render(Paragraph(AsField(Run(Hyperlink, Text("A"))
+                + Field("PAGE", Run("", Text("1")) + Run("", "<w:tab/>") + Run("", Text("2"))))) + Heading,
+            new WmlToHtmlConverterSettings
+            {
+                RenderPagination = stampPageNumberFields ? PaginationMode.None : PaginationMode.Paginated,
+                StampPageNumberFields = stampPageNumberFields,
+            }));
+        Assert.Equal("12", Marker(entry, "PAGE").Value);
+    }
+
+    // A link that ends after its tab while the paragraph's text goes on: the right tab aligns that text too, but the
+    // tab's box holds only the link's runs, so it must not take that text's width as well, which would push the text
+    // past the stop. The same entry as the paragraph's own runs is one segment, ending on the stop.
+    [Theory]
+    [InlineData("element", "")]
+    [InlineData("field", "")]
+    [InlineData("simple", "")]
+    [InlineData("element", "Value")]
+    [InlineData("field", "Value")]
+    [InlineData("simple", "Value")]
+    public void ALinkEndingBeforeTheTextAfterItsTabDoesNotPushThatTextPastTheStop(string form, string inLink)
+    {
+        string Entry(string f) => Paragraph(In(f, Run(Hyperlink, Text("Name")) + Run(Hyperlink, "<w:tab/>")
+            + (inLink.Length > 0 ? Run(Hyperlink, Text(inLink)) : "")) + Run("", Text(" 12")));
+        var entries = Render(Entry("plain") + Entry(form) + Heading, new WmlToHtmlConverterSettings());
+        decimal BoxWidth(XElement entry) => decimal.Parse(Declaration(Assert.Single(entry.Descendants(), IsTab).Ancestors()
+            .First(e => Declaration(e, "display") == "inline-flex"), "width")!.Replace("pt", ""), CultureInfo.InvariantCulture);
+        Assert.True(BoxWidth(entries[1]) < BoxWidth(entries[0]), $"{BoxWidth(entries[1])}pt, the stop at {BoxWidth(entries[0])}pt");
+        Assert.DoesNotContain(Boxes(Assert.Single(entries[1].Descendants(Xhtml.span), s => !s.HasElements && s.Value == " 12")),
+            box => box.Descendants().Any(IsTab));
+    }
+
+    // The same for a tracked insertion that ends after its tab: the tab is not given a segment as wide as the text after
+    // the insertion, which the segment does not hold.
+    [Fact]
+    public void ATrackedInsertionEndingAfterItsTabDoesNotPushTheTextAfterItPastTheStop()
+    {
+        var entry = Assert.Single(Render(Paragraph(Run("", Text("Name"))
+                + "<w:ins w:id=\"5\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\">" + Run("", "<w:tab/>") + "</w:ins>"
+                + Run("", Text("12"))) + Heading,
+            new WmlToHtmlConverterSettings { RenderTrackedChanges = true }));
+        var tab = Assert.Single(entry.Descendants(), IsTab);
+        Assert.NotEmpty(tab.Ancestors(Xhtml.ins));
+        Assert.DoesNotContain(tab.Ancestors().TakeWhile(e => e.Name != Xhtml.p), e => Declaration(e, "display") == "inline-flex");
     }
 }

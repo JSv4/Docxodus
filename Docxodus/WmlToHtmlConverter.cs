@@ -4155,6 +4155,12 @@ namespace Docxodus
             if (firstTabRun == null)
                 return null;
             var runsPrecedingTab = runs.TakeWhile(run => run != firstTabRun).ToList();
+            // Cut at the first tab only where that is harmless: not across a field the converter keeps whole, whose
+            // marker or link would be made twice, nor after a line break, whose two lines the tab's box would hold
+            // with the tab beside the first. The runs then convert as they do without a tab.
+            if (CutsAWrappedField(settings, firstTabRun, outerField) ||
+                runsPrecedingTab.Any(run => run.DescendantsAndSelf().Any(e => e.Name == W.br || e.Name == W.cr)))
+                return null;
             var content = TransformElementsPrecedingTab(wordDoc, settings, runsPrecedingTab, firstTabRun, outerField);
             content.AddRange(ConvertInline(wordDoc, settings, runs.SkipWhile(run => run != firstTabRun).Skip(1), outerField));
             return content;
@@ -8116,6 +8122,23 @@ namespace Docxodus
             return wrapper;
         }
 
+        /// <summary>Each stretch between tabs converts its fields on its own, so a field open across a tab is cut in
+        /// two. That is harmless for a field drawn as its result's runs, but not for one the converter wraps whole: a
+        /// HYPERLINK's link, a page-number marker or, with <see cref="WmlToHtmlConverterSettings.StampReferenceFields"/>,
+        /// a cross-reference's marker. <paramref name="outerField"/>, the field whose result the stretches are, stays
+        /// whole: its caller wraps it around all of them.</summary>
+        private static bool CutsAWrappedField(WmlToHtmlConverterSettings settings, XElement tabRun, int? outerField)
+        {
+            var stack = tabRun.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()?
+                .Where(info => info.Id > (outerField ?? 0)).ToList();
+            if (stack is not { Count: > 0 }) return false;
+            var instrText = FieldRetriever.InstrText(tabRun.Ancestors().Last(), stack.Min(info => info.Id))
+                .TrimStart('{').TrimEnd('}');
+            return FieldRetriever.ParseField(instrText).FieldType == "HYPERLINK" ||
+                Internal.PageNumberFieldInstr.TryParse(instrText) != null ||
+                settings.StampReferenceFields && Internal.ReferenceFieldInstr.TryParse(instrText) != null;
+        }
+
         /// <summary>Keep each plain left/right tab segment pinned to its stop, including
         /// the following text in a right-aligned segment so real browser glyph widths are absorbed
         /// by the tab. Complex fields, breaks, and other inline containers retain their field-aware
@@ -8146,19 +8169,19 @@ namespace Docxodus
                 : e.Name != W.r || e.Elements().Any(c =>
                     c.Name != W.rPr && c.Name != W.t && c.Name != W.delText && c.Name != W.tab && c.Name != W.noBreakHyphen &&
                     c.Name != W.instrText && !(c.Name == W.fldChar && !c.HasElements));
-            // Each stretch between tabs converts its fields on its own, so a field open across a tab
-            // is cut in two. That is harmless for a field drawn as its result's runs, but not for one
-            // the converter wraps whole: a HYPERLINK's link or a page-number marker. The field whose result this is
-            // stays whole: its caller wraps it around all the stretches.
-            bool CutsAWrappedField(XElement tabRun)
+            // A right tab's following width runs to the paragraph's next tab or break, which can lie past this
+            // content: a link that ends after its tab while the paragraph's text goes on. The segment holds only the
+            // content, so it would take that text's width too and push the text past the stop (issue #1877).
+            bool RightTabAlignsTextPastContent()
             {
-                var stack = tabRun.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()?
-                    .Where(info => info.Id > (outerField ?? 0)).ToList();
-                if (stack is not { Count: > 0 }) return false;
-                var instrText = FieldRetriever.InstrText(tabRun.Ancestors().Last(), stack.Min(info => info.Id))
-                    .TrimStart('{').TrimEnd('}');
-                return FieldRetriever.ParseField(instrText).FieldType == "HYPERLINK" ||
-                    Internal.PageNumberFieldInstr.TryParse(instrText) != null;
+                if (paragraph == null || (string?)tabRuns[^1].Element(W.tab)!.Attribute(PtOpenXml.TabAlignment) != "right")
+                    return false;
+                var last = content[^1].DescendantsAndSelf().Last();
+                return paragraph.Descendants().SkipWhile(e => e != last).Skip(1)
+                    .Where(e => !e.AncestorsAndSelf().TakeWhile(a => a != paragraph).Any(a =>
+                        a.Name == W.txbxContent || a.Attribute(HiddenFieldInstructionAttribute) != null))
+                    .TakeWhile(e => e.Name != W.tab && e.Name != W.br && e.Name != W.cr)
+                    .Any(e => (e.Name == W.t || e.Name == W.delText) && e.Value.Length > 0);
             }
             // Text that wraps before a tab keeps the run-aware path, unless it is the last tab and a
             // right one whose wrapped text can wrap inside its segment (see below).
@@ -8166,9 +8189,10 @@ namespace Docxodus
                 r.Element(W.tab)!.Attribute(TabFollowingTextWrapsAttribute) != null ||
                 r.Element(W.tab)!.Attribute(PtOpenXml.TabAfterWrappedText) != null &&
                     (r != tabRuns[^1] || r.Element(W.tab)!.Attribute(TabWrappedSegmentWidthAttribute) == null);
-            if (tabRuns.Count == 0 || content.Any(Unsupported) || tabRuns.Any(CutsAWrappedField) ||
+            if (tabRuns.Count == 0 || content.Any(Unsupported) || tabRuns.Any(r => CutsAWrappedField(settings, r, outerField)) ||
                 tabRuns.Any(r => r.Elements().Count(e => e.Name != W.rPr) != 1 || AfterUnsupportedWrap(r) ||
-                    ((string?)r.Element(W.tab)!.Attribute(PtOpenXml.TabAlignment) ?? "left") is not ("left" or "right")))
+                    ((string?)r.Element(W.tab)!.Attribute(PtOpenXml.TabAlignment) ?? "left") is not ("left" or "right")) ||
+                RightTabAlignsTextPastContent())
                 return null;
 
             var result = new List<object?>();
