@@ -1350,6 +1350,8 @@ namespace Docxodus
                 Internal.WordFormatWording.Stamp(wordDoc, author =>
                     authors?.IndexOf(author) is { } number ? WordAuthorColor(htmlConverterSettings, author, number) : null);
             }
+            // A contents entry reads them too: it keeps a color or underline its run sets (issue #1878).
+            StampDirectColorAndUnderline(wordDoc);
 
             PrepareRevisionParagraphGroups(wordDoc, htmlConverterSettings);
 
@@ -9162,7 +9164,8 @@ namespace Docxodus
         /// Applies presentation semantics that belong to a cached field result rather than to an
         /// individual run. Word suppresses hyperlink color and underline inside cached TOC
         /// results, even when those runs reference the Hyperlink character style. The same run
-        /// outside the TOC field keeps its declared character style.
+        /// outside the TOC field keeps its declared character style. A color or underline the
+        /// run sets itself stays (issue #1878).
         /// </summary>
         private static void ApplyFieldResultPresentation(
             XElement run,
@@ -9174,8 +9177,9 @@ namespace Docxodus
             // Removing these properties exposes the underlying TOC paragraph/run formatting; it
             // does not force black onto a document whose TOC style intentionally uses another
             // color. Preserve any non-underline decoration that may coexist on the run.
-            style.Remove("color");
-            if (!style.TryGetValue("text-decoration", out var decoration))
+            if (!SetsItself(run, DirectColor))
+                style.Remove("color");
+            if (SetsItself(run, DirectUnderline) || !style.TryGetValue("text-decoration", out var decoration))
                 return;
 
             var remaining = decoration
@@ -9196,6 +9200,28 @@ namespace Docxodus
         /// simple or complex, as Word writes a contents entry in either form (issue #1870).</summary>
         private static bool IsTocLinkResult(XElement run) =>
             FieldRetriever.IsFieldResult(run, "TOC") && IsInsideLink(run);
+
+        private static readonly XName DirectColor = XNamespace.Get("urn:docxodus:rendering") + "directColor";
+        private static readonly XName DirectUnderline = XNamespace.Get("urn:docxodus:rendering") + "directUnderline";
+
+        /// <summary>Records on each run's properties whether the run sets its own color and underline. Formatting
+        /// assembly merges a run's styles into its properties, after which a cached TOC result could not tell the color
+        /// and underline the Hyperlink style gives its runs, which Word drops there, from the run's own, which Word keeps
+        /// (issue #1878). Balloon wording records direct properties before assembly for the same reason (issue
+        /// #1300).</summary>
+        private static void StampDirectColorAndUnderline(WordprocessingDocument wordDoc)
+        {
+            foreach (var part in wordDoc.ContentParts())
+                foreach (var rPr in part.GetXDocument().Descendants(W.r).Elements(W.rPr))
+                {
+                    if (rPr.Element(W.color) != null) rPr.SetAttributeValue(DirectColor, "true");
+                    if (rPr.Element(W.u) != null) rPr.SetAttributeValue(DirectUnderline, "true");
+                }
+        }
+
+        /// <summary>Whether the run sets the property <see cref="StampDirectColorAndUnderline"/> recorded as
+        /// <paramref name="mark"/> itself, rather than getting it from a style.</summary>
+        private static bool SetsItself(XElement run, XName mark) => run.Element(W.rPr)?.Attribute(mark) != null;
 
         private static string DescribeFormatChange(XElement currentRPr, XElement rPrChange)
         {
