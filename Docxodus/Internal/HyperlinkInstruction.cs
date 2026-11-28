@@ -8,7 +8,9 @@ namespace Docxodus.Internal;
 
 /// <summary>
 /// Reads where a <c>HYPERLINK</c> field instruction points. The IR and the HTML converter both read it here, so a
-/// field's link has one target whichever of them reads it.
+/// field's link has one target whichever of them reads it. A field nested in the code is the exception: the HTML
+/// converter passes the code with each nested field replaced by its cached result, as Word links (issue #1875),
+/// and the IR passes the code as written.
 /// </summary>
 internal static class HyperlinkInstruction
 {

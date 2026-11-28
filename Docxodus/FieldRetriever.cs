@@ -93,6 +93,38 @@ namespace Docxodus
         }
 
         /// <summary>
+        /// The code of field <paramref name="id"/> as Word evaluates it to run the field: the code's own text, with
+        /// each field nested in it replaced by that field's cached result, so a <c>HYPERLINK</c> whose address is a
+        /// <c>MERGEFIELD</c> points to the merged address. <see cref="InstrText"/> keeps a nested field's code instead,
+        /// in braces. Only results show through: a field nested in a nested field's code adds nothing.
+        /// </summary>
+        internal static string EvaluatedInstrText(XElement root, int id)
+        {
+            var cached = root.Annotation<Dictionary<int, List<XElement>>>();
+            if (cached == null || !cached.TryGetValue(id, out var elements))
+                return "";
+            // As InstrText reads a deleted field's code from w:delInstrText, a deleted field's nested results are
+            // w:delText.
+            var deletedField = IsDeletedField(root, id);
+            var code = new StringBuilder();
+            foreach (var element in elements)
+            {
+                bool nested = false, shown = true;
+                foreach (var info in element.Annotation<Stack<FieldElementTypeInfo>>()!)
+                {
+                    if (info.Id == id)
+                        break;
+                    nested = true;
+                    shown &= info.FieldElementType == FieldElementTypeEnum.Result;
+                }
+                if (nested ? shown && (element.Name == W.t || (deletedField && element.Name == W.delText))
+                    : element.Name == W.instrText || (deletedField && element.Name == W.delInstrText))
+                    code.Append(element.Value);
+            }
+            return code.ToString();
+        }
+
+        /// <summary>
         /// Returns whether <paramref name="element"/> is in the cached result of a field of
         /// <paramref name="fieldType"/>: a complex field's, or a simple field's, whose content is
         /// its result. Nested fields are considered independently, so a PAGEREF result nested
