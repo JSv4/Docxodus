@@ -2,13 +2,18 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Docxodus.Internal;
 
 /// <summary>
 /// Reads where a <c>HYPERLINK</c> field instruction points. The IR and the HTML converter both read it here, so a
-/// field's link has one target whichever of them reads it.
+/// field's link has one target whichever of them reads it. A field nested in the code is the exception: the HTML
+/// converter passes the code with each nested field replaced by its cached result, as Word links (issue #1875),
+/// and the IR passes the code as written.
 /// </summary>
 internal static class HyperlinkInstruction
 {
@@ -71,6 +76,40 @@ internal static class HyperlinkInstruction
             if (name == 'l' && value.Length > 0) location ??= value;
         }
     }
+
+    /// <summary>
+    /// The target of a code made of pieces, each the field's own code or (<c>Result</c>) a nested field's cached result,
+    /// as <see cref="FieldRetriever.EvaluatedInstrText"/> reads them. A result is read literally, as one stretch of the
+    /// operand it is part of: its spaces, quotes and backslashes are text, not the code's syntax, so a merged
+    /// <c>C:\Docs\a.pdf</c> in <c>"{ MERGEFIELD Path }"</c> is the address <c>C:\Docs\a.pdf</c> (issue #1875). An
+    /// empty target names nothing.
+    /// </summary>
+    public static string? Target(IReadOnlyList<(string Text, bool Result)> pieces)
+    {
+        // Each result stands in the code as a placeholder that no tokenizer rule touches, and is put back in the target.
+        var code = new StringBuilder();
+        var results = new List<string>();
+        foreach (var (text, result) in pieces)
+        {
+            if (!result)
+            {
+                code.Append(text);
+                continue;
+            }
+            code.Append(PlaceholderStart).Append(results.Count.ToString(CultureInfo.InvariantCulture)).Append(PlaceholderEnd);
+            results.Add(text);
+        }
+        var target = Target(code.ToString());
+        if (target is null || results.Count == 0)
+            return target;
+        target = Placeholder.Replace(target, m => int.TryParse(m.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture,
+            out var index) && index < results.Count ? results[index] : m.Value);
+        return target.Length == 0 ? null : target;
+    }
+
+    private const char PlaceholderStart = '\uE000', PlaceholderEnd = '\uE001';
+
+    private static readonly Regex Placeholder = new("\uE000([0-9]+)\uE001", RegexOptions.CultureInvariant);
 
     /// <summary>The quoted (without its quotes, double or single as the field tokenizer takes them, escapes read) or
     /// bare operand at <paramref name="i"/>, which moves past it.</summary>
