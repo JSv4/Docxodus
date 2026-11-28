@@ -3648,7 +3648,7 @@ namespace Docxodus
         {
             var element = node as XElement;
             if (element == null) return null;
-            if (element.Attribute(HiddenFieldInstructionAttribute) != null) return null;
+            if (element.Attribute(HiddenFieldInstructionAttribute) != null) return HiddenFieldCode(element);
             if (element.Attribute(StyleReferenceAttribute) is { } referencedStyle)
                 return new XElement(Xhtml.span, new XAttribute("data-field", "STYLEREF"),
                     new XAttribute("data-field-style", referencedStyle.Value),
@@ -4292,7 +4292,8 @@ namespace Docxodus
             // marker built around part of a field would be wrong, issue #1272). So the fields in a wrapper inside
             // another's result, as a contents entry is under tracked changes, convert as they do outside revision
             // marks (issue #1870). Content in the instruction of an open field only feeds it: it converts element by
-            // element, with what a field nested there would show hidden, and no field marker (issue #1875).
+            // element, with what a field nested there would show hidden, and no page-number or reference marker
+            // (issue #1875).
             var open = new[] { element, element.DescendantsAndSelf().Last() }
                 .SelectMany(e => e.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()
                     ?? Enumerable.Empty<FieldRetriever.FieldElementTypeInfo>())
@@ -12365,6 +12366,21 @@ namespace Docxodus
             return false;
         }
 
+        /// <summary>What a field nested in another field's code holds is hidden: Word shows only the outer field's
+        /// result. The session still counts the text there as the paragraph's, as it counts every run, so it renders as an
+        /// empty field marker whose <c>data-field-cached</c> holds that text, the text an editor counts for a field (as
+        /// for a reference marker): the editor's offsets stay the session's (issue #1875).</summary>
+        private static XElement? HiddenFieldCode(XElement hidden)
+        {
+            if (InDeletedContent(hidden)) return null;
+            var paragraph = hidden.Ancestors(W.p).FirstOrDefault();
+            var text = hidden.Name != W.fldSimple ? DocxSession.TextOf(hidden)
+                : string.Concat(hidden.Descendants(W.r).Where(r => r.Ancestors(W.p).FirstOrDefault() == paragraph
+                    && !InDeletedContent(r)).Select(DocxSession.RunText));
+            return text.Length == 0 ? null : new XElement(Xhtml.span, new XAttribute("data-field", "code"),
+                new XAttribute("data-field-cached", text), new XText(""));
+        }
+
         private static bool InDeletedContent(XElement element) =>
             element.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom);
 
@@ -12761,9 +12777,10 @@ namespace Docxodus
                     // A field nested in the result converts as it would outside it: a HYPERLINK there, as a
                     // contents entry written as a field is, is a link (issue #1870), and with
                     // StampReferenceFields a reference there, as the entry's PAGEREF is, is marked. A field
-                    // nested in the instruction only feeds it: its content is hidden (NormalizeFieldResults),
-                    // and it is no link or field marker, which the paginator would fill in (issue #1875). The
-                    // instruction converts element by element, so its bookmarks and revision marks stay.
+                    // nested in the instruction only feeds it: its content is hidden (NormalizeFieldResults,
+                    // HiddenFieldCode), and it is no link, page-number or reference marker, which the paginator
+                    // would fill in (issue #1875). The instruction converts element by element, so its bookmarks
+                    // and revision marks stay.
                     object Nested() => g.GroupAdjacent(e => IsResultOf(e, (int)key))
                         .Select(part => part.Key
                             ? ConvertContentThatCanContainFields(wordDoc, settings, part, key)

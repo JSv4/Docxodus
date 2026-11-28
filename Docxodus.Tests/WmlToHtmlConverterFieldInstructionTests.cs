@@ -150,8 +150,9 @@ public class WmlToHtmlConverterFieldInstructionTests
             Assert.All(Shown(html, story, "Plain"), text => Assert.Equal("Plain", text));
         }
         // A reference in a field's code is not marked for an editor either; a reference whose code holds a field is.
+        // (The empty "code" markers stand for a code's hidden text; see WmlToHtmlConverterFieldCodeEditorTests.)
         Assert.Equal(stampReferences ? new[] { "Cited", "Cited", "Cited" } : Array.Empty<string>(),
-            html.Descendants().Where(e => (string?)e.Attribute("data-field") is { } kind && kind != "PAGE").Select(e => e.Value));
+            html.Descendants().Where(e => (string?)e.Attribute("data-field") is { } kind && kind is not ("PAGE" or "code")).Select(e => e.Value));
         // A link goes to the address the field in its code gives; a field in another's code is no link.
         Assert.Equal("https://example.test/merged", Href(html, "Visit"));
         Assert.Equal("https://example.test/quoted", Href(html, "Go"));
