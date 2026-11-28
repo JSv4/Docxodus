@@ -188,6 +188,11 @@ namespace Docxodus
             root.RemoveAnnotations<FieldTypes>();
             foreach (var element in root.DescendantsAndSelf())
                 element.RemoveAnnotations<Stack<FieldElementTypeInfo>>();
+            // Each note and text box is a story of its own (a comment too, should its part be annotated), so a field left open in one (malformed
+            // markup) cannot run into the next: the walk starts each with no field open, and resumes the
+            // enclosing story's fields after a text box. Ids keep increasing across the part, since the
+            // instruction cache is keyed by id on the part's root (issue #1876).
+            var boxes = new Stack<(XElement Box, Stack<FieldElementTypeInfo>? Saved)>();
             var r = root.DescendantsAndSelf()
                 .Rollup(
                     new FieldElementTypeStack
@@ -197,6 +202,16 @@ namespace Docxodus
                     },
                     (e, s) =>
                     {
+                        while (boxes.Count > 0 && !e.Ancestors().Contains(boxes.Peek().Box))
+                            s = new FieldElementTypeStack { Id = s.Id, FiStack = boxes.Pop().Saved };
+                        if (e.Name == W.footnote || e.Name == W.endnote || e.Name == W.comment)
+                            s = new FieldElementTypeStack { Id = s.Id, FiStack = null };
+                        else if (e.Name == W.txbxContent)
+                        {
+                            boxes.Push((e, s.FiStack));
+                            s = new FieldElementTypeStack { Id = s.Id, FiStack = null };
+                        }
+
                         // w:fldChar always carries w:fldCharType per the WordprocessingML schema.
                         if (e.Name == w + "fldChar")
                         {
@@ -219,8 +234,11 @@ namespace Docxodus
                                     FiStack = fis,
                                 };
                             };
-                            // An orphan separate/end with no preceding begin throws here (NullReferenceException
-                            // via FiStack!), exactly as it did before this file was nullable-annotated.
+                            // A separate or end with no field open (malformed markup, such as a stray end
+                            // character in a header) belongs to no field: it leaves the state as it is, rather
+                            // than failing the whole conversion (issue #1876).
+                            if (s.FiStack is not { Count: > 0 })
+                                return s;
                             if (e.Attribute(w + "fldCharType")!.Value == "separate")
                             {
                                 Stack<FieldElementTypeInfo> fis = new Stack<FieldElementTypeInfo>(s.FiStack!.Reverse());
