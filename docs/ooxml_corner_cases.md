@@ -2961,15 +2961,15 @@ LibreOffice was checked on all three forms, the simple field too, with the same 
 | A direct double underline, no style | double underline | double underline | plain | double underline |
 | Hyperlink style, nothing direct | plain | plain | plain | plain |
 | `Accent` style, nothing direct | not measured | plain | plain | plain (unchanged) |
-| A tab in a run with a direct double underline | not measured | double line under the leader | no line | no line (unchanged) |
+| A tab in a run with a direct double underline | not measured | double line under the leader | no line | double line across the tab |
 
 So the rule drops what the entry's styles give its runs and keeps what a run sets itself. Formatting
 assembly merges styles into each run's `w:rPr` before the converter renders, so the converter now
 records, before assembly, which runs set `w:color` or `w:u` themselves
 (`StampDirectColorAndUnderline`, as balloon wording records direct properties for #1300), and the TOC
-rule (`ApplyFieldResultPresentation`) leaves those alone. Only the Word-measured cases changed: a
-colour or underline from any style, the Hyperlink style or another, is still dropped, and a tab in an
-entry still draws no underline, even when its run sets one.
+rule (`ApplyFieldResultPresentation`) leaves those alone. A colour or underline from any style, the
+Hyperlink style or another, is still dropped. A tab follows its run's text (`AddTabLines` reads the
+same record), as LibreOffice draws it; Word was not measured for a tab.
 
 A complex field inside a `w:fldSimple` (Word does not normally write one, but the schema allows it)
 now converts as it does in a paragraph: a HYPERLINK field there is a link, and with

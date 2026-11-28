@@ -9,8 +9,9 @@ using Xunit;
 
 namespace Docxodus.Tests;
 
-/// <summary>Lesser gaps around links (issue #1878): a contents entry keeps the colour and underline set on its own
-/// runs, and a complex field inside a simple field converts as a field.</summary>
+/// <summary>Three lesser gaps around links (issue #1878): a contents entry keeps the colour and underline set on its
+/// own runs; a complex field inside a simple field converts as a field; and a note reference or comment marker
+/// inside a link leaves no anchor inside another.</summary>
 public class WmlToHtmlConverterLinkGapTests
 {
     private const string Url = "https://example.test/link";
@@ -119,6 +120,9 @@ public class WmlToHtmlConverterLinkGapTests
 
     private static XElement? NearestLink(XElement element) => element.Ancestors(Xhtml.a).FirstOrDefault();
 
+    private static bool HasClass(XElement element, string name) =>
+        ((string?)element.Attribute("class") ?? "").Split(' ').Contains(name);
+
     public static TheoryData<string, bool, PaginationMode> FormsAndModes()
     {
         var data = new TheoryData<string, bool, PaginationMode>();
@@ -132,7 +136,7 @@ public class WmlToHtmlConverterLinkGapTests
     // Item 1. Word drops the Hyperlink style's colour and underline from a contents entry (#427), not what the entry's
     // runs set themselves: in Word reference PDFs a Hyperlink-styled run with a direct red colour prints red and not
     // underlined, a run with a direct double underline keeps it, and a Hyperlink-styled run with nothing of its own
-    // prints with neither.
+    // prints with neither. The page-number tab of a directly underlined run draws that underline too.
 
     private const string DirectRed = "<w:rStyle w:val=\"Hyperlink\"/><w:color w:val=\"FF0000\"/>";
     private const string DirectDouble = "<w:u w:val=\"double\"/>";
@@ -167,8 +171,11 @@ public class WmlToHtmlConverterLinkGapTests
         var accent = Declarations(html, TextSpan(html, "EntryAccent"));
         Assert.DoesNotContain("color:", accent);
         Assert.DoesNotContain("text-decoration", accent);
-        // The entry is one link.
-        Assert.Equal("#_Toc1", (string?)NearestLink(TextSpan(html, "EntryRed"))?.Attribute("href"));
+        // The entry is one link, and the tab of its directly double-underlined run draws the run's line.
+        var entryLink = NearestLink(TextSpan(html, "EntryRed"));
+        Assert.Equal("#_Toc1", (string?)entryLink?.Attribute("href"));
+        var tab = Assert.Single(entryLink!.Descendants(), e => e.Attribute("data-docx-tab") != null);
+        Assert.Contains(tab.Descendants(), e => Declarations(html, e).Contains("border-top: 3px double"));
 
         // Control: outside the contents every run keeps what its styles give it.
         Assert.Contains("text-decoration: underline", Declarations(html, TextSpan(html, "OutsideRed")));
@@ -227,5 +234,100 @@ public class WmlToHtmlConverterLinkGapTests
             + $"<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>{Run("Shown")}{EndOfField}</w:p>",
             new WmlToHtmlConverterSettings { FabricateCssClasses = false });
         Assert.Empty(html.Descendants(Xhtml.a));
+    }
+
+    // Item 3. The converter's own anchor for a note reference or a comment marker inside a link: an HTML parser closes
+    // the link at it, so the link's text after it would be no link. The link is split around it instead.
+
+    private const string FootnoteReference =
+        "<w:r><w:rPr><w:vertAlign w:val=\"superscript\"/></w:rPr><w:footnoteReference w:id=\"1\"/></w:r>";
+
+    private static void AssertNoAnchorInsideAnother(XElement html, string href, params string[] texts)
+    {
+        Assert.DoesNotContain(html.Descendants(Xhtml.a), a => a.Ancestors(Xhtml.a).Any());
+        foreach (var text in texts)
+            Assert.Equal(href, (string?)NearestLink(TextSpan(html, text))?.Attribute("href"));
+        var ids = html.Descendants().Select(e => (string?)e.Attribute("id")).OfType<string>().ToList();
+        Assert.Equal(ids.Distinct().Count(), ids.Count);
+        // Every piece of the link leaves colour and underline to its runs, as the link did.
+        Assert.All(html.Descendants(Xhtml.a).Where(a => (string?)a.Attribute("href") == href), piece =>
+        {
+            Assert.Contains("color: inherit", Declarations(html, piece));
+            Assert.Contains("text-decoration: none", Declarations(html, piece));
+        });
+    }
+
+    // A footnote reference in the link's own runs, and an endnote reference inside a tracked insertion in the link, with
+    // inserted text on either side of it.
+    [Theory]
+    [MemberData(nameof(FormsAndModes))]
+    public void ANoteReferenceInsideALinkLeavesTheTextAfterItInTheLink(string form, bool fabricateCssClasses, PaginationMode mode)
+    {
+        var html = Render($"<w:p>{LinkIn(form, Url, Run("Before ") + FootnoteReference + Run(" Middle ")
+                + "<w:ins w:id=\"5\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\">" + Run("Inserted ")
+                + "<w:r><w:endnoteReference w:id=\"1\"/></w:r>" + Run(" Kept") + "</w:ins>" + Run(" After"))}</w:p>",
+            new WmlToHtmlConverterSettings
+            {
+                FabricateCssClasses = fabricateCssClasses,
+                RenderPagination = mode,
+                RenderFootnotesAndEndnotes = true,
+                RenderTrackedChanges = true,
+            });
+        AssertNoAnchorInsideAnother(html, Url, "Before ", " Middle ", "Inserted ", " Kept", " After");
+        Assert.Equal("Inserted i Kept", Assert.Single(html.Descendants(Xhtml.ins)).Value);
+        // The note's own anchors are as they were.
+        var footnote = Assert.Single(html.Descendants(Xhtml.a), a => HasClass(a, "footnote-ref"));
+        Assert.Equal("fn-ref-1", (string?)footnote.Attribute("id"));
+        Assert.Equal("1", (string?)footnote.Attribute("data-footnote-id"));
+        Assert.Equal(mode == PaginationMode.Paginated ? null : "#fn-1", (string?)footnote.Attribute("href"));
+        Assert.Equal("1", footnote.Value);
+        var endnote = Assert.Single(html.Descendants(Xhtml.a), a => HasClass(a, "endnote-ref"));
+        Assert.Equal("en-ref-1", (string?)endnote.Attribute("id"));
+        // The text reads in its order.
+        var paragraph = TextSpan(html, "Before ").Ancestors(Xhtml.p).First();
+        Assert.Equal("Before 1 Middle Inserted i Kept After", paragraph.Value);
+    }
+
+    // A contents entry with a footnote reference in its label: the link is split inside the box that lays the entry out at
+    // its leader tab, and the box that the leader fills stays an item of that box, so it still reaches the tab stop.
+    [Theory]
+    [MemberData(nameof(FormsAndModes))]
+    public void ANoteReferenceInAContentsEntryLeavesTheLeaderTabLaidOut(string form, bool fabricateCssClasses, PaginationMode mode)
+    {
+        var entry = Run("Label", Props(HyperlinkStyle)) + FootnoteReference + Run(" More", Props(HyperlinkStyle))
+            + $"<w:r>{Props(HyperlinkStyle)}<w:tab/></w:r>" + Run("7");
+        var html = Render($"<w:p>{TocTabs}{BeginContents}{LinkIn(form, "#_Toc1", entry)}{EndOfField}</w:p>{Heading}",
+            new WmlToHtmlConverterSettings
+            {
+                FabricateCssClasses = fabricateCssClasses,
+                RenderPagination = mode,
+                RenderFootnotesAndEndnotes = true,
+            });
+        AssertNoAnchorInsideAnother(html, "#_Toc1", "Label", " More", "7");
+        var tab = Assert.Single(html.Descendants(), e => e.Attribute("data-docx-tab") != null);
+        Assert.Equal("#_Toc1", (string?)NearestLink(tab)?.Attribute("href"));
+        var leaderBox = tab.Ancestors().First(e => Declarations(html, e).Contains("flex-grow: 1"));
+        Assert.Contains("display: inline-flex", Declarations(html, leaderBox.Parent!));
+    }
+
+    [Theory]
+    [MemberData(nameof(FormsAndModes))]
+    public void ACommentMarkerInsideALinkLeavesTheTextAfterItInTheLink(string form, bool fabricateCssClasses, PaginationMode mode)
+    {
+        var html = Render($"<w:p>{LinkIn(form, Url, Run("Before ") + "<w:commentRangeStart w:id=\"0\"/>" + Run("Commented")
+                + "<w:commentRangeEnd w:id=\"0\"/><w:r><w:commentReference w:id=\"0\"/></w:r>" + Run(" After"))}</w:p>",
+            new WmlToHtmlConverterSettings
+            {
+                FabricateCssClasses = fabricateCssClasses,
+                RenderPagination = mode,
+                RenderComments = true,
+            });
+        AssertNoAnchorInsideAnother(html, Url, "Before ", "Commented", " After");
+        var marker = Assert.Single(html.Descendants(Xhtml.a), a => (string?)a.Attribute("id") == "comment-ref-0");
+        Assert.True(HasClass(marker, "comment-marker"));
+        Assert.Equal("#comment-0", (string?)marker.Attribute("href"));
+        Assert.Equal("[0]", marker.Value);
+        var paragraph = TextSpan(html, "Before ").Ancestors(Xhtml.p).First();
+        Assert.Equal("Before Commented[0] After", paragraph.Value);
     }
 }

@@ -31,7 +31,9 @@ public class RightTabLeaderLineTests
     {
         var tabRPr = variant switch
         {
-            "underline" or "toc-link-underline" => "<w:rPr><w:u w:val=\"single\"/></w:rPr>",
+            "underline" => "<w:rPr><w:u w:val=\"single\"/></w:rPr>",
+            // The link's underline in a contents entry comes from the Hyperlink character style.
+            "toc-link-underline" => "<w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr>",
             "double-underline" => "<w:rPr><w:u w:val=\"double\" w:color=\"FF0000\"/></w:rPr>",
             "words-underline" => "<w:rPr><w:u w:val=\"words\"/></w:rPr>",
             "strike" => "<w:rPr><w:strike/></w:rPr>",
@@ -85,7 +87,8 @@ public class RightTabLeaderLineTests
                 "</w:body></w:document>");
             Write(main.AddNewPart<StyleDefinitionsPart>(),
                 $"<w:styles xmlns:w=\"{WNs}\"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii=\"Times New Roman\" w:hAnsi=\"Times New Roman\"/>" +
-                "<w:sz w:val=\"24\"/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>");
+                "<w:sz w:val=\"24\"/></w:rPr></w:rPrDefault></w:docDefaults>" +
+                "<w:style w:type=\"character\" w:styleId=\"Hyperlink\"><w:name w:val=\"Hyperlink\"/><w:rPr><w:u w:val=\"single\"/></w:rPr></w:style></w:styles>");
             Write(main.AddNewPart<DocumentSettingsPart>(), $"<w:settings xmlns:w=\"{WNs}\"/>");
         }
         return ms.ToArray();

@@ -4111,20 +4111,62 @@ namespace Docxodus
         /// Hyperlink character style is blue and underlined by that style), so the link turns off the
         /// browser's own link colour and underline (issue #1869). A target a browser would run as script
         /// leaves the link without an <c>href</c> (issue #1880). An empty link keeps a text node, so it
-        /// does not serialize self-closed.</summary>
-        private static XElement DocumentLink(XElement a)
+        /// does not serialize self-closed. An anchor cannot hold another: an HTML parser ends the link at
+        /// the anchor a note reference or a comment marker in its text renders as, and the link's text
+        /// after it is no link. So the link is split around such an anchor into pieces, each with the
+        /// link's target and style, and the anchor stays as it is (issue #1878).</summary>
+        private static object DocumentLink(XElement a)
         {
             if (a.Attribute("href") is { } href && Internal.LinkTarget.IsScript(href.Value))
                 href.Remove();
-            if (!a.Nodes().Any())
-                a.Add(new XText(""));
-            a.AddAnnotation(WordHyperlinkAnchor.Instance);
-            a.AddAnnotation(new Dictionary<string, string>
+            if (!a.Descendants(Xhtml.a).Any())
+                return Piece(a);
+            var attributes = a.Attributes().ToList();
+            return Around(TakeNodes(a));
+
+            // Each stretch of content with no anchor in it becomes a piece of the link; an element that holds one
+            // is split in its turn, and the anchor itself is left alone.
+            List<XNode> Around(List<XNode> nodes) => nodes
+                .GroupAdjacent(HoldsAnchor)
+                .SelectMany(group => group.Key ? group.Select(Split) : new XNode[] { Piece(new XElement(Xhtml.a, attributes, group)) })
+                .ToList();
+
+            XNode Split(XNode node)
             {
-                { "color", "inherit" },
-                { "text-decoration", "none" },
-            });
-            return a;
+                if (node is not XElement e || e.Name == Xhtml.a)
+                    return node;
+                var children = TakeNodes(e);
+                // A flex box's items, such as the box a tab's leader fills, keep their place: the piece goes inside each.
+                e.Add(IsFlexBox(e) ? children.Select(child => HoldsAnchor(child) ? Split(child) : Inside(child)) : Around(children));
+                return e;
+            }
+
+            XNode Inside(XNode item)
+            {
+                if (item is not XElement e)
+                    return Piece(new XElement(Xhtml.a, attributes, item));
+                if (e.Nodes().Any())
+                    e.Add(Piece(new XElement(Xhtml.a, attributes, TakeNodes(e))));
+                return e;
+            }
+
+            static bool HoldsAnchor(XNode node) => node is XElement e && e.DescendantsAndSelf(Xhtml.a).Any();
+
+            static bool IsFlexBox(XElement e) =>
+                e.Annotation<Dictionary<string, string>>()?.TryGetValue("display", out var display) == true && display.Contains("flex");
+
+            static XElement Piece(XElement link)
+            {
+                if (!link.Nodes().Any())
+                    link.Add(new XText(""));
+                link.AddAnnotation(WordHyperlinkAnchor.Instance);
+                link.AddAnnotation(new Dictionary<string, string>
+                {
+                    { "color", "inherit" },
+                    { "text-decoration", "none" },
+                });
+                return link;
+            }
         }
 
         /// <summary>Marks the <c>&lt;a&gt;</c> a <c>w:hyperlink</c> renders as, as opposed to the
@@ -6088,14 +6130,14 @@ namespace Docxodus
         /// the tab's advance and its line's height do not change, and a leader keeps the tab's
         /// own bottom border. A words-only underline skips the tab, as it skips spaces; a cached
         /// TOC result drops its link underline here as <see cref="ApplyFieldResultPresentation"/>
-        /// does for the run's text.
+        /// does for the run's text, and keeps one the run sets itself.
         /// </summary>
         private static void AddTabLines(XElement tab, XElement tabSpan)
         {
             if (tab.Parent is not { } run || run.Name != W.r || run.Element(W.rPr) is not { } rPr)
                 return;
             var lines = GetRunLines(run, rPr);
-            if (lines.Underline != null && !lines.UnderlinesWordsOnly && !IsTocLinkResult(run))
+            if (lines.Underline != null && !lines.UnderlinesWordsOnly && (!IsTocLinkResult(run) || SetsItself(run, DirectUnderline)))
                 tabSpan.Add(TabLine("0.05em", lines.Underline, lines.HeavyUnderline, lines.UnderlineColor));
             if (lines.Strike != null)
                 tabSpan.Add(TabLine("-0.3em", lines.Strike, false, null));
@@ -12908,8 +12950,9 @@ namespace Docxodus
         /// <summary>The <c>&lt;a&gt;</c> a HYPERLINK field's result renders in, the field simple or complex. An
         /// anchor cannot hold another: a bookmark target inside the link keeps its id on a span, and a
         /// w:hyperlink inside the result gives up its own link. The anchors generated for note references
-        /// and comment markers stay as they are. <paramref name="target"/> is where it goes; null for nowhere.</summary>
-        private static XElement HyperlinkFieldLink(string? target, object content)
+        /// and comment markers stay as they are, and the link is split around them (see
+        /// <see cref="DocumentLink"/>). <paramref name="target"/> is where it goes; null for nowhere.</summary>
+        private static object HyperlinkFieldLink(string? target, object content)
         {
             var a = target is { } href
                 ? new XElement(Xhtml.a, new XAttribute("href", href), content)

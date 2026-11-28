@@ -354,14 +354,14 @@ public class RevisedPageFieldRenderingTests
     }
 
     // The anchors the converter generates inside a link, for a note reference or a comment marker,
-    // stay anchors: the paginator and the editor find them by their attributes.
+    // stay anchors: the paginator and the editor find them by their attributes. (The link is split
+    // around them, so they sit beside its pieces rather than inside it, issue #1878.)
     [Fact]
     public void ANoteReferenceInsideAHyperlinkFieldKeepsItsAnchor()
     {
         var body = Body(HyperlinkField(Text("Lunar") + "<w:r><w:footnoteReference w:id=\"1\"/></w:r>" + Text(" desk")));
 
-        var link = Named(body, "a").First();
-        var reference = Assert.Single(Named(link, "a"));
+        var reference = Assert.Single(Named(body, "a"), a => a.Attribute("data-footnote-id") != null);
         Assert.Equal("1", (string?)reference.Attribute("data-footnote-id"));
         Assert.Equal("#fn-1", (string?)reference.Attribute("href"));
     }
@@ -372,7 +372,7 @@ public class RevisedPageFieldRenderingTests
         var body = Body(HyperlinkField("<w:commentRangeStart w:id=\"7\"/>" + Text("Lunar") + "<w:commentRangeEnd w:id=\"7\"/>"
             + "<w:r><w:commentReference w:id=\"7\"/></w:r>" + Text(" desk")), commentRenderMode: 0);
 
-        var marker = Assert.Single(Named(Named(body, "a").First(), "a"));
+        var marker = Assert.Single(Named(body, "a"), a => ((string?)a.Attribute("class"))?.Contains("comment-marker") == true);
         Assert.Contains("comment-marker", (string?)marker.Attribute("class"));
         Assert.Equal("#comment-7", (string?)marker.Attribute("href"));
     }
