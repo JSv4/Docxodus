@@ -156,4 +156,24 @@ public class WmlToHtmlConverterStoryFieldLinkTests
             new WmlToHtmlConverterSettings());
         Assert.Contains("Test", html.Descendants().First(e => e.Name.LocalName == "body").Value);
     }
+
+    // Control: a text box inside a field's result is a story of its own, but the field resumes after it — the text
+    // after the box is still the link's.
+    [Theory]
+    [InlineData(PaginationMode.None)]
+    [InlineData(PaginationMode.Paginated)]
+    public void AFieldResultResumesAfterATextBoxInsideIt(PaginationMode mode)
+    {
+        var link = "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>"
+            + "<w:r><w:instrText xml:space=\"preserve\"> HYPERLINK \"https://example.test/around\" </w:instrText></w:r>"
+            + "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>" + Run("BeforeBox") + TextBox(Run("Boxed")) + Run("AfterBox")
+            + "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>";
+        var html = RenderStories($"<w:p>{link}</w:p>", Run("NoteOne"), Run("NoteTwo"), $"<w:p>{Run("Header")}</w:p>", mode);
+        foreach (var text in new[] { "BeforeBox", "AfterBox" })
+        {
+            var span = Assert.Single(html.Descendants(), e => e.Name.LocalName == "span" && !e.HasElements && e.Value == text);
+            Assert.Equal("https://example.test/around",
+                (string?)span.Ancestors().First(a => a.Name.LocalName == "a" && a.Attribute("href") != null).Attribute("href"));
+        }
+    }
 }

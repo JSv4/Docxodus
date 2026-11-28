@@ -188,7 +188,7 @@ namespace Docxodus
             root.RemoveAnnotations<FieldTypes>();
             foreach (var element in root.DescendantsAndSelf())
                 element.RemoveAnnotations<Stack<FieldElementTypeInfo>>();
-            // Each note, comment and text box is a story of its own, so a field left open in one (malformed
+            // Each note and text box is a story of its own (a comment too, should its part be annotated), so a field left open in one (malformed
             // markup) cannot run into the next: the walk starts each with no field open, and resumes the
             // enclosing story's fields after a text box. Ids keep increasing across the part, since the
             // instruction cache is keyed by id on the part's root (issue #1876).
