@@ -395,6 +395,7 @@ public class WmlToHtmlConverterFieldLinkStyleTests
     {
         var inInstruction = "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> IF </w:instrText></w:r>"
             + FieldWith("HYPERLINK \"https://example.test/condition\"", Run("Left"))
+            + Simple(" HYPERLINK \"https://example.test/condition-simple\" ", Run("Simple"))
             + "<w:r><w:instrText xml:space=\"preserve\"> = </w:instrText></w:r>" + FieldWith("PAGE", Run("7"))
             + "<w:r><w:instrText xml:space=\"preserve\"> \"Shown\" \"Hidden\" </w:instrText></w:r>"
             + "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>" + Run("Shown") + EndOfField;

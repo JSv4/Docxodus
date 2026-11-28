@@ -3946,8 +3946,9 @@ namespace Docxodus
                 return ReferenceFieldSpan(simpleReference, element.Elements(), CreateBorderDivs(wordDoc, settings, element.Elements()));
             }
 
-            // A simple HYPERLINK field is a link, as the complex form is (issue #1870).
-            if (element.Name == W.fldSimple && !IsInsideLink(element)
+            // A simple HYPERLINK field is a link, as the complex form is (issue #1870), unless it only feeds
+            // another field's instruction.
+            if (element.Name == W.fldSimple && !IsInsideLink(element) && !InFieldInstruction(element)
                 && (string?)element.Attribute(W.instr) is { } simpleInstr && IsHyperlinkField(simpleInstr))
             {
                 return HyperlinkFieldLink(simpleInstr, CreateBorderDivs(wordDoc, settings, element.Elements()));
