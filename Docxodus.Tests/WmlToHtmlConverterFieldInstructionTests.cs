@@ -223,4 +223,79 @@ public class WmlToHtmlConverterFieldInstructionTests
         Assert.All(Shown(html, "Body", "Deleted"), text => Assert.Equal("Gone", text));
         Assert.Equal("https://example.test/deleted", Href(html, "Gone"));
     }
+
+    private static string BodyOnly(string story, string content) => story == "Body" ? content : "";
+
+    private static string Escaped(string text) => new XText(text).ToString();
+
+    private static XElement RenderBody(string content, bool trackedChanges = false, bool stampReferences = false) =>
+        Render(story => BodyOnly(story, content), PaginationMode.None, stampReferences, stampPages: false, trackedChanges);
+
+    // A nested result is the address as written, inside the code's quotes or as the whole operand: a path's
+    // backslashes, a share's leading pair and a quote in a query are text, not the code's escapes and quoting.
+    [Theory]
+    [InlineData(@"C:\Docs\file.pdf", true)]
+    [InlineData(@"\\server\share\doc.pdf", true)]
+    [InlineData("https://example.test/?q=\"x\"&y=1", true)]
+    [InlineData("https://example.test/bare", false)]
+    public void ANestedResultIsReadLiterallyInALinksAddress(string address, bool quoted)
+    {
+        var quote = quoted ? "\"" : "";
+        var html = RenderBody(Labelled("Body", "Path", Field(Code($" HYPERLINK {quote}")
+            + Field(Code(" MERGEFIELD Url "), $"<w:r><w:t xml:space=\"preserve\">{Escaped(address)}</w:t></w:r>") + Code($"{quote} "), Run("Open"))));
+        Assert.All(Shown(html, "Body", "Path"), text => Assert.Equal("Open", text));
+        Assert.Equal(address, Href(html, "Open"));
+    }
+
+    // A live link's address leaves out a nested result tracked as removed: moved away (its text kept as w:t), or
+    // deleted. A move's destination counts once.
+    [Fact]
+    public void ARemovedNestedResultIsNoPartOfALinksAddress()
+    {
+        string Tracked(string name, int id, string content) =>
+            $"<w:{name} w:id=\"{id}\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\">{content}</w:{name}>";
+        string Merge(string url) => Field(Code(" MERGEFIELD Url "), Run(url));
+        string Link(string content, string text) => Field(Code(" HYPERLINK \"") + content + Code("\" "), Run(text));
+        var html = RenderBody(
+            Labelled("Body", "Moved", Link(Tracked("moveFrom", 61, Merge("https://example.test/moved"))
+                + Tracked("moveTo", 62, Merge("https://example.test/moved")), "Moved"))
+            + Labelled("Body", "Away", Link(Tracked("moveFrom", 63, Merge("https://example.test/away"))
+                + Merge("https://example.test/live"), "Live"))
+            + Labelled("Body", "Replaced", Link(Tracked("del", 64, Field(Code(" MERGEFIELD Old "), Run("https://example.test/old"))
+                    .Replace("w:instrText", "w:delInstrText").Replace("<w:t ", "<w:delText ").Replace("</w:t>", "</w:delText>"))
+                + Tracked("ins", 65, Merge("https://example.test/new")), "New")),
+            trackedChanges: true);
+        Assert.Equal("https://example.test/moved", Href(html, "Moved"));
+        Assert.Equal("https://example.test/live", Href(html, "Live"));
+        Assert.Equal("https://example.test/new", Href(html, "New"));
+    }
+
+    // A nested result that is empty text leaves the address empty: no target, as with no result at all.
+    [Fact]
+    public void AnEmptyNestedResultGivesALinkNoAddress()
+    {
+        var html = RenderBody(Labelled("Body", "Empty", Field(Code(" HYPERLINK \"")
+            + Field(Code(" MERGEFIELD Url "), "<w:r><w:t></w:t></w:r>") + Code("\" "), Run("Nowhere"))));
+        Assert.Null(Href(html, "Nowhere"));
+    }
+
+    // A simple field's content is its result: in a link's code it gives the address, and does not show.
+    [Fact]
+    public void ASimpleFieldInALinksCodeGivesItsAddress()
+    {
+        var html = RenderBody(Labelled("Body", "Simple", Field(Code(" HYPERLINK \"")
+            + $"<w:fldSimple w:instr=\" MERGEFIELD Url \">{Run("https://example.test/simple")}</w:fldSimple>" + Code("\" "), Run("Visit"))));
+        Assert.All(Shown(html, "Body", "Simple"), text => Assert.Equal("Visit", text));
+        Assert.Equal("https://example.test/simple", Href(html, "Visit"));
+    }
+
+    // A reference whose code holds a field names the bookmark its code reads with that field's result.
+    [Fact]
+    public void AReferenceNamesTheBookmarkItsCodeGives()
+    {
+        var html = RenderBody(Labelled("Body", "Cite", Field(Code(" REF Mark") + NestedPage + Code(" \\h "), Run("Cited"))),
+            stampReferences: true);
+        var reference = Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-field") == "REF");
+        Assert.Equal("Mark1", (string?)reference.Attribute("data-field-target"));
+    }
 }

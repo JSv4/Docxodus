@@ -93,20 +93,22 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// The code of field <paramref name="id"/> as Word evaluates it to run the field: the code's own text, with
-        /// each field nested in it replaced by that field's cached result, so a <c>HYPERLINK</c> whose address is a
-        /// <c>MERGEFIELD</c> points to the merged address. <see cref="InstrText"/> keeps a nested field's code instead,
-        /// in braces. Only results show through: a field nested in a nested field's code adds nothing.
+        /// The code of field <paramref name="id"/> as Word reads it to run the field, in order: the code's own text, and in
+        /// place of each field nested in it that field's cached result (<c>Result</c> true), so a <c>HYPERLINK</c> whose
+        /// address is a <c>MERGEFIELD</c> points to the merged address. A simple field's content is its result.
+        /// <see cref="InstrText"/> keeps a nested field's code instead, in braces. Only results show through: a field
+        /// nested in a nested field's code adds nothing, and nor does a live field's nested result that is tracked as
+        /// removed (in a <c>w:del</c> or <c>w:moveFrom</c>).
         /// </summary>
-        internal static string EvaluatedInstrText(XElement root, int id)
+        internal static List<(string Text, bool Result)> EvaluatedInstrText(XElement root, int id)
         {
+            var pieces = new List<(string Text, bool Result)>();
             var cached = root.Annotation<Dictionary<int, List<XElement>>>();
             if (cached == null || !cached.TryGetValue(id, out var elements))
-                return "";
+                return pieces;
             // As InstrText reads a deleted field's code from w:delInstrText, a deleted field's nested results are
-            // w:delText.
+            // w:delText, and a moved-away field's are the w:t its move source keeps.
             var deletedField = IsDeletedField(root, id);
-            var code = new StringBuilder();
             foreach (var element in elements)
             {
                 bool nested = false, shown = true;
@@ -117,11 +119,19 @@ namespace Docxodus
                     nested = true;
                     shown &= info.FieldElementType == FieldElementTypeEnum.Result;
                 }
-                if (nested ? shown && (element.Name == W.t || (deletedField && element.Name == W.delText))
-                    : element.Name == W.instrText || (deletedField && element.Name == W.delInstrText))
-                    code.Append(element.Value);
+                var result = nested || (element.Name == W.t && element.Ancestors(W.fldSimple).Any(simple =>
+                    simple.Annotation<Stack<FieldElementTypeInfo>>()?.Any(info => info.Id == id) == true));
+                var text = !result ? element.Name == W.instrText || (deletedField && element.Name == W.delInstrText)
+                    : shown && (element.Name == W.t || (deletedField && element.Name == W.delText))
+                        && (deletedField || !element.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom));
+                if (!text)
+                    continue;
+                if (pieces.Count > 0 && pieces[^1].Result == result)
+                    pieces[^1] = (pieces[^1].Text + element.Value, result);
+                else
+                    pieces.Add((element.Value, result));
             }
-            return code.ToString();
+            return pieces;
         }
 
         /// <summary>

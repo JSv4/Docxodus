@@ -3950,7 +3950,7 @@ namespace Docxodus
             if (element.Name == W.fldSimple && !IsInsideLink(element) && !InFieldInstruction(element)
                 && (string?)element.Attribute(W.instr) is { } simpleInstr && IsHyperlinkField(simpleInstr))
             {
-                return HyperlinkFieldLink(simpleInstr, CreateBorderDivs(wordDoc, settings, element.Elements()));
+                return HyperlinkFieldLink(HyperlinkInstruction.Target(simpleInstr), CreateBorderDivs(wordDoc, settings, element.Elements()));
             }
 
             // Transform smart tags and simple fields.
@@ -12742,6 +12742,9 @@ namespace Docxodus
 
                     var instrText = FieldRetriever.InstrText(g.First().Ancestors().Last(), (int)key)
                         .TrimStart('{').TrimEnd('}');
+                    // The code as Word reads it, each nested field's result in place of that field (issue #1875).
+                    List<(string Text, bool Result)> Evaluated() =>
+                        FieldRetriever.EvaluatedInstrText(g.First().Ancestors().Last(), (int)key);
 
                     // Mark PAGE/NUMPAGES results so the paginator can substitute each page's real
                     // number: a header/footer is cloned onto every page, so the field's single
@@ -12765,7 +12768,11 @@ namespace Docxodus
                     }
 
                     // A cross-reference field, for an editor that keeps it whole (StampReferenceFields).
-                    if (settings.StampReferenceFields && Internal.ReferenceFieldInstr.TryParse(instrText) is { } reference)
+                    // A field nested in its code names the bookmark with its result ({ REF Mark{ PAGE } }); the
+                    // code holds a brace only then.
+                    if (settings.StampReferenceFields && Internal.ReferenceFieldInstr.TryParse(instrText) is { } raw
+                        && (!instrText.Contains('{') ? raw : Internal.ReferenceFieldInstr.TryParse(
+                            string.Concat(Evaluated().Select(piece => piece.Text)))) is { } reference)
                     {
                         // (a reference inside the result is marked in its turn, not one in the code)
                         var referenceContent = Nested();
@@ -12794,7 +12801,7 @@ namespace Docxodus
                     // Convert the field's own children, as a w:hyperlink does, so a tracked change,
                     // bookmark or comment range inside the link keeps its rendering. The link goes where
                     // Word's does: to the address a field nested in the code gives (issue #1875).
-                    return HyperlinkFieldLink(FieldRetriever.EvaluatedInstrText(g.First().Ancestors().Last(), (int)key), Nested());
+                    return HyperlinkFieldLink(HyperlinkInstruction.Target(Evaluated()), Nested());
                 })
                 .ToList();
 
@@ -12813,10 +12820,10 @@ namespace Docxodus
         /// <summary>The <c>&lt;a&gt;</c> a HYPERLINK field's result renders in, the field simple or complex. An
         /// anchor cannot hold another: a bookmark target inside the link keeps its id on a span, and a
         /// w:hyperlink inside the result gives up its own link. The anchors generated for note references
-        /// and comment markers stay as they are.</summary>
-        private static XElement HyperlinkFieldLink(string instruction, object content)
+        /// and comment markers stay as they are. <paramref name="target"/> is where it goes; null for nowhere.</summary>
+        private static XElement HyperlinkFieldLink(string? target, object content)
         {
-            var a = HyperlinkInstruction.Target(instruction) is { } href
+            var a = target is { } href
                 ? new XElement(Xhtml.a, new XAttribute("href", href), content)
                 : new XElement(Xhtml.a, content);
             foreach (var inner in a.Descendants(Xhtml.a).ToList())
