@@ -3953,13 +3953,15 @@ namespace Docxodus
                 && (string?)element.Attribute(W.instr) is { } simpleInstr && IsHyperlinkField(simpleInstr))
             {
                 return HyperlinkFieldLink(HyperlinkInstruction.Target(simpleInstr), (object?)ConvertLinkTabs(wordDoc, settings, element.Elements().ToList(), null)
-                    ?? CreateBorderDivs(wordDoc, settings, element.Elements()));
+                    ?? SimpleFieldContent(wordDoc, settings, element));
             }
 
             // Transform smart tags and simple fields.
             if (element.Name == W.smartTag || element.Name == W.fldSimple)
             {
-                return CreateBorderDivs(wordDoc, settings, element.Elements());
+                return element.Name == W.fldSimple
+                    ? SimpleFieldContent(wordDoc, settings, element)
+                    : CreateBorderDivs(wordDoc, settings, element.Elements());
             }
 
             // Transform tracked changes - insertions
@@ -4210,6 +4212,20 @@ namespace Docxodus
                 new XText(""));
             target.AddAnnotation(new Dictionary<string, string> { { "text-decoration", "none" } });
             return target;
+        }
+
+        /// <summary>A simple field's content. A complex field inside it converts as it does in a paragraph, so a
+        /// HYPERLINK there is a link and, with <see cref="WmlToHtmlConverterSettings.StampReferenceFields"/>, a reference
+        /// there is marked (issue #1878): the fields nested in it convert, the fields open around it do not again, as in
+        /// a revision wrapper (<see cref="ConvertRevisionContent"/>). In another field's instruction the content only
+        /// feeds that field, and converts element by element as before.</summary>
+        private static object SimpleFieldContent(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement fldSimple)
+        {
+            if (!fldSimple.Descendants(W.fldChar).Any() || InFieldInstruction(fldSimple))
+                return CreateBorderDivs(wordDoc, settings, fldSimple.Elements());
+            // The rollup reaches the simple field before its content, so its stack holds only the fields open around it.
+            return ConvertContentThatCanContainFields(wordDoc, settings, fldSimple.Elements(),
+                fldSimple.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()?.Max(info => (int?)info.Id));
         }
 
         /// <summary>Whether an element renders inside an HTML link: a <c>w:hyperlink</c>, or the

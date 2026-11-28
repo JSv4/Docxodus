@@ -175,4 +175,57 @@ public class WmlToHtmlConverterLinkGapTests
         Assert.Contains("color: #0563C1", Declarations(html, TextSpan(html, "OutsideStyled")));
         Assert.Contains("color: #00B050", Declarations(html, TextSpan(html, "OutsideAccent")));
     }
+
+    // Item 2. A simple field's content converts with the field grouping a paragraph's does, so a complex field in it is
+    // a field: a HYPERLINK there is a link, and with StampReferenceFields a PAGEREF there is marked once.
+
+    [Theory]
+    [InlineData(PaginationMode.None)]
+    [InlineData(PaginationMode.Paginated)]
+    public void AComplexHyperlinkFieldInsideASimpleFieldIsALink(PaginationMode mode)
+    {
+        var html = Render($"<w:p>{Simple(" QUOTE \"x\" ", Run("Quoted ") + Complex($"HYPERLINK \"{Url}\"", Run("Linked")))}</w:p>",
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false, RenderPagination = mode });
+        var link = Assert.Single(html.Descendants(Xhtml.a));
+        Assert.Equal(Url, (string?)link.Attribute("href"));
+        Assert.Equal("Linked", link.Value);
+        Assert.Null(NearestLink(TextSpan(html, "Quoted ")));
+    }
+
+    // (An entry with a tab was already marked, by the tab layout a link's content gets; the control.)
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AComplexPageReferenceInASimpleContentsEntryIsMarkedOnce(bool tabbed)
+    {
+        var entry = Run("Entry", Props(HyperlinkStyle)) + (tabbed ? $"<w:r>{Props(HyperlinkStyle)}<w:tab/></w:r>" : "")
+            + Complex("PAGEREF _Toc1 \\h", Run("3"));
+        var html = Render($"<w:p>{TocTabs}{BeginContents}{Simple(" HYPERLINK \\l \"_Toc1\" ", entry)}{EndOfField}</w:p>{Heading}",
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false, StampReferenceFields = true });
+        var marker = Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-field") == "PAGEREF");
+        Assert.Equal("3", marker.Value);
+        Assert.Equal("#_Toc1", (string?)NearestLink(marker)?.Attribute("href"));
+    }
+
+    // The fields open around a simple field are converted by the content around it, not again inside it.
+    [Fact]
+    public void ASimpleFieldInsideAReferencesResultLeavesTheReferenceMarkedOnce()
+    {
+        var html = Render($"<w:p>{Complex("REF _Toc1 \\h", Simple(" QUOTE \"x\" ", Complex("PAGEREF _Toc1 \\h", Run("3"))))}</w:p>{Heading}",
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false, StampReferenceFields = true });
+        Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-field") == "REF");
+        Assert.Equal("3", Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-field") == "PAGEREF").Value);
+    }
+
+    // A simple field in another field's instruction only feeds it: a HYPERLINK field inside it is no link.
+    [Fact]
+    public void AComplexHyperlinkFieldInsideASimpleFieldInAnInstructionIsNoLink()
+    {
+        var html = Render("<w:p><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> IF </w:instrText></w:r>"
+            + Simple(" QUOTE \"x\" ", Complex($"HYPERLINK \"{Url}\"", Run("Left")))
+            + "<w:r><w:instrText xml:space=\"preserve\"> = \"Left\" \"Shown\" \"Hidden\" </w:instrText></w:r>"
+            + $"<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>{Run("Shown")}{EndOfField}</w:p>",
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false });
+        Assert.Empty(html.Descendants(Xhtml.a));
+    }
 }
