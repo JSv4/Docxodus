@@ -1402,13 +1402,12 @@ namespace Docxodus
             AnnotateOwningContentParts(wordDoc);
             XElement rootElement = wordDoc.MainDocumentPart!.GetXDocument().Root!;
             FieldRetriever.AnnotateWithFieldInfo(wordDoc.MainDocumentPart!);
-            if (htmlConverterSettings.StampReferenceFields && htmlConverterSettings.RenderFootnotesAndEndnotes)
+            // Every story the converter renders groups its complex fields as the body does, in every mode: a
+            // HYPERLINK field in a note, a header or a footer is a link (issue #1876).
+            if (htmlConverterSettings.RenderFootnotesAndEndnotes)
                 foreach (var part in new OpenXmlPart?[] { wordDoc.MainDocumentPart!.FootnotesPart, wordDoc.MainDocumentPart.EndnotesPart })
                     if (part != null) FieldRetriever.AnnotateWithFieldInfo(part);
-            // Complex running-story fields need the same grouping in flow and paginated output.
-            if (htmlConverterSettings.RenderHeadersAndFooters &&
-                (htmlConverterSettings.RenderPagination == PaginationMode.Paginated || htmlConverterSettings.StampPageNumberFields
-                    || htmlConverterSettings.StampReferenceFields))
+            if (htmlConverterSettings.RenderHeadersAndFooters)
                 foreach (var part in wordDoc.MainDocumentPart!.HeaderParts.Cast<OpenXmlPart>()
                     .Concat(wordDoc.MainDocumentPart.FooterParts))
                     FieldRetriever.AnnotateWithFieldInfo(part);
@@ -3649,7 +3648,7 @@ namespace Docxodus
         {
             var element = node as XElement;
             if (element == null) return null;
-            if (element.Attribute(HiddenFieldInstructionAttribute) != null) return null;
+            if (element.Attribute(HiddenFieldInstructionAttribute) != null) return settings.StampAnchors ? HiddenFieldCode(element) : null;
             if (element.Attribute(StyleReferenceAttribute) is { } referencedStyle)
                 return new XElement(Xhtml.span, new XAttribute("data-field", "STYLEREF"),
                     new XAttribute("data-field-style", referencedStyle.Value),
@@ -3951,7 +3950,8 @@ namespace Docxodus
             if (element.Name == W.fldSimple && !IsInsideLink(element) && !InFieldInstruction(element)
                 && (string?)element.Attribute(W.instr) is { } simpleInstr && IsHyperlinkField(simpleInstr))
             {
-                return HyperlinkFieldLink(simpleInstr, CreateBorderDivs(wordDoc, settings, element.Elements()));
+                return HyperlinkFieldLink(HyperlinkInstruction.Target(simpleInstr), (object?)ConvertLinkTabs(wordDoc, settings, element.Elements().ToList(), null)
+                    ?? CreateBorderDivs(wordDoc, settings, element.Elements()));
             }
 
             // Transform smart tags and simple fields.
@@ -4105,10 +4105,13 @@ namespace Docxodus
         /// <summary>Finishes the <c>&lt;a&gt;</c> of a link the document makes: a <c>w:hyperlink</c>, or the
         /// result of a HYPERLINK field. Word draws a link's text in its runs' own formatting (a run in the
         /// Hyperlink character style is blue and underlined by that style), so the link turns off the
-        /// browser's own link colour and underline (issue #1869). An empty link keeps a text node, so it
+        /// browser's own link colour and underline (issue #1869). A target a browser would run as script
+        /// leaves the link without an <c>href</c> (issue #1880). An empty link keeps a text node, so it
         /// does not serialize self-closed.</summary>
         private static XElement DocumentLink(XElement a)
         {
+            if (a.Attribute("href") is { } href && Internal.LinkTarget.IsScript(href.Value))
+                href.Remove();
             if (!a.Nodes().Any())
                 a.Add(new XText(""));
             a.AddAnnotation(WordHyperlinkAnchor.Instance);
@@ -4133,37 +4136,49 @@ namespace Docxodus
             XElement hyperlink)
         {
             var runs = hyperlink.Elements().ToList();
-            var alignedTabContent = ConvertAlignedTabRuns(wordDoc, settings, runs);
+            return ConvertLinkTabs(wordDoc, settings, runs, null) ?? ConvertInline(wordDoc, settings, runs);
+        }
+
+        /// <summary>A link's content laid out at its tabs, or null when none of its runs holds a tab. A cached TOC keeps
+        /// each entry's label, leader tab and page-number field inside one link, which Word writes as a w:hyperlink or as
+        /// a HYPERLINK field, complex or simple; whichever it is, run the same tab grouping used for direct paragraph
+        /// children, so the aligned segment retains the link instead of treating the tab as an unrelated inline glyph
+        /// inside it, and the page number ends on the stop in every form (issue #1877).</summary>
+        /// <param name="outerField">The HYPERLINK field whose result <paramref name="runs"/> are: the fields nested in
+        /// it convert, the link's own field does not again.</param>
+        private static List<object?>? ConvertLinkTabs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+            List<XElement> runs, int? outerField)
+        {
+            var alignedTabContent = ConvertAlignedTabRuns(wordDoc, settings, runs, outerField);
             if (alignedTabContent != null) return alignedTabContent;
             var firstTabRun = runs.FirstOrDefault(run => run.Elements(W.tab).Any());
             if (firstTabRun == null)
-                return ConvertInline(wordDoc, settings, runs);
-
-            // A cached TOC keeps its label, leader tab, and page-number field inside one
-            // w:hyperlink. Run the same tab grouping used for direct paragraph children so the
-            // aligned segment retains the OOXML target instead of treating the tab as an
-            // unrelated inline glyph inside the link.
+                return null;
             var runsPrecedingTab = runs.TakeWhile(run => run != firstTabRun).ToList();
-            var content = TransformElementsPrecedingTab(
-                wordDoc,
-                settings,
-                runsPrecedingTab,
-                firstTabRun);
-            content.AddRange(ConvertInline(wordDoc, settings, runs.SkipWhile(run => run != firstTabRun).Skip(1)));
+            // Cut at the first tab only where that is harmless: not across a field the converter keeps whole, whose
+            // marker or link would be made twice, nor after a line break, whose two lines the tab's box would hold
+            // with the tab beside the first. The runs then convert as they do without a tab.
+            if (CutsAWrappedField(settings, firstTabRun, outerField) ||
+                runsPrecedingTab.Any(run => run.DescendantsAndSelf().Any(e => e.Name == W.br || e.Name == W.cr)))
+                return null;
+            var content = TransformElementsPrecedingTab(wordDoc, settings, runsPrecedingTab, firstTabRun, outerField);
+            content.AddRange(ConvertInline(wordDoc, settings, runs.SkipWhile(run => run != firstTabRun).Skip(1), outerField));
             return content;
         }
 
         /// <summary>Convert siblings one by one; with <see cref="WmlToHtmlConverterSettings.StampReferenceFields"/>,
-        /// with the references among them marked. A link's content starts below the fields that hold the link.</summary>
+        /// with the references among them marked. A link's content starts below the fields that hold the link. The
+        /// result of the field <paramref name="outerField"/> converts the fields nested in it, as it does outside a
+        /// tab's segment.</summary>
         private static IEnumerable<object?> ConvertInline(WordprocessingDocument wordDoc,
-            WmlToHtmlConverterSettings settings, IEnumerable<XElement> siblings)
+            WmlToHtmlConverterSettings settings, IEnumerable<XElement> siblings, int? outerField = null)
         {
-            if (!settings.StampReferenceFields)
+            if (!settings.StampReferenceFields && outerField == null)
                 return siblings.Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
             var elements = siblings.ToList();
             var link = elements.FirstOrDefault()?.Parent is { } parent && parent.Name == W.hyperlink ? parent : null;
             return Flat(ConvertContentThatCanContainFields(wordDoc, settings, elements,
-                link?.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()?.Select(field => (int?)field.Id).Max()));
+                outerField ?? link?.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()?.Select(field => (int?)field.Id).Max()));
 
             static IEnumerable<object?> Flat(object? content) =>
                 content is IEnumerable<object?> parts ? parts.SelectMany(Flat) : new[] { content };
@@ -4289,8 +4304,9 @@ namespace Docxodus
             // greater id than every one of them, so grouping above the greatest converts only whole fields (a
             // marker built around part of a field would be wrong, issue #1272). So the fields in a wrapper inside
             // another's result, as a contents entry is under tracked changes, convert as they do outside revision
-            // marks (issue #1870). Content in the instruction of an open field only feeds it, and converts run by
-            // run as before.
+            // marks (issue #1870). Content in the instruction of an open field only feeds it: it converts element by
+            // element, with what a field nested there would show hidden, and no page-number or reference marker
+            // (issue #1875).
             var open = new[] { element, element.DescendantsAndSelf().Last() }
                 .SelectMany(e => e.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()
                     ?? Enumerable.Empty<FieldRetriever.FieldElementTypeInfo>())
@@ -8106,12 +8122,31 @@ namespace Docxodus
             return wrapper;
         }
 
+        /// <summary>Each stretch between tabs converts its fields on its own, so a field open across a tab is cut in
+        /// two. That is harmless for a field drawn as its result's runs, but not for one the converter wraps whole: a
+        /// HYPERLINK's link, a page-number marker or, with <see cref="WmlToHtmlConverterSettings.StampReferenceFields"/>,
+        /// a cross-reference's marker. <paramref name="outerField"/>, the field whose result the stretches are, stays
+        /// whole: its caller wraps it around all of them.</summary>
+        private static bool CutsAWrappedField(WmlToHtmlConverterSettings settings, XElement tabRun, int? outerField)
+        {
+            var stack = tabRun.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()?
+                .Where(info => info.Id > (outerField ?? 0)).ToList();
+            if (stack is not { Count: > 0 }) return false;
+            var instrText = FieldRetriever.InstrText(tabRun.Ancestors().Last(), stack.Min(info => info.Id))
+                .TrimStart('{').TrimEnd('}');
+            return FieldRetriever.ParseField(instrText).FieldType == "HYPERLINK" ||
+                Internal.PageNumberFieldInstr.TryParse(instrText) != null ||
+                settings.StampReferenceFields && Internal.ReferenceFieldInstr.TryParse(instrText) != null;
+        }
+
         /// <summary>Keep each plain left/right tab segment pinned to its stop, including
         /// the following text in a right-aligned segment so real browser glyph widths are absorbed
         /// by the tab. Complex fields, breaks, and other inline containers retain their field-aware
         /// rendering path.</summary>
+        /// <param name="outerField">The field whose result <paramref name="content"/> is, if it is one: the fields
+        /// nested in it convert, that field does not again.</param>
         private static List<object?>? ConvertAlignedTabRuns(WordprocessingDocument wordDoc,
-            WmlToHtmlConverterSettings settings, List<XElement> content)
+            WmlToHtmlConverterSettings settings, List<XElement> content, int? outerField = null)
         {
             var paragraph = content.FirstOrDefault()?.Ancestors(W.p).FirstOrDefault();
             if (paragraph != null && IsBidi(paragraph)) return null;
@@ -8134,17 +8169,19 @@ namespace Docxodus
                 : e.Name != W.r || e.Elements().Any(c =>
                     c.Name != W.rPr && c.Name != W.t && c.Name != W.delText && c.Name != W.tab && c.Name != W.noBreakHyphen &&
                     c.Name != W.instrText && !(c.Name == W.fldChar && !c.HasElements));
-            // Each stretch between tabs converts its fields on its own, so a field open across a tab
-            // is cut in two. That is harmless for a field drawn as its result's runs, but not for one
-            // the converter wraps whole: a HYPERLINK's link or a page-number marker.
-            bool CutsAWrappedField(XElement tabRun)
+            // A right tab's following width runs to the paragraph's next tab or break, which can lie past this
+            // content: a link that ends after its tab while the paragraph's text goes on. The segment holds only the
+            // content, so it would take that text's width too and push the text past the stop (issue #1877).
+            bool RightTabAlignsTextPastContent()
             {
-                var stack = tabRun.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>();
-                if (stack is not { Count: > 0 }) return false;
-                var instrText = FieldRetriever.InstrText(tabRun.Ancestors().Last(), stack.Min(info => info.Id))
-                    .TrimStart('{').TrimEnd('}');
-                return FieldRetriever.ParseField(instrText).FieldType == "HYPERLINK" ||
-                    Internal.PageNumberFieldInstr.TryParse(instrText) != null;
+                if (paragraph == null || (string?)tabRuns[^1].Element(W.tab)!.Attribute(PtOpenXml.TabAlignment) != "right")
+                    return false;
+                var last = content[^1].DescendantsAndSelf().Last();
+                return paragraph.Descendants().SkipWhile(e => e != last).Skip(1)
+                    .Where(e => !e.AncestorsAndSelf().TakeWhile(a => a != paragraph).Any(a =>
+                        a.Name == W.txbxContent || a.Attribute(HiddenFieldInstructionAttribute) != null))
+                    .TakeWhile(e => e.Name != W.tab && e.Name != W.br && e.Name != W.cr)
+                    .Any(e => (e.Name == W.t || e.Name == W.delText) && e.Value.Length > 0);
             }
             // Text that wraps before a tab keeps the run-aware path, unless it is the last tab and a
             // right one whose wrapped text can wrap inside its segment (see below).
@@ -8152,9 +8189,10 @@ namespace Docxodus
                 r.Element(W.tab)!.Attribute(TabFollowingTextWrapsAttribute) != null ||
                 r.Element(W.tab)!.Attribute(PtOpenXml.TabAfterWrappedText) != null &&
                     (r != tabRuns[^1] || r.Element(W.tab)!.Attribute(TabWrappedSegmentWidthAttribute) == null);
-            if (tabRuns.Count == 0 || content.Any(Unsupported) || tabRuns.Any(CutsAWrappedField) ||
+            if (tabRuns.Count == 0 || content.Any(Unsupported) || tabRuns.Any(r => CutsAWrappedField(settings, r, outerField)) ||
                 tabRuns.Any(r => r.Elements().Count(e => e.Name != W.rPr) != 1 || AfterUnsupportedWrap(r) ||
-                    ((string?)r.Element(W.tab)!.Attribute(PtOpenXml.TabAlignment) ?? "left") is not ("left" or "right")))
+                    ((string?)r.Element(W.tab)!.Attribute(PtOpenXml.TabAlignment) ?? "left") is not ("left" or "right")) ||
+                RightTabAlignsTextPastContent())
                 return null;
 
             var result = new List<object?>();
@@ -8170,7 +8208,7 @@ namespace Docxodus
                 var tabIndex = content.FindIndex(start, e => e.Element(W.tab) != null);
                 if (tabIndex < 0)
                 {
-                    Emit(ConvertContentThatCanContainFields(wordDoc, settings, content.Skip(start)));
+                    Emit(ConvertContentThatCanContainFields(wordDoc, settings, content.Skip(start), outerField));
                     break;
                 }
                 var preceding = content.Skip(start).Take(tabIndex - start).ToList();
@@ -8178,7 +8216,7 @@ namespace Docxodus
                 var tab = tabRun.Element(W.tab)!;
                 if ((string?)tab.Attribute(PtOpenXml.TabAlignment) != "right")
                 {
-                    Emit(TransformElementsPrecedingTab(wordDoc, settings, preceding, tabRun));
+                    Emit(TransformElementsPrecedingTab(wordDoc, settings, preceding, tabRun, outerField));
                     start = tabIndex + 1;
                     continue;
                 }
@@ -8193,7 +8231,7 @@ namespace Docxodus
                 XElement TextSpan(List<XElement> runs)
                 {
                     var span = new XElement(Xhtml.span,
-                        ConvertContentThatCanContainFields(wordDoc, settings, runs));
+                        ConvertContentThatCanContainFields(wordDoc, settings, runs, outerField));
                     if (!span.Nodes().Any()) span.Add(new XText(""));
                     span.AddAnnotation(new Dictionary<string, string>
                     {
@@ -8212,7 +8250,7 @@ namespace Docxodus
                 var overhang = (decimal?)tab.Attribute(TabOverhangAttribute);
                 var wrappedWidth = (decimal?)tab.Attribute(TabWrappedSegmentWidthAttribute);
                 var segment = wrappedWidth is { } wrapped
-                    ? WrappedSegment(wordDoc, settings, preceding, tabSpan, followingSpan, wrapped, overhang ?? 0m)
+                    ? WrappedSegment(wordDoc, settings, preceding, tabSpan, followingSpan, wrapped, overhang ?? 0m, outerField)
                     : new XElement(Xhtml.span, TextSpan(preceding), tabSpan, followingSpan);
                 var segmentStyle = segment.Annotation<Dictionary<string, string>>() ?? new Dictionary<string, string>
                 {
@@ -8260,7 +8298,7 @@ namespace Docxodus
         /// text's last line, clipped where the following text begins (issue #1285).
         /// </summary>
         private static XElement WrappedSegment(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
-            List<XElement> preceding, XElement tabRun, XElement followingSpan, decimal width, decimal overhang)
+            List<XElement> preceding, XElement tabRun, XElement followingSpan, decimal width, decimal overhang, int? outerField)
         {
             var tabStyle = tabRun.Annotation<Dictionary<string, string>>()!;
             foreach (var flex in new[] { "flex-grow", "flex-shrink", "flex-basis", "min-width" })
@@ -8270,7 +8308,7 @@ namespace Docxodus
             tabRun.DescendantsAndSelf().First(e => e.Attribute("data-docx-tab") != null)
                 .Annotation<Dictionary<string, string>>()!["width"] = InchesCss(width);
 
-            var text = new XElement(Xhtml.span, ConvertContentThatCanContainFields(wordDoc, settings, preceding), tabRun);
+            var text = new XElement(Xhtml.span, ConvertContentThatCanContainFields(wordDoc, settings, preceding, outerField), tabRun);
             text.AddAnnotation(new Dictionary<string, string>
             {
                 { "display", "block" }, { "max-width", InchesCss(width - overhang) },
@@ -8294,7 +8332,7 @@ namespace Docxodus
         }
 
         private static List<object?> TransformElementsPrecedingTab(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
-            List<XElement> elementsPrecedingTab, XElement? firstTabRun)
+            List<XElement> elementsPrecedingTab, XElement? firstTabRun, int? outerField = null)
         {
             var tabElement = firstTabRun?.Elements(W.tab).FirstOrDefault();
             var tabWidth = tabElement != null
@@ -8315,7 +8353,7 @@ namespace Docxodus
                 .Sum();
             var totalWidth = precedingElementsWidth + tabWidth;
 
-            var txElementsPrecedingTab = ConvertInline(wordDoc, settings, elementsPrecedingTab).ToList();
+            var txElementsPrecedingTab = ConvertInline(wordDoc, settings, elementsPrecedingTab, outerField).ToList();
 
             // Process the tab element to get leader characters
             object? tabSpan = null;
@@ -12336,6 +12374,52 @@ namespace Docxodus
             return ResolvesField(prefix.ToString());
         }
 
+        /// <summary>Whether a field's code holds something a nested field would show: a nested field's result (from its
+        /// separate character on), or a simple field. That content is part of the code and does not show (issue #1875).
+        /// A nested field with no result, such as the data field a citation manager nests in its citation's code, shows
+        /// nothing either way.</summary>
+        private static bool HasFieldInInstruction(XElement root)
+        {
+            // For each open field: whether its separate character is still to come, and whether it is in a field's code.
+            Stack<(bool InCode, bool InOuterCode)>? open = null;
+            foreach (var element in root.Descendants())
+            {
+                var hidden = open?.Count > 0 && (open.Peek().InCode || open.Peek().InOuterCode);
+                if (element.Name == W.fldSimple && hidden) return true;
+                if (element.Name != W.fldChar) continue;
+                switch ((string?)element.Attribute(W.fldCharType))
+                {
+                    case "begin":
+                        (open ??= new()).Push((true, hidden));
+                        break;
+                    case "separate" when open?.Count > 0:
+                        if (open.Peek().InOuterCode) return true;
+                        open.Push((false, open.Pop().InOuterCode));
+                        break;
+                    case "end":
+                        open?.TryPop(out _);
+                        break;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>What a field nested in another field's code holds is hidden: Word shows only the outer field's
+        /// result. The session still counts the text there as the paragraph's, as it counts every run, so in HTML an editor
+        /// addresses (<see cref="WmlToHtmlConverterSettings.StampAnchors"/>) it renders as an empty field marker whose
+        /// <c>data-field-cached</c> holds that text, the text an editor counts for a field (as for a reference marker): the
+        /// editor's offsets stay the session's (issue #1875). Other HTML leaves it out.</summary>
+        private static XElement? HiddenFieldCode(XElement hidden)
+        {
+            if (InDeletedContent(hidden)) return null;
+            var paragraph = hidden.Ancestors(W.p).FirstOrDefault();
+            var text = hidden.Name != W.fldSimple ? DocxSession.TextOf(hidden)
+                : string.Concat(hidden.Descendants(W.r).Where(r => r.Ancestors(W.p).FirstOrDefault() == paragraph
+                    && !InDeletedContent(r)).Select(DocxSession.RunText));
+            return text.Length == 0 ? null : new XElement(Xhtml.span, new XAttribute("data-field", "code"),
+                new XAttribute("data-field-cached", text), new XText(""));
+        }
+
         private static bool InDeletedContent(XElement element) =>
             element.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom);
 
@@ -12360,16 +12444,21 @@ namespace Docxodus
             public string Kind => FieldKind(Instruction);
         }
 
+        // Resolves the fields the converter evaluates, and hides what a field nested in another field's code would
+        // show: Word shows a field's result only, and its code is fed by the nested field's result (issue #1875).
         private static void NormalizeFieldResults(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings)
         {
-            var parts = wordDoc.ContentParts().Where(part =>
+            var rendered = wordDoc.ContentParts().Where(part =>
                 !(part is HeaderPart or FooterPart && !settings.RenderHeadersAndFooters)
-                && !(part is FootnotesPart or EndnotesPart && !settings.RenderFootnotesAndEndnotes))
-                .Where(part => part.GetXDocument().Root is { } root && HasResolvableFields(root)).ToList();
+                && !(part is FootnotesPart or EndnotesPart && !settings.RenderFootnotesAndEndnotes)
+                && part.GetXDocument().Root != null).ToList();
+            var resolving = rendered.Where(part => HasResolvableFields(part.GetXDocument().Root!)).ToList();
+            var parts = rendered.Where(part => resolving.Contains(part) || HasFieldInInstruction(part.GetXDocument().Root!)).ToList();
             if (parts.Count == 0) return;
             // Main is also the source of running style references. Its field annotations are
             // always required by body conversion, even if it has no supported field of its own.
-            if (!parts.Contains(wordDoc.MainDocumentPart!)) parts.Insert(0, wordDoc.MainDocumentPart!);
+            // Hiding a field's code alone needs no other part.
+            if (resolving.Count > 0 && !parts.Contains(wordDoc.MainDocumentPart!)) parts.Insert(0, wordDoc.MainDocumentPart!);
             var fields = new List<RenderField>();
             foreach (var part in parts)
             {
@@ -12695,6 +12784,9 @@ namespace Docxodus
 
                     var instrText = FieldRetriever.InstrText(g.First().Ancestors().Last(), (int)key)
                         .TrimStart('{').TrimEnd('}');
+                    // The code as Word reads it, each nested field's result in place of that field (issue #1875).
+                    List<(string Text, bool Result)> Evaluated() =>
+                        FieldRetriever.EvaluatedInstrText(g.First().Ancestors().Last(), (int)key);
 
                     // Mark PAGE/NUMPAGES results so the paginator can substitute each page's real
                     // number: a header/footer is cloned onto every page, so the field's single
@@ -12718,10 +12810,14 @@ namespace Docxodus
                     }
 
                     // A cross-reference field, for an editor that keeps it whole (StampReferenceFields).
-                    if (settings.StampReferenceFields && Internal.ReferenceFieldInstr.TryParse(instrText) is { } reference)
+                    // A field nested in its code names the bookmark with its result ({ REF Mark{ PAGE } }); the
+                    // code holds a brace only then.
+                    if (settings.StampReferenceFields && Internal.ReferenceFieldInstr.TryParse(instrText) is { } raw
+                        && (!instrText.Contains('{') ? raw : Internal.ReferenceFieldInstr.TryParse(
+                            string.Concat(Evaluated().Select(piece => piece.Text)))) is { } reference)
                     {
-                        // (a reference inside the result is marked in its turn)
-                        var referenceContent = ConvertContentThatCanContainFields(wordDoc, settings, g, key);
+                        // (a reference inside the result is marked in its turn, not one in the code)
+                        var referenceContent = Nested();
                         if (!settings.ShowDeletedRevisionContent && FieldRetriever.IsDeletedField(g.First().Ancestors().Last(), (int)key))
                             return referenceContent;
                         return PreserveJoinedFieldSources(InsideRevision(ReferenceFieldSpan(reference, g, referenceContent)));
@@ -12730,9 +12826,16 @@ namespace Docxodus
                     // A field nested in the result converts as it would outside it: a HYPERLINK there, as a
                     // contents entry written as a field is, is a link (issue #1870), and with
                     // StampReferenceFields a reference there, as the entry's PAGEREF is, is marked. A field
-                    // nested in the instruction only feeds it; its content converts as it always has.
-                    object Nested() => g.GroupAdjacent(e => IsResultOf(e, (int)key))
-                        .Select(part => part.Key || settings.StampReferenceFields
+                    // nested in the instruction only feeds it: its content is hidden (NormalizeFieldResults,
+                    // HiddenFieldCode), and it is no link, page-number or reference marker, which the paginator
+                    // would fill in (issue #1875). The instruction converts element by element, so its bookmarks
+                    // and revision marks stay. A link's result lays out its tabs as a w:hyperlink's runs do
+                    // (issue #1877).
+                    object Nested(bool link = false) => g.GroupAdjacent(e => IsResultOf(e, (int)key))
+                        .Select(part => link && part.Key
+                            ? ConvertLinkTabs(wordDoc, settings, part.ToList(), key)
+                                ?? ConvertContentThatCanContainFields(wordDoc, settings, part, key)
+                            : part.Key
                             ? ConvertContentThatCanContainFields(wordDoc, settings, part, key)
                             : part.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m)))
                         .ToList();
@@ -12742,8 +12845,9 @@ namespace Docxodus
                         return Nested();
 
                     // Convert the field's own children, as a w:hyperlink does, so a tracked change,
-                    // bookmark or comment range inside the link keeps its rendering.
-                    return HyperlinkFieldLink(instrText, Nested());
+                    // bookmark or comment range inside the link keeps its rendering, and its tabs too. The link
+                    // goes where Word's does: to the address a field nested in the code gives (issue #1875).
+                    return HyperlinkFieldLink(HyperlinkInstruction.Target(Evaluated()), Nested(link: true));
                 })
                 .ToList();
 
@@ -12762,10 +12866,10 @@ namespace Docxodus
         /// <summary>The <c>&lt;a&gt;</c> a HYPERLINK field's result renders in, the field simple or complex. An
         /// anchor cannot hold another: a bookmark target inside the link keeps its id on a span, and a
         /// w:hyperlink inside the result gives up its own link. The anchors generated for note references
-        /// and comment markers stay as they are.</summary>
-        private static XElement HyperlinkFieldLink(string instruction, object content)
+        /// and comment markers stay as they are. <paramref name="target"/> is where it goes; null for nowhere.</summary>
+        private static XElement HyperlinkFieldLink(string? target, object content)
         {
-            var a = HyperlinkInstruction.Target(instruction) is { } href
+            var a = target is { } href
                 ? new XElement(Xhtml.a, new XAttribute("href", href), content)
                 : new XElement(Xhtml.a, content);
             foreach (var inner in a.Descendants(Xhtml.a).ToList())
@@ -13728,7 +13832,7 @@ namespace Docxodus
             var image = RenderImagePart(imagePart, element, imageHandler, settings, style, altText);
             if (image != null && containerElement.Name == WP.inline)
                 AlignPictureOnlyParagraph(image, element);
-            if (hyperlinkUri != null && image != null)
+            if (hyperlinkUri != null && image != null && !Internal.LinkTarget.IsScript(hyperlinkUri))
                 image = new XElement(XhtmlNoNamespace.a, new XAttribute(XhtmlNoNamespace.href, hyperlinkUri), image);
             return ApplyAnchorTextWrap(image, containerElement, settings);
         }
