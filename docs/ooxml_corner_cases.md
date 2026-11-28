@@ -10044,17 +10044,44 @@ Docxodus already hid what a nested field would show, but only in a part that als
 converter evaluates (a form field, TITLE, DOCPROPERTY or STYLEREF): the field-evaluation pass
 (`NormalizeFieldResults`, `ReadRenderableFields`) marks every run child and `w:fldSimple` inside another
 field's code hidden, and the run, tab-measurement, footnote-numbering and empty-paragraph paths all skip
-marked elements. That pass now also runs on every rendered story in which a field starts inside another
-field's code (`HasFieldInInstruction`). Field grouping (`ConvertContentThatCanContainFields`) converts an
-instruction element by element in every mode, a stamped reference field's included, so a PAGE or REF field there gets no page-number or reference
-marker, which the paginator would fill in; with `StampReferenceFields` it used to group the instruction's
-fields. A HYPERLINK field's target comes from `FieldRetriever.EvaluatedInstrText`, the code with each
-nested field's cached result in place of its code (a field nested in that field's own code adds nothing);
-kind detection and the page-number and reference parsers still read `FieldRetriever.InstrText`. Bookmarks,
-comment ranges and revision marks in a field's code are not run children, so the pass leaves them in place
-(a bookmark there stays a link target); a comment or note reference run there is hidden, as it already was
-in parts with evaluated fields. Not covered: text in
-a `w:t` placed directly in a field's code outside any nested field, and fields in the comments part. The
-IR reads a HYPERLINK field's code on its own (`IrReader`'s inline walker), as written, and is unchanged.
+marked elements. That pass now also runs on every rendered story in which a field's code holds a nested
+field's result or a simple field (`HasFieldInInstruction`); a nested field with no result, such as the data
+field a citation manager nests in each citation's code, shows nothing and does not start it. Field grouping
+(`ConvertContentThatCanContainFields`) converts an instruction element by element in every mode, a stamped
+reference field's included, so a PAGE or REF field there gets no page-number or reference marker, which the
+paginator would fill in; with `StampReferenceFields` it used to group the instruction's fields.
 
-Tests: `Docxodus.Tests/WmlToHtmlConverterFieldInstructionTests.cs`.
+The session still counts the hidden text as the paragraph's text (a nested result is ordinary run text to
+it), and the browser editor diffs a block's text against the session's and sends its offsets there. So the
+hidden text renders as an empty `<span data-field="code" data-field-cached="…">`, the field marker whose
+cached text the editor counts, as it counts a reference marker's (`HiddenFieldCode`). Without it, typing at
+the end of `If: First tail` landed inside `tail`, and an edit after a merged link rewrote the hidden
+address. The `code` kind is one the paginator never fills in.
+
+A HYPERLINK field's target comes from `FieldRetriever.EvaluatedInstrText`, the code with each nested field's
+cached result (a simple field's content included) in place of its code; a field nested in that field's own
+code adds nothing, and nor does a live field's nested result tracked as removed (`w:del`, `w:moveFrom`).
+`HyperlinkInstruction.Target` reads each result literally, as one stretch of the operand it is part of, so
+a merged `C:\Docs\file.pdf`, `\\server\share\doc.pdf` or `https://a.test/?q="x"` is the address as
+written rather than code syntax (backslash escapes, quotes). A stamped reference field reads its bookmark
+from the evaluated code too (`{ REF Mark{ PAGE } }` names `Mark1`); kind detection and the page-number parser
+still read `FieldRetriever.InstrText`. The IR reads a HYPERLINK field's code on its own (`IrReader`'s inline
+walker), as written, so for an address built from a nested field the IR's target and the HTML link's differ.
+
+Bookmarks, comment ranges and revision marks in a field's code are not run children, so the pass leaves them
+in place (a bookmark there stays a link target); a comment or note reference run there is hidden, as it
+already was in parts with evaluated fields.
+
+Known limits:
+
+- A nested field is not recalculated: in a paginated header `{ IF { PAGE } > 1 "Later" "First" }` shows its
+  cached result on every page, where Word recalculates it for each page.
+- A nested result that spans paragraphs (a merged address with a paragraph mark in an IF's code) still
+  splits the outer field's paragraph in two; what Word shows for such a code is not established here.
+- Whether Word reads an unquoted nested result that holds a space (`HYPERLINK { MERGEFIELD Url }` merging
+  `my file.pdf`) as one address is not established; Docxodus reads it as one.
+- Not covered: text in a `w:t` placed directly in a field's code outside any nested field, and fields in the
+  comments part.
+
+Tests: `Docxodus.Tests/WmlToHtmlConverterFieldInstructionTests.cs`,
+`Docxodus.Tests/WmlToHtmlConverterFieldCodeEditorTests.cs`.

@@ -12339,27 +12339,30 @@ namespace Docxodus
             return ResolvesField(prefix.ToString());
         }
 
-        /// <summary>Whether a field starts in another field's code, between its begin and separate characters: its cached
-        /// result is part of that code, and does not show (issue #1875).</summary>
+        /// <summary>Whether a field's code holds something a nested field would show: a nested field's result (from its
+        /// separate character on), or a simple field. That content is part of the code and does not show (issue #1875).
+        /// A nested field with no result, such as the data field a citation manager nests in its citation's code, shows
+        /// nothing either way.</summary>
         private static bool HasFieldInInstruction(XElement root)
         {
-            Stack<bool>? inCode = null; // for each open field, whether its separate character is still to come
+            // For each open field: whether its separate character is still to come, and whether it is in a field's code.
+            Stack<(bool InCode, bool InOuterCode)>? open = null;
             foreach (var element in root.Descendants())
             {
-                if (element.Name == W.fldSimple && inCode?.Count > 0 && inCode.Peek()) return true;
+                var hidden = open?.Count > 0 && (open.Peek().InCode || open.Peek().InOuterCode);
+                if (element.Name == W.fldSimple && hidden) return true;
                 if (element.Name != W.fldChar) continue;
                 switch ((string?)element.Attribute(W.fldCharType))
                 {
                     case "begin":
-                        if (inCode?.Count > 0 && inCode.Peek()) return true;
-                        (inCode ??= new Stack<bool>()).Push(true);
+                        (open ??= new()).Push((true, hidden));
                         break;
-                    case "separate" when inCode?.Count > 0:
-                        inCode.Pop();
-                        inCode.Push(false);
+                    case "separate" when open?.Count > 0:
+                        if (open.Peek().InOuterCode) return true;
+                        open.Push((false, open.Pop().InOuterCode));
                         break;
                     case "end":
-                        inCode?.TryPop(out _);
+                        open?.TryPop(out _);
                         break;
                 }
             }
@@ -12409,14 +12412,17 @@ namespace Docxodus
         // show: Word shows a field's result only, and its code is fed by the nested field's result (issue #1875).
         private static void NormalizeFieldResults(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings)
         {
-            var parts = wordDoc.ContentParts().Where(part =>
+            var rendered = wordDoc.ContentParts().Where(part =>
                 !(part is HeaderPart or FooterPart && !settings.RenderHeadersAndFooters)
-                && !(part is FootnotesPart or EndnotesPart && !settings.RenderFootnotesAndEndnotes))
-                .Where(part => part.GetXDocument().Root is { } root && (HasResolvableFields(root) || HasFieldInInstruction(root))).ToList();
+                && !(part is FootnotesPart or EndnotesPart && !settings.RenderFootnotesAndEndnotes)
+                && part.GetXDocument().Root != null).ToList();
+            var resolving = rendered.Where(part => HasResolvableFields(part.GetXDocument().Root!)).ToList();
+            var parts = rendered.Where(part => resolving.Contains(part) || HasFieldInInstruction(part.GetXDocument().Root!)).ToList();
             if (parts.Count == 0) return;
             // Main is also the source of running style references. Its field annotations are
             // always required by body conversion, even if it has no supported field of its own.
-            if (!parts.Contains(wordDoc.MainDocumentPart!)) parts.Insert(0, wordDoc.MainDocumentPart!);
+            // Hiding a field's code alone needs no other part.
+            if (resolving.Count > 0 && !parts.Contains(wordDoc.MainDocumentPart!)) parts.Insert(0, wordDoc.MainDocumentPart!);
             var fields = new List<RenderField>();
             foreach (var part in parts)
             {
