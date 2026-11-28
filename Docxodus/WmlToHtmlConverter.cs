@@ -1402,13 +1402,12 @@ namespace Docxodus
             AnnotateOwningContentParts(wordDoc);
             XElement rootElement = wordDoc.MainDocumentPart!.GetXDocument().Root!;
             FieldRetriever.AnnotateWithFieldInfo(wordDoc.MainDocumentPart!);
-            if (htmlConverterSettings.StampReferenceFields && htmlConverterSettings.RenderFootnotesAndEndnotes)
+            // Every story the converter renders groups its complex fields as the body does, in every mode: a
+            // HYPERLINK field in a note, a header or a footer is a link (issue #1876).
+            if (htmlConverterSettings.RenderFootnotesAndEndnotes)
                 foreach (var part in new OpenXmlPart?[] { wordDoc.MainDocumentPart!.FootnotesPart, wordDoc.MainDocumentPart.EndnotesPart })
                     if (part != null) FieldRetriever.AnnotateWithFieldInfo(part);
-            // Complex running-story fields need the same grouping in flow and paginated output.
-            if (htmlConverterSettings.RenderHeadersAndFooters &&
-                (htmlConverterSettings.RenderPagination == PaginationMode.Paginated || htmlConverterSettings.StampPageNumberFields
-                    || htmlConverterSettings.StampReferenceFields))
+            if (htmlConverterSettings.RenderHeadersAndFooters)
                 foreach (var part in wordDoc.MainDocumentPart!.HeaderParts.Cast<OpenXmlPart>()
                     .Concat(wordDoc.MainDocumentPart.FooterParts))
                     FieldRetriever.AnnotateWithFieldInfo(part);
@@ -3649,7 +3648,7 @@ namespace Docxodus
         {
             var element = node as XElement;
             if (element == null) return null;
-            if (element.Attribute(HiddenFieldInstructionAttribute) != null) return null;
+            if (element.Attribute(HiddenFieldInstructionAttribute) != null) return settings.StampAnchors ? HiddenFieldCode(element) : null;
             if (element.Attribute(StyleReferenceAttribute) is { } referencedStyle)
                 return new XElement(Xhtml.span, new XAttribute("data-field", "STYLEREF"),
                     new XAttribute("data-field-style", referencedStyle.Value),
@@ -3951,7 +3950,7 @@ namespace Docxodus
             if (element.Name == W.fldSimple && !IsInsideLink(element) && !InFieldInstruction(element)
                 && (string?)element.Attribute(W.instr) is { } simpleInstr && IsHyperlinkField(simpleInstr))
             {
-                return HyperlinkFieldLink(simpleInstr, CreateBorderDivs(wordDoc, settings, element.Elements()));
+                return HyperlinkFieldLink(HyperlinkInstruction.Target(simpleInstr), CreateBorderDivs(wordDoc, settings, element.Elements()));
             }
 
             // Transform smart tags and simple fields.
@@ -4105,10 +4104,13 @@ namespace Docxodus
         /// <summary>Finishes the <c>&lt;a&gt;</c> of a link the document makes: a <c>w:hyperlink</c>, or the
         /// result of a HYPERLINK field. Word draws a link's text in its runs' own formatting (a run in the
         /// Hyperlink character style is blue and underlined by that style), so the link turns off the
-        /// browser's own link colour and underline (issue #1869). An empty link keeps a text node, so it
+        /// browser's own link colour and underline (issue #1869). A target a browser would run as script
+        /// leaves the link without an <c>href</c> (issue #1880). An empty link keeps a text node, so it
         /// does not serialize self-closed.</summary>
         private static XElement DocumentLink(XElement a)
         {
+            if (a.Attribute("href") is { } href && Internal.LinkTarget.IsScript(href.Value))
+                href.Remove();
             if (!a.Nodes().Any())
                 a.Add(new XText(""));
             a.AddAnnotation(WordHyperlinkAnchor.Instance);
@@ -4289,8 +4291,9 @@ namespace Docxodus
             // greater id than every one of them, so grouping above the greatest converts only whole fields (a
             // marker built around part of a field would be wrong, issue #1272). So the fields in a wrapper inside
             // another's result, as a contents entry is under tracked changes, convert as they do outside revision
-            // marks (issue #1870). Content in the instruction of an open field only feeds it, and converts run by
-            // run as before.
+            // marks (issue #1870). Content in the instruction of an open field only feeds it: it converts element by
+            // element, with what a field nested there would show hidden, and no page-number or reference marker
+            // (issue #1875).
             var open = new[] { element, element.DescendantsAndSelf().Last() }
                 .SelectMany(e => e.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>()
                     ?? Enumerable.Empty<FieldRetriever.FieldElementTypeInfo>())
@@ -12336,6 +12339,52 @@ namespace Docxodus
             return ResolvesField(prefix.ToString());
         }
 
+        /// <summary>Whether a field's code holds something a nested field would show: a nested field's result (from its
+        /// separate character on), or a simple field. That content is part of the code and does not show (issue #1875).
+        /// A nested field with no result, such as the data field a citation manager nests in its citation's code, shows
+        /// nothing either way.</summary>
+        private static bool HasFieldInInstruction(XElement root)
+        {
+            // For each open field: whether its separate character is still to come, and whether it is in a field's code.
+            Stack<(bool InCode, bool InOuterCode)>? open = null;
+            foreach (var element in root.Descendants())
+            {
+                var hidden = open?.Count > 0 && (open.Peek().InCode || open.Peek().InOuterCode);
+                if (element.Name == W.fldSimple && hidden) return true;
+                if (element.Name != W.fldChar) continue;
+                switch ((string?)element.Attribute(W.fldCharType))
+                {
+                    case "begin":
+                        (open ??= new()).Push((true, hidden));
+                        break;
+                    case "separate" when open?.Count > 0:
+                        if (open.Peek().InOuterCode) return true;
+                        open.Push((false, open.Pop().InOuterCode));
+                        break;
+                    case "end":
+                        open?.TryPop(out _);
+                        break;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>What a field nested in another field's code holds is hidden: Word shows only the outer field's
+        /// result. The session still counts the text there as the paragraph's, as it counts every run, so in HTML an editor
+        /// addresses (<see cref="WmlToHtmlConverterSettings.StampAnchors"/>) it renders as an empty field marker whose
+        /// <c>data-field-cached</c> holds that text, the text an editor counts for a field (as for a reference marker): the
+        /// editor's offsets stay the session's (issue #1875). Other HTML leaves it out.</summary>
+        private static XElement? HiddenFieldCode(XElement hidden)
+        {
+            if (InDeletedContent(hidden)) return null;
+            var paragraph = hidden.Ancestors(W.p).FirstOrDefault();
+            var text = hidden.Name != W.fldSimple ? DocxSession.TextOf(hidden)
+                : string.Concat(hidden.Descendants(W.r).Where(r => r.Ancestors(W.p).FirstOrDefault() == paragraph
+                    && !InDeletedContent(r)).Select(DocxSession.RunText));
+            return text.Length == 0 ? null : new XElement(Xhtml.span, new XAttribute("data-field", "code"),
+                new XAttribute("data-field-cached", text), new XText(""));
+        }
+
         private static bool InDeletedContent(XElement element) =>
             element.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom);
 
@@ -12360,16 +12409,21 @@ namespace Docxodus
             public string Kind => FieldKind(Instruction);
         }
 
+        // Resolves the fields the converter evaluates, and hides what a field nested in another field's code would
+        // show: Word shows a field's result only, and its code is fed by the nested field's result (issue #1875).
         private static void NormalizeFieldResults(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings)
         {
-            var parts = wordDoc.ContentParts().Where(part =>
+            var rendered = wordDoc.ContentParts().Where(part =>
                 !(part is HeaderPart or FooterPart && !settings.RenderHeadersAndFooters)
-                && !(part is FootnotesPart or EndnotesPart && !settings.RenderFootnotesAndEndnotes))
-                .Where(part => part.GetXDocument().Root is { } root && HasResolvableFields(root)).ToList();
+                && !(part is FootnotesPart or EndnotesPart && !settings.RenderFootnotesAndEndnotes)
+                && part.GetXDocument().Root != null).ToList();
+            var resolving = rendered.Where(part => HasResolvableFields(part.GetXDocument().Root!)).ToList();
+            var parts = rendered.Where(part => resolving.Contains(part) || HasFieldInInstruction(part.GetXDocument().Root!)).ToList();
             if (parts.Count == 0) return;
             // Main is also the source of running style references. Its field annotations are
             // always required by body conversion, even if it has no supported field of its own.
-            if (!parts.Contains(wordDoc.MainDocumentPart!)) parts.Insert(0, wordDoc.MainDocumentPart!);
+            // Hiding a field's code alone needs no other part.
+            if (resolving.Count > 0 && !parts.Contains(wordDoc.MainDocumentPart!)) parts.Insert(0, wordDoc.MainDocumentPart!);
             var fields = new List<RenderField>();
             foreach (var part in parts)
             {
@@ -12695,6 +12749,9 @@ namespace Docxodus
 
                     var instrText = FieldRetriever.InstrText(g.First().Ancestors().Last(), (int)key)
                         .TrimStart('{').TrimEnd('}');
+                    // The code as Word reads it, each nested field's result in place of that field (issue #1875).
+                    List<(string Text, bool Result)> Evaluated() =>
+                        FieldRetriever.EvaluatedInstrText(g.First().Ancestors().Last(), (int)key);
 
                     // Mark PAGE/NUMPAGES results so the paginator can substitute each page's real
                     // number: a header/footer is cloned onto every page, so the field's single
@@ -12718,10 +12775,14 @@ namespace Docxodus
                     }
 
                     // A cross-reference field, for an editor that keeps it whole (StampReferenceFields).
-                    if (settings.StampReferenceFields && Internal.ReferenceFieldInstr.TryParse(instrText) is { } reference)
+                    // A field nested in its code names the bookmark with its result ({ REF Mark{ PAGE } }); the
+                    // code holds a brace only then.
+                    if (settings.StampReferenceFields && Internal.ReferenceFieldInstr.TryParse(instrText) is { } raw
+                        && (!instrText.Contains('{') ? raw : Internal.ReferenceFieldInstr.TryParse(
+                            string.Concat(Evaluated().Select(piece => piece.Text)))) is { } reference)
                     {
-                        // (a reference inside the result is marked in its turn)
-                        var referenceContent = ConvertContentThatCanContainFields(wordDoc, settings, g, key);
+                        // (a reference inside the result is marked in its turn, not one in the code)
+                        var referenceContent = Nested();
                         if (!settings.ShowDeletedRevisionContent && FieldRetriever.IsDeletedField(g.First().Ancestors().Last(), (int)key))
                             return referenceContent;
                         return PreserveJoinedFieldSources(InsideRevision(ReferenceFieldSpan(reference, g, referenceContent)));
@@ -12730,9 +12791,12 @@ namespace Docxodus
                     // A field nested in the result converts as it would outside it: a HYPERLINK there, as a
                     // contents entry written as a field is, is a link (issue #1870), and with
                     // StampReferenceFields a reference there, as the entry's PAGEREF is, is marked. A field
-                    // nested in the instruction only feeds it; its content converts as it always has.
+                    // nested in the instruction only feeds it: its content is hidden (NormalizeFieldResults,
+                    // HiddenFieldCode), and it is no link, page-number or reference marker, which the paginator
+                    // would fill in (issue #1875). The instruction converts element by element, so its bookmarks
+                    // and revision marks stay.
                     object Nested() => g.GroupAdjacent(e => IsResultOf(e, (int)key))
-                        .Select(part => part.Key || settings.StampReferenceFields
+                        .Select(part => part.Key
                             ? ConvertContentThatCanContainFields(wordDoc, settings, part, key)
                             : part.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m)))
                         .ToList();
@@ -12742,8 +12806,9 @@ namespace Docxodus
                         return Nested();
 
                     // Convert the field's own children, as a w:hyperlink does, so a tracked change,
-                    // bookmark or comment range inside the link keeps its rendering.
-                    return HyperlinkFieldLink(instrText, Nested());
+                    // bookmark or comment range inside the link keeps its rendering. The link goes where
+                    // Word's does: to the address a field nested in the code gives (issue #1875).
+                    return HyperlinkFieldLink(HyperlinkInstruction.Target(Evaluated()), Nested());
                 })
                 .ToList();
 
@@ -12762,10 +12827,10 @@ namespace Docxodus
         /// <summary>The <c>&lt;a&gt;</c> a HYPERLINK field's result renders in, the field simple or complex. An
         /// anchor cannot hold another: a bookmark target inside the link keeps its id on a span, and a
         /// w:hyperlink inside the result gives up its own link. The anchors generated for note references
-        /// and comment markers stay as they are.</summary>
-        private static XElement HyperlinkFieldLink(string instruction, object content)
+        /// and comment markers stay as they are. <paramref name="target"/> is where it goes; null for nowhere.</summary>
+        private static XElement HyperlinkFieldLink(string? target, object content)
         {
-            var a = HyperlinkInstruction.Target(instruction) is { } href
+            var a = target is { } href
                 ? new XElement(Xhtml.a, new XAttribute("href", href), content)
                 : new XElement(Xhtml.a, content);
             foreach (var inner in a.Descendants(Xhtml.a).ToList())
@@ -13728,7 +13793,7 @@ namespace Docxodus
             var image = RenderImagePart(imagePart, element, imageHandler, settings, style, altText);
             if (image != null && containerElement.Name == WP.inline)
                 AlignPictureOnlyParagraph(image, element);
-            if (hyperlinkUri != null && image != null)
+            if (hyperlinkUri != null && image != null && !Internal.LinkTarget.IsScript(hyperlinkUri))
                 image = new XElement(XhtmlNoNamespace.a, new XAttribute(XhtmlNoNamespace.href, hyperlinkUri), image);
             return ApplyAnchorTextWrap(image, containerElement, settings);
         }

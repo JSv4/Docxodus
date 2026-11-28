@@ -187,4 +187,28 @@ public class FieldRetrieverTests
         // nested field, so has no word of its own; the nested field; and a deleted field, whose code is w:delInstrText.
         Assert.Equal(new[] { "HYPERLINK", "IF", "PAGE", "", "REF", "TOC" }, types);
     }
+
+    // A separate or end character with no field open belongs to no field: annotation ignores it rather than failing, and
+    // the fields after it are read as usual (issue #1876).
+    [Fact]
+    public void AnnotationIgnoresAFieldCharacterWithNoFieldOpen()
+    {
+        using var stream = new MemoryStream();
+        using var document = WordprocessingDocument.Create(stream,
+            DocumentFormat.OpenXml.WordprocessingDocumentType.Document);
+        var main = document.AddMainDocumentPart();
+        XElement Char(string type) => new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, type)));
+        main.PutXDocument(new XDocument(new XElement(W.document, new XElement(W.body, new XElement(W.p,
+            Char("end"), Char("separate"), new XElement(W.r, new XElement(W.t, "Loose")),
+            Char("begin"), new XElement(W.r, new XElement(W.instrText, " TITLE ")), Char("separate"),
+            new XElement(W.r, new XElement(W.t, "Title")), Char("end"))))));
+        main.AddNewPart<StyleDefinitionsPart>().PutXDocument(new XDocument(new XElement(W.styles)));
+        main.AddNewPart<DocumentSettingsPart>().PutXDocument(new XDocument(new XElement(W.settings)));
+
+        FieldRetriever.AnnotateWithFieldInfo(main);
+
+        var root = main.GetXDocument().Root!;
+        Assert.False(FieldRetriever.IsFieldResult(root.Descendants(W.t).Single(t => t.Value == "Loose"), "TITLE"));
+        Assert.True(FieldRetriever.IsFieldResult(root.Descendants(W.t).Single(t => t.Value == "Title"), "TITLE"));
+    }
 }
