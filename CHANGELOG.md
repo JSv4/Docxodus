@@ -29,6 +29,8 @@ All notable changes to this project will be documented in this file.
 
 - The HTML converter no longer writes a link target that a browser would run as script into `href` (#1880). A `w:hyperlink`, a HYPERLINK field (complex or simple) or a picture's click link whose target is a `javascript:`, `vbscript:` or `data:` URL, in any case and with blanks a browser ignores around or inside it, now renders as a link without an `href` (its text stays; a picture is no longer wrapped in a link). Every other target, relative ones and `file:` included, is the link's as before.
 
+- A complex HYPERLINK field (`w:fldChar`) in a footnote or endnote, or in a header or footer outside paginated HTML, is a link, as in the body and as a `w:hyperlink` there is (#1876). Its runs used to convert one by one, because the converter grouped a complex field's runs in notes only with `StampReferenceFields` and in headers and footers only in paginated HTML or with page-number or reference stamps. Every story the converter renders now groups its fields in every mode; a page-number or reference field there gets its marker only in the modes that ask for one, as before.
+
 ## [17.0.0] - 2026-11-23
 
 ### Added

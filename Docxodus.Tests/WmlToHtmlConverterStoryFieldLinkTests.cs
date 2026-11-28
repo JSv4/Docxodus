@@ -1,0 +1,75 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Xml.Linq;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using Xunit;
+
+namespace Docxodus.Tests;
+
+/// <summary>A complex field converts as a field in every story the converter renders, not only in the body: a
+/// HYPERLINK field in a footnote, an endnote, a header or a footer is a link (issue #1876).</summary>
+public class WmlToHtmlConverterStoryFieldLinkTests
+{
+    private static string Run(string text) => $"<w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r>";
+
+    private static string Link(string name) => $"""
+        <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+        <w:r><w:instrText xml:space="preserve"> HYPERLINK "https://example.test/{name}" </w:instrText></w:r>
+        <w:r><w:fldChar w:fldCharType="separate"/></w:r>{Run(name)}<w:r><w:fldChar w:fldCharType="end"/></w:r>
+        """;
+
+    private const string Notes = "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>"
+        + "<w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>";
+
+    private static void Put(OpenXmlPart part, string xml) => part.PutXDocument(XDocument.Parse(xml));
+
+    private static byte[] Docx()
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var ns = $"xmlns:w=\"{W.w}\" xmlns:r=\"{R.r}\"";
+            Put(main.AddNewPart<HeaderPart>("rIdHeader"), $"<w:hdr {ns}><w:p>{Link("HeaderLink")}</w:p></w:hdr>");
+            Put(main.AddNewPart<FooterPart>("rIdFooter"), $"<w:ftr {ns}><w:p>{Link("FooterLink")}</w:p></w:ftr>");
+            Put(main.AddNewPart<FootnotesPart>(), $"<w:footnotes {ns}>{Notes}<w:footnote w:id=\"1\"><w:p><w:r><w:footnoteRef/></w:r>{Link("FootnoteLink")}</w:p></w:footnote></w:footnotes>");
+            Put(main.AddNewPart<EndnotesPart>(), $"<w:endnotes {ns}>{Notes.Replace("footnote", "endnote")}<w:endnote w:id=\"1\"><w:p><w:r><w:endnoteRef/></w:r>{Link("EndnoteLink")}</w:p></w:endnote></w:endnotes>");
+            Put(main, $"""
+                <w:document {ns}><w:body>
+                  <w:p>{Link("BodyLink")}<w:r><w:footnoteReference w:id="1"/></w:r><w:r><w:endnoteReference w:id="1"/></w:r></w:p>
+                  <w:sectPr><w:headerReference w:type="default" r:id="rIdHeader"/><w:footerReference w:type="default" r:id="rIdFooter"/>
+                    <w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/></w:sectPr>
+                </w:body></w:document>
+                """);
+            Put(main.AddNewPart<StyleDefinitionsPart>(), $"<w:styles {ns}/>");
+            Put(main.AddNewPart<DocumentSettingsPart>(), $"<w:settings {ns}/>");
+        }
+        return stream.ToArray();
+    }
+
+    private static XElement Render(PaginationMode mode) =>
+        WmlToHtmlConverter.ConvertToHtml(new WmlDocument("stories.docx", Docx()), new WmlToHtmlConverterSettings
+        {
+            FabricateCssClasses = false,
+            RenderPagination = mode,
+            RenderFootnotesAndEndnotes = true,
+            RenderHeadersAndFooters = true,
+        });
+
+    [Theory]
+    [InlineData(PaginationMode.None)]
+    [InlineData(PaginationMode.Paginated)]
+    public void AHyperlinkFieldInAnyStoryIsALink(PaginationMode mode)
+    {
+        var html = Render(mode);
+        foreach (var name in new[] { "BodyLink", "FootnoteLink", "EndnoteLink", "HeaderLink", "FooterLink" })
+        {
+            var text = html.Descendants().Where(e => e.Name.LocalName == "span" && !e.HasElements && e.Value == name).ToList();
+            Assert.NotEmpty(text);
+            Assert.All(text, span => Assert.Equal($"https://example.test/{name}",
+                (string?)span.Ancestors().FirstOrDefault(a => a.Name.LocalName == "a" && a.Attribute("href") != null)?.Attribute("href")));
+        }
+    }
+}

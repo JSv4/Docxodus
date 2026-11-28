@@ -1402,13 +1402,12 @@ namespace Docxodus
             AnnotateOwningContentParts(wordDoc);
             XElement rootElement = wordDoc.MainDocumentPart!.GetXDocument().Root!;
             FieldRetriever.AnnotateWithFieldInfo(wordDoc.MainDocumentPart!);
-            if (htmlConverterSettings.StampReferenceFields && htmlConverterSettings.RenderFootnotesAndEndnotes)
+            // Every story the converter renders groups its complex fields as the body does, in every mode: a
+            // HYPERLINK field in a note, a header or a footer is a link (issue #1876).
+            if (htmlConverterSettings.RenderFootnotesAndEndnotes)
                 foreach (var part in new OpenXmlPart?[] { wordDoc.MainDocumentPart!.FootnotesPart, wordDoc.MainDocumentPart.EndnotesPart })
                     if (part != null) FieldRetriever.AnnotateWithFieldInfo(part);
-            // Complex running-story fields need the same grouping in flow and paginated output.
-            if (htmlConverterSettings.RenderHeadersAndFooters &&
-                (htmlConverterSettings.RenderPagination == PaginationMode.Paginated || htmlConverterSettings.StampPageNumberFields
-                    || htmlConverterSettings.StampReferenceFields))
+            if (htmlConverterSettings.RenderHeadersAndFooters)
                 foreach (var part in wordDoc.MainDocumentPart!.HeaderParts.Cast<OpenXmlPart>()
                     .Concat(wordDoc.MainDocumentPart.FooterParts))
                     FieldRetriever.AnnotateWithFieldInfo(part);
