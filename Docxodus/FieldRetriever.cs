@@ -219,8 +219,11 @@ namespace Docxodus
                                     FiStack = fis,
                                 };
                             };
-                            // An orphan separate/end with no preceding begin throws here (NullReferenceException
-                            // via FiStack!), exactly as it did before this file was nullable-annotated.
+                            // A separate or end with no field open (malformed markup, such as a stray end
+                            // character in a header) belongs to no field: it leaves the state as it is, so one
+                            // story's bad field character cannot stop the conversion of the rest (issue #1876).
+                            if (s.FiStack is not { Count: > 0 })
+                                return s;
                             if (e.Attribute(w + "fldCharType")!.Value == "separate")
                             {
                                 Stack<FieldElementTypeInfo> fis = new Stack<FieldElementTypeInfo>(s.FiStack!.Reverse());

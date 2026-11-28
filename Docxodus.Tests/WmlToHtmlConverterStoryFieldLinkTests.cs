@@ -25,14 +25,14 @@ public class WmlToHtmlConverterStoryFieldLinkTests
 
     private static void Put(OpenXmlPart part, string xml) => part.PutXDocument(XDocument.Parse(xml));
 
-    private static byte[] Docx()
+    private static byte[] Docx(string headerPrefix = "")
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
         {
             var main = doc.AddMainDocumentPart();
             var ns = $"xmlns:w=\"{W.w}\" xmlns:r=\"{R.r}\"";
-            Put(main.AddNewPart<HeaderPart>("rIdHeader"), $"<w:hdr {ns}><w:p>{Link("HeaderLink")}</w:p></w:hdr>");
+            Put(main.AddNewPart<HeaderPart>("rIdHeader"), $"<w:hdr {ns}><w:p>{headerPrefix}{Link("HeaderLink")}</w:p></w:hdr>");
             Put(main.AddNewPart<FooterPart>("rIdFooter"), $"<w:ftr {ns}><w:p>{Link("FooterLink")}</w:p></w:ftr>");
             Put(main.AddNewPart<FootnotesPart>(), $"<w:footnotes {ns}>{Notes}<w:footnote w:id=\"1\"><w:p><w:r><w:footnoteRef/></w:r>{Link("FootnoteLink")}</w:p></w:footnote></w:footnotes>");
             Put(main.AddNewPart<EndnotesPart>(), $"<w:endnotes {ns}>{Notes.Replace("footnote", "endnote")}<w:endnote w:id=\"1\"><w:p><w:r><w:endnoteRef/></w:r>{Link("EndnoteLink")}</w:p></w:endnote></w:endnotes>");
@@ -49,8 +49,8 @@ public class WmlToHtmlConverterStoryFieldLinkTests
         return stream.ToArray();
     }
 
-    private static XElement Render(PaginationMode mode) =>
-        WmlToHtmlConverter.ConvertToHtml(new WmlDocument("stories.docx", Docx()), new WmlToHtmlConverterSettings
+    private static XElement Render(PaginationMode mode, string headerPrefix = "") =>
+        WmlToHtmlConverter.ConvertToHtml(new WmlDocument("stories.docx", Docx(headerPrefix)), new WmlToHtmlConverterSettings
         {
             FabricateCssClasses = false,
             RenderPagination = mode,
@@ -71,5 +71,18 @@ public class WmlToHtmlConverterStoryFieldLinkTests
             Assert.All(text, span => Assert.Equal($"https://example.test/{name}",
                 (string?)span.Ancestors().FirstOrDefault(a => a.Name.LocalName == "a" && a.Attribute("href") != null)?.Attribute("href")));
         }
+    }
+
+    // A stray field character with no field open (malformed markup) in one story is ignored: the rest still converts,
+    // and the next field is still a link.
+    [Theory]
+    [InlineData("end")]
+    [InlineData("separate")]
+    public void AStrayFieldCharacterInAStoryDoesNotStopItsFields(string type)
+    {
+        var html = Render(PaginationMode.None, $"<w:r><w:fldChar w:fldCharType=\"{type}\"/></w:r>{Run("Stray ")}");
+        var span = Assert.Single(html.Descendants().Where(e => e.Name.LocalName == "span" && !e.HasElements && e.Value == "HeaderLink"));
+        Assert.Equal("https://example.test/HeaderLink", (string?)span.Ancestors().First(a => a.Name.LocalName == "a").Attribute("href"));
+        Assert.Contains("Stray", html.Value);
     }
 }
