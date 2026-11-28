@@ -108,12 +108,12 @@ public class WmlToHtmlConverterFieldCodeEditorTests
         $"{{\"paginated\":{(paginated ? "true" : "false")},\"referenceFields\":{(referenceFields ? "true" : "false")},"
         + $"\"stampAnchors\":{(stampAnchors ? "true" : "false")}}}";
 
+    // The editor renders with anchors stamped (npm/src/editor.ts forces stampAnchors), which is what aligns its offsets.
     private static void ForEachProfile(Action<string> act)
     {
         foreach (var paginated in new[] { false, true })
             foreach (var referenceFields in new[] { false, true })
-                foreach (var stampAnchors in new[] { false, true })
-                    act(Profile(paginated, referenceFields, stampAnchors));
+                act(Profile(paginated, referenceFields, stampAnchors: true));
     }
 
     [Theory]
@@ -192,5 +192,23 @@ public class WmlToHtmlConverterFieldCodeEditorTests
                         DocxSessionOps.CloseSession(handle);
                     }
                 }
+    }
+
+    // HTML no editor addresses (no anchors stamped) leaves hidden code content out entirely: no marker carries it.
+    [Theory]
+    [MemberData(nameof(Shapes))]
+    public void HtmlWithoutAnchorsCarriesNoHiddenCodeMarker(string label, string shown, string field)
+    {
+        foreach (var paginated in new[] { false, true })
+        {
+            var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("code.docx", Docx(label, field)), new WmlToHtmlConverterSettings
+            {
+                RenderPagination = paginated ? PaginationMode.Paginated : PaginationMode.None,
+                RenderHeadersAndFooters = true,
+                RenderFootnotesAndEndnotes = true,
+            });
+            Assert.DoesNotContain(html.Descendants(), e => (string?)e.Attribute("data-field") == "code");
+            Assert.Contains(shown, html.Value);
+        }
     }
 }

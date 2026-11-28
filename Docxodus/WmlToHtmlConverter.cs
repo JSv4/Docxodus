@@ -3648,7 +3648,7 @@ namespace Docxodus
         {
             var element = node as XElement;
             if (element == null) return null;
-            if (element.Attribute(HiddenFieldInstructionAttribute) != null) return HiddenFieldCode(element);
+            if (element.Attribute(HiddenFieldInstructionAttribute) != null) return settings.StampAnchors ? HiddenFieldCode(element) : null;
             if (element.Attribute(StyleReferenceAttribute) is { } referencedStyle)
                 return new XElement(Xhtml.span, new XAttribute("data-field", "STYLEREF"),
                     new XAttribute("data-field-style", referencedStyle.Value),
@@ -12370,9 +12370,10 @@ namespace Docxodus
         }
 
         /// <summary>What a field nested in another field's code holds is hidden: Word shows only the outer field's
-        /// result. The session still counts the text there as the paragraph's, as it counts every run, so it renders as an
-        /// empty field marker whose <c>data-field-cached</c> holds that text, the text an editor counts for a field (as
-        /// for a reference marker): the editor's offsets stay the session's (issue #1875).</summary>
+        /// result. The session still counts the text there as the paragraph's, as it counts every run, so in HTML an editor
+        /// addresses (<see cref="WmlToHtmlConverterSettings.StampAnchors"/>) it renders as an empty field marker whose
+        /// <c>data-field-cached</c> holds that text, the text an editor counts for a field (as for a reference marker): the
+        /// editor's offsets stay the session's (issue #1875). Other HTML leaves it out.</summary>
         private static XElement? HiddenFieldCode(XElement hidden)
         {
             if (InDeletedContent(hidden)) return null;
