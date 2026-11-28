@@ -2,7 +2,6 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System;
-using System.Text;
 
 namespace Docxodus.Internal;
 
@@ -19,25 +18,28 @@ internal static class LinkTarget
     /// </summary>
     public static bool IsScript(string target)
     {
-        var start = 0;
-        var end = target.Length;
-        while (start < end && target[start] <= ' ') start++;
-        while (end > start && target[end - 1] <= ' ') end--;
-        var scheme = new StringBuilder();
-        for (var i = start; i < end; i++)
+        // The longest scheme asked about is "javascript"; a longer name is not one of them.
+        Span<char> scheme = stackalloc char[10];
+        var length = 0;
+        var i = 0;
+        while (i < target.Length && target[i] <= ' ') i++;
+        for (; i < target.Length; i++)
         {
             var c = target[i];
             if (c is '\t' or '\n' or '\r')
                 continue;
             if (c == ':')
-                return scheme.ToString() is var name
-                    && (name.Equals("javascript", StringComparison.OrdinalIgnoreCase)
-                        || name.Equals("vbscript", StringComparison.OrdinalIgnoreCase)
-                        || name.Equals("data", StringComparison.OrdinalIgnoreCase));
-            // A scheme is a letter, then letters, digits, '+', '-' or '.'; anything else makes the target relative.
-            if (!(char.IsAsciiLetter(c) || (scheme.Length > 0 && (char.IsAsciiDigit(c) || c is '+' or '-' or '.'))))
+            {
+                ReadOnlySpan<char> name = scheme[..length];
+                return name.Equals("javascript", StringComparison.OrdinalIgnoreCase)
+                    || name.Equals("vbscript", StringComparison.OrdinalIgnoreCase)
+                    || name.Equals("data", StringComparison.OrdinalIgnoreCase);
+            }
+            // Only ASCII letters can spell these names; anything else before the colon (a digit, '/', '.', a
+            // look-alike letter) means the target is not one of them.
+            if (!char.IsAsciiLetter(c) || length == scheme.Length)
                 return false;
-            scheme.Append(c);
+            scheme[length++] = c;
         }
         return false;
     }

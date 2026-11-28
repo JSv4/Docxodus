@@ -1,6 +1,8 @@
 using System;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Text;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -41,7 +43,9 @@ public class WmlToHtmlConverterLinkSchemeTests
 
     /// <summary>A document whose links all go to <paramref name="target"/>: a w:hyperlink, a complex and a simple
     /// HYPERLINK field, and a picture's click link.</summary>
-    private static XElement Render(string target, bool relationshipForms = true)
+    /// <param name="relationshipTarget">When given, the text the <c>.rels</c> part spells both relationship targets
+    /// with, written as is (XML escapes included), for targets a <see cref="Uri"/> would not keep as written.</param>
+    private static XElement Render(string target, bool relationshipForms = true, string? relationshipTarget = null)
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
@@ -67,15 +71,40 @@ public class WmlToHtmlConverterLinkSchemeTests
             main.AddNewPart<StyleDefinitionsPart>().PutXDocument(XDocument.Parse($"<w:styles xmlns:w=\"{W.w}\"/>"));
             main.AddNewPart<DocumentSettingsPart>().PutXDocument(XDocument.Parse($"<w:settings xmlns:w=\"{W.w}\"/>"));
         }
-        return WmlToHtmlConverter.ConvertToHtml(new WmlDocument("links.docx", stream.ToArray()),
+        var bytes = stream.ToArray();
+        if (relationshipTarget != null)
+            bytes = WithRelationshipTargets(bytes, relationshipTarget);
+        return WmlToHtmlConverter.ConvertToHtml(new WmlDocument("links.docx", bytes),
             new WmlToHtmlConverterSettings { FabricateCssClasses = false, ImageHandler = _ => new XElement("img") });
     }
 
+    /// <summary>Respells the targets of the two hyperlink relationships in the package's raw <c>.rels</c> XML.</summary>
+    private static byte[] WithRelationshipTargets(byte[] package, string target)
+    {
+        using var ms = new MemoryStream();
+        ms.Write(package);
+        using (var zip = new ZipArchive(ms, ZipArchiveMode.Update, leaveOpen: true))
+        {
+            var entry = zip.GetEntry("word/_rels/document.xml.rels")!;
+            string xml;
+            using (var reader = new StreamReader(entry.Open()))
+                xml = reader.ReadToEnd();
+            entry.Delete();
+            foreach (var id in new[] { "rIdLink", "rIdPicture" })
+                xml = System.Text.RegularExpressions.Regex.Replace(xml,
+                    $"(<Relationship [^>]*Id=\"{id}\"[^>]*Target=\")[^\"]*(\")|(<Relationship [^>]*Target=\")[^\"]*(\"[^>]*Id=\"{id}\")",
+                    m => m.Groups[1].Success ? m.Groups[1].Value + target + m.Groups[2].Value : m.Groups[3].Value + target + m.Groups[4].Value);
+            using var output = zip.CreateEntry("word/_rels/document.xml.rels").Open();
+            output.Write(Encoding.UTF8.GetBytes(xml));
+        }
+        return ms.ToArray();
+    }
+
     private static XElement LinkHolding(XElement html, string text) =>
-        Assert.Single(html.Descendants().Where(e => e.Name.LocalName == "a" && e.Value == text));
+        Assert.Single(html.Descendants(), e => e.Name.LocalName == "a" && e.Value == text);
 
     private static XElement PictureLink(XElement html) =>
-        Assert.Single(html.Descendants().Where(e => e.Name.LocalName == "img")).Parent!;
+        Assert.Single(html.Descendants(), e => e.Name.LocalName == "img").Parent!;
 
     [Theory]
     [InlineData("javascript:alert(1)")]
@@ -92,7 +121,8 @@ public class WmlToHtmlConverterLinkSchemeTests
     }
 
     // A browser's URL parser drops surrounding spaces and control characters, and tabs and line breaks anywhere, before
-    // it reads the scheme, so these are script targets too. (A relationship cannot hold them, so the field forms carry them.)
+    // it reads the scheme, so these are script targets too. The field forms carry them in their code; the relationship
+    // forms below spell them in the .rels part.
     [Theory]
     [InlineData("  javascript:alert(1)")]
     [InlineData("java\tscript:alert(1)")]
@@ -103,6 +133,22 @@ public class WmlToHtmlConverterLinkSchemeTests
         var html = Render(target, relationshipForms: false);
         Assert.Null(LinkHolding(html, "ComplexLink").Attribute("href"));
         Assert.Null(LinkHolding(html, "SimpleLink").Attribute("href"));
+    }
+
+    // The w:hyperlink and picture links read their target from the relationship, which the package reader decodes:
+    // blanks spelled as character references, and a percent-encoded letter, which .NET's Uri turns back into the letter.
+    // The check reads the target the link would carry, so each is still a script target.
+    [Theory]
+    [InlineData("java&#9;script:alert(1)")]
+    [InlineData("&#10;javascript:alert(1)")]
+    [InlineData("javascript&#13;:alert(1)")]
+    [InlineData(" javascript:alert(1)")]
+    [InlineData("%6Aavascript:alert(1)")]
+    public void AScriptTargetSpelledAnyWayInARelationshipIsAScriptTarget(string spelled)
+    {
+        var html = Render("https://example.test/placeholder", relationshipTarget: spelled);
+        Assert.Null(LinkHolding(html, "ElementLink").Attribute("href"));
+        Assert.Null(PictureLink(html).Attribute("href"));
     }
 
     // Control: every other target is the link's, as written.
