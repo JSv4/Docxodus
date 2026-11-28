@@ -2938,7 +2938,8 @@ entry (with no underline), and a run with a direct `<w:u w:val="double"/>` keeps
 underline; LibreOffice agrees. Docxodus removes the run's colour and underline whatever their
 source, because the converter merges styles into each run's properties before it renders, so the
 rule cannot tell the style's colour from a direct one. Before #1870 a field-form entry kept a direct
-colour (with the style's underline); it now loses it, as a `w:hyperlink` entry already did.
+colour (with the style's underline); it now loses it, as a `w:hyperlink` entry already did. Tracked
+in #1878.
 
 ### Text before a tab that is longer than its line wraps; the tab advances from the last line
 

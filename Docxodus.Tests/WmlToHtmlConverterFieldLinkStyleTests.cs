@@ -468,4 +468,19 @@ public class WmlToHtmlConverterFieldLinkStyleTests
         Assert.DoesNotContain(html.Descendants(Xhtml.a), a => ((string?)a.Attribute("href"))?.Contains("condition") == true);
         Assert.Equal("Shown", Link(html, FieldUrl).Value);
     }
+
+    // A revision mark that starts in a nested field's code, with two fields open at its start: it groups only the whole
+    // fields above both, so the PAGE field around it gets one page-number marker, not a second inside the mark (#1272).
+    [Fact]
+    public void ARevisionMarkInsideANestedFieldsCodeMarksThatFieldOnce()
+    {
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("links.docx", Docx(
+                $"<w:p>{Begin("QUOTE \"x\"")}<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>"
+                + "<w:r><w:instrText xml:space=\"preserve\"> PA</w:instrText></w:r>"
+                + Ins(31, "<w:r><w:instrText xml:space=\"preserve\">GE </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>"
+                    + Run("8") + "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>")
+                + EndOfField + "</w:p>")),
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false, RenderTrackedChanges = true, RenderPagination = PaginationMode.Paginated });
+        Assert.Equal("8", Assert.Single(html.Descendants(), e => (string?)e.Attribute("data-field") == "PAGE").Value);
+    }
 }
