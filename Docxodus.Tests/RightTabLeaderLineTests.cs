@@ -195,7 +195,6 @@ public class RightTabLeaderLineTests
     [Theory]
     // Controls: a stretch converts its fields on its own, so a field the converter wraps whole
     // must not be cut at a tab. Such a paragraph keeps the run-aware path.
-    [InlineData("HYPERLINK \\l \"_Ref1\"", false)]
     [InlineData("PAGE", true)]
     public void FieldOpenAcrossATab_KeepsTheRunAwarePath(string instruction, bool paginated)
     {
@@ -208,6 +207,26 @@ public class RightTabLeaderLineTests
         });
         var tab = html.Descendants().Single(e => (string?)e.Attribute("data-docx-tab") == "right");
         Assert.DoesNotContain("width: 100%", (string?)tab.Attribute("style") ?? "");
+    }
+
+    // A HYPERLINK field open across the tabs is not cut either: its result lays out its tabs as a
+    // w:hyperlink's runs do, so one link holds the whole entry and the right tab is the flexible
+    // segment that ends on the stop (issue #1877).
+    [Fact]
+    public void HyperlinkFieldOpenAcrossATab_IsOneLinkWithTheFlexibleRightTab()
+    {
+        var docx = Package(Entry("<w:tab w:val=\"left\" w:pos=\"1296\"/><w:tab w:val=\"right\" w:pos=\"9360\"/>",
+            Field("HYPERLINK \\l \"_Ref1\"", "<w:r><w:t>2.1.</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>Spillway</w:t></w:r><w:r><w:tab/><w:t>12</w:t></w:r>")));
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("field.docx", docx), new WmlToHtmlConverterSettings
+        {
+            FabricateCssClasses = false,
+        });
+        var link = Assert.Single(html.Descendants(Xhtml.a), a => a.Attribute("href") != null);
+        Assert.Equal("#_Ref1", (string?)link.Attribute("href"));
+        Assert.Equal("2.1.Spillway12", link.Value);
+        var tab = html.Descendants().Single(e => (string?)e.Attribute("data-docx-tab") == "right");
+        Assert.Contains(link, tab.Ancestors());
+        Assert.Contains("width: 100%", (string?)tab.Attribute("style") ?? "");
     }
 
     private const string LeftStop = "<w:tab w:val=\"left\" w:pos=\"1296\"/>";
