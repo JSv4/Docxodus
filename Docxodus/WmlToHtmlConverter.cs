@@ -4105,10 +4105,13 @@ namespace Docxodus
         /// <summary>Finishes the <c>&lt;a&gt;</c> of a link the document makes: a <c>w:hyperlink</c>, or the
         /// result of a HYPERLINK field. Word draws a link's text in its runs' own formatting (a run in the
         /// Hyperlink character style is blue and underlined by that style), so the link turns off the
-        /// browser's own link colour and underline (issue #1869). An empty link keeps a text node, so it
+        /// browser's own link colour and underline (issue #1869). A target a browser would run as script
+        /// leaves the link without an <c>href</c> (issue #1880). An empty link keeps a text node, so it
         /// does not serialize self-closed.</summary>
         private static XElement DocumentLink(XElement a)
         {
+            if (a.Attribute("href") is { } href && Internal.LinkTarget.IsScript(href.Value))
+                href.Remove();
             if (!a.Nodes().Any())
                 a.Add(new XText(""));
             a.AddAnnotation(WordHyperlinkAnchor.Instance);
@@ -13728,7 +13731,7 @@ namespace Docxodus
             var image = RenderImagePart(imagePart, element, imageHandler, settings, style, altText);
             if (image != null && containerElement.Name == WP.inline)
                 AlignPictureOnlyParagraph(image, element);
-            if (hyperlinkUri != null && image != null)
+            if (hyperlinkUri != null && image != null && !Internal.LinkTarget.IsScript(hyperlinkUri))
                 image = new XElement(XhtmlNoNamespace.a, new XAttribute(XhtmlNoNamespace.href, hyperlinkUri), image);
             return ApplyAnchorTextWrap(image, containerElement, settings);
         }
