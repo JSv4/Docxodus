@@ -39,25 +39,44 @@ public class WmlToHtmlConverterFieldCodeEditorTests
             + Code(" &gt; 1 \"Later\" \"First\" "), Run("First")) },
     };
 
+    private const string Notes = "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>"
+        + "<w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>";
+
+    /// <summary>The stories the paragraph is in, by the prefix its text starts with there.</summary>
+    private static readonly string[] Stories = { "", "Header ", "Note " };
+
+    private static void Put(OpenXmlPart part, string xml) => part.PutXDocument(XDocument.Parse(xml));
+
     private static byte[] Docx(string label, string field)
     {
+        string Paragraph(string story) => $"<w:p>{Run($"{story}{label}: ")}{field}{Run(" tail")}</w:p>";
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
         {
             var main = doc.AddMainDocumentPart();
             var ns = $"xmlns:w=\"{W.w}\" xmlns:r=\"{R.r}\"";
-            main.PutXDocument(XDocument.Parse($"""
+            Put(main.AddNewPart<HeaderPart>("rIdHeader"), $"<w:hdr {ns}>{Paragraph("Header ")}</w:hdr>");
+            Put(main.AddNewPart<FootnotesPart>(), $"<w:footnotes {ns}>{Notes}<w:footnote w:id=\"1\">"
+                + $"<w:p><w:r><w:footnoteRef/></w:r>{Run("Note")}</w:p>{Paragraph("Note ")}<w:p>{Run("End")}</w:p></w:footnote></w:footnotes>");
+            Put(main, $"""
                 <w:document {ns}><w:body>
-                  <w:p>{Run($"{label}: ")}{field}{Run(" tail")}</w:p>
-                  <w:p><w:bookmarkStart w:id="9" w:name="Mark1"/>{Run("target")}<w:bookmarkEnd w:id="9"/></w:p>
-                  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+                  {Paragraph("")}
+                  <w:p><w:bookmarkStart w:id="9" w:name="Mark1"/>{Run("target")}<w:bookmarkEnd w:id="9"/><w:r><w:footnoteReference w:id="1"/></w:r></w:p>
+                  <w:sectPr><w:headerReference w:type="default" r:id="rIdHeader"/><w:pgSz w:w="12240" w:h="15840"/>
+                    <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/></w:sectPr>
                 </w:body></w:document>
-                """));
-            main.AddNewPart<StyleDefinitionsPart>().PutXDocument(XDocument.Parse($"<w:styles {ns}/>"));
-            main.AddNewPart<DocumentSettingsPart>().PutXDocument(XDocument.Parse($"<w:settings {ns}/>"));
+                """);
+            Put(main.AddNewPart<StyleDefinitionsPart>(), $"<w:styles {ns}/>");
+            Put(main.AddNewPart<DocumentSettingsPart>(), $"<w:settings {ns}/>");
         }
         return stream.ToArray();
     }
+
+    /// <summary>The paragraph in the story <paramref name="story"/> names, by the text the session holds for it.</summary>
+    private static string AnchorOf(DocxSession session, string story, string label) =>
+        session.Project().AnchorIndex.Values.Select(t => t.Anchor.Id)
+            .Single(id => id.StartsWith("p:", StringComparison.Ordinal)
+                && session.GetAnchorInfo(id)?.VisibleText.StartsWith($"{story}{label}: ", StringComparison.Ordinal) == true);
 
     /// <summary>A block's text as the editor counts it (<c>blockContentText</c> in npm/src/editor.ts): a field marker
     /// counts its <c>data-field-cached</c> text, else what it shows; a tab and a break one character each; a list marker
@@ -105,16 +124,21 @@ public class WmlToHtmlConverterFieldCodeEditorTests
         try
         {
             var session = SessionRegistry.Get(handle);
-            var anchor = session.ListBlocks().Body.First(u => u.Kind is "p").Id;
-            var counted = session.GetAnchorInfo(anchor)!.VisibleText;
-            ForEachProfile(profile =>
+            foreach (var story in Stories)
             {
-                var block = Block(DocxSessionOps.RenderEditorBlockHtml(handle, anchor, profile), anchor);
-                Assert.Equal(shown, block.Value);
-                Assert.Equal(counted, EditorText(block));
-                var full = Block(DocxSessionOps.RenderEditorHtml(handle, profile), anchor);
-                Assert.Equal(counted, EditorText(full));
-            });
+                var anchor = AnchorOf(session, story, label);
+                var counted = session.GetAnchorInfo(anchor)!.VisibleText;
+                ForEachProfile(profile =>
+                {
+                    var block = Block(DocxSessionOps.RenderEditorBlockHtml(handle, anchor, profile), anchor);
+                    Assert.Equal(story + shown, block.Value);
+                    Assert.Equal(counted, EditorText(block));
+                    // The full render stamps the body's and the notes' paragraphs; a running story is edited through
+                    // its block render.
+                    if (story != "Header ")
+                        Assert.Equal(counted, EditorText(Block(DocxSessionOps.RenderEditorHtml(handle, profile), anchor)));
+                });
+            }
         }
         finally
         {
@@ -122,31 +146,51 @@ public class WmlToHtmlConverterFieldCodeEditorTests
         }
     }
 
-    // What the editor sends when the user types "!" at the end of the block, measured in the block's own text, lands
-    // after "tail", and the field keeps its code and result.
+    // What the editor sends when the user types, measured in the block's own text, is where the session puts the
+    // text: at the end of the block, before the field, or at the start of the field's result (the hidden code text
+    // before it is behind the caret there, and the session puts text typed at a boundary inside a field after the
+    // field). The typed text shows, and the field keeps its code and result.
     [Theory]
     [MemberData(nameof(Shapes))]
-    public void TypingAtTheEditorsOffsetEditsWhereTheUserTyped(string label, string shown, string field)
+    public void TypingAtTheEditorsOffsetLosesNothing(string label, string shown, string field)
     {
-        foreach (var referenceFields in new[] { false, true })
-        {
-            int handle = DocxSessionOps.OpenSession(Docx(label, field), null);
-            try
-            {
-                var session = SessionRegistry.Get(handle);
-                var anchor = session.ListBlocks().Body.First(u => u.Kind is "p").Id;
-                var before = session.GetAnchorInfo(anchor)!.VisibleText;
-                var block = Block(DocxSessionOps.RenderEditorBlockHtml(handle, anchor, Profile(false, referenceFields, false)), anchor);
-                Assert.True(session.ReplaceTextAtSpan(anchor, EditorText(block).Length, 0, "!").Success);
-                Assert.Equal(before + "!", session.GetAnchorInfo(anchor)!.VisibleText);
-                var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("edited.docx", session.Save()),
-                    new WmlToHtmlConverterSettings { FabricateCssClasses = false });
-                Assert.Equal(shown + "!", html.Descendants(Xhtml.p).First().Value);
-            }
-            finally
-            {
-                DocxSessionOps.CloseSession(handle);
-            }
-        }
+        var result = shown.Substring(label.Length + 2, shown.Length - label.Length - 2 - " tail".Length);
+        foreach (var story in Stories)
+            foreach (var referenceFields in new[] { false, true })
+                foreach (var place in new[] { "end", "field", "result" })
+                {
+                    int handle = DocxSessionOps.OpenSession(Docx(label, field), null);
+                    try
+                    {
+                        var session = SessionRegistry.Get(handle);
+                        var anchor = AnchorOf(session, story, label);
+                        var counted = session.GetAnchorInfo(anchor)!.VisibleText;
+                        var block = Block(DocxSessionOps.RenderEditorBlockHtml(handle, anchor, Profile(story == "Header ", referenceFields, false)), anchor);
+                        var text = EditorText(block);
+                        var at = place switch
+                        {
+                            "end" => text.Length,
+                            "field" => story.Length + label.Length + 2,
+                            _ => text.LastIndexOf(result + " tail", StringComparison.Ordinal),
+                        };
+                        Assert.True(session.ReplaceTextAtSpan(anchor, at, 0, "X").Success);
+                        Assert.Equal(counted, session.GetAnchorInfo(anchor)!.VisibleText.Replace("X", ""));
+                        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("edited.docx", session.Save()), new WmlToHtmlConverterSettings
+                        {
+                            FabricateCssClasses = false,
+                            RenderHeadersAndFooters = true,
+                            RenderFootnotesAndEndnotes = true,
+                        });
+                        var edited = Assert.Single(html.Descendants(Xhtml.p), p => p.Value.StartsWith($"{story}{label}: ", StringComparison.Ordinal)).Value;
+                        Assert.Equal(story + shown, edited.Replace("X", ""));
+                        Assert.Single(edited, c => c == 'X');
+                        if (place == "end") Assert.EndsWith("X", edited);
+                        if (place == "field") Assert.StartsWith($"{story}{label}: X", edited);
+                    }
+                    finally
+                    {
+                        DocxSessionOps.CloseSession(handle);
+                    }
+                }
     }
 }
